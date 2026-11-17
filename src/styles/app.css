@@ -802,6 +802,38 @@ input[type="file"]::file-selector-button {
   white-space: nowrap;
 }
 
+.sheet-options {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin: 0;
+  padding: 8px 12px 4px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: #fbfaf7;
+}
+
+.sheet-options legend {
+  padding: 0 6px;
+  color: var(--ink-soft);
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+}
+
+.sheet-options-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0 14px;
+}
+
+.sheet-options-hint {
+  margin: 0 0 4px;
+  color: var(--ink-soft);
+  font-size: 12px;
+}
+
 .sheet-scroll {
   --sheet-scale: 0.65;
   display: flex;
@@ -961,49 +993,99 @@ input[type="file"]::file-selector-button {
   text-align: right;
 }
 
-.sheet-table col.col-index {
+/* Column width presets, selected from the visible set by `sheet.ts`.
+   Percentages are starting values to verify on paper; fixed table layout keeps
+   the song column dominant and rebalances the numeric columns. */
+
+/* Index + song (every optional column switched off). */
+.sheet-table.cols-2 col.col-index {
+  width: 8%;
+}
+
+.sheet-table.cols-2 col.col-song {
+  width: 92%;
+}
+
+/* Index + song + one info column (duration-only is the primary case). */
+.sheet-table.cols-minimal col.col-index {
+  width: 8%;
+}
+
+.sheet-table.cols-minimal col.col-song {
+  width: 72%;
+}
+
+.sheet-table.cols-minimal col.col-key,
+.sheet-table.cols-minimal col.col-tuning,
+.sheet-table.cols-minimal col.col-bpm,
+.sheet-table.cols-minimal col.col-time {
+  width: 20%;
+}
+
+/* Index + song + two info columns. */
+.sheet-table.cols-4 col.col-index {
   width: 7%;
 }
 
-.sheet-table col.col-song {
-  width: 55%;
+.sheet-table.cols-4 col.col-song {
+  width: 63%;
 }
 
-.sheet-table col.col-key {
+.sheet-table.cols-4 col.col-key,
+.sheet-table.cols-4 col.col-tuning {
+  width: 12%;
+}
+
+.sheet-table.cols-4 col.col-bpm {
   width: 10%;
 }
 
-.sheet-table col.col-bpm {
-  width: 10%;
-}
-
-.sheet-table col.col-time {
+.sheet-table.cols-4 col.col-time {
   width: 18%;
 }
 
-/* Feature 1: the six-column layout only exists while a setlist has tuning.
-   Widths are rebalanced to keep the song cell dominant. */
-.sheet-table.has-tuning col.col-index {
-  width: 6%;
+/* Feature 4 baseline: index, song, key, bpm, time. Tuning uses the same
+   width as key/bpm when it replaces one of them. */
+.sheet-table.cols-5 col.col-index {
+  width: 7%;
 }
 
-.sheet-table.has-tuning col.col-song {
-  width: 50%;
+.sheet-table.cols-5 col.col-song {
+  width: 55%;
 }
 
-.sheet-table.has-tuning col.col-key {
-  width: 9%;
-}
-
-.sheet-table.has-tuning col.col-tuning {
+.sheet-table.cols-5 col.col-key,
+.sheet-table.cols-5 col.col-tuning,
+.sheet-table.cols-5 col.col-bpm {
   width: 10%;
 }
 
-.sheet-table.has-tuning col.col-bpm {
+.sheet-table.cols-5 col.col-time {
+  width: 18%;
+}
+
+/* Feature 1 six-column layout (all info columns visible). */
+.sheet-table.cols-5-tuning col.col-index {
+  width: 6%;
+}
+
+.sheet-table.cols-5-tuning col.col-song {
+  width: 50%;
+}
+
+.sheet-table.cols-5-tuning col.col-key {
   width: 9%;
 }
 
-.sheet-table.has-tuning col.col-time {
+.sheet-table.cols-5-tuning col.col-tuning {
+  width: 10%;
+}
+
+.sheet-table.cols-5-tuning col.col-bpm {
+  width: 9%;
+}
+
+.sheet-table.cols-5-tuning col.col-time {
   width: 16%;
 }
 
@@ -1056,8 +1138,10 @@ input[type="file"]::file-selector-button {
   font-weight: 700;
 }
 
-.break-duration::before,
-.break-note::before {
+/* Separators only appear between rendered parts: the label is gated by the
+   Comment toggle, while the duration always renders. */
+.break-label + .break-duration::before,
+.break-duration + .break-note::before {
   content: " · ";
 }
 

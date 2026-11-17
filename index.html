@@ -214,6 +214,35 @@
             <span class="print-hint">Print: Ctrl / ⌘ + P</span>
           </div>
 
+          <fieldset class="sheet-options" aria-describedby="sheet-options-hint">
+            <legend>Sheet columns</legend>
+            <div class="sheet-options-list">
+              <label class="check">
+                <input id="sheet-option-key" type="checkbox" checked />
+                Key
+              </label>
+              <label class="check">
+                <input id="sheet-option-tuning" type="checkbox" checked />
+                Tuning
+              </label>
+              <label class="check">
+                <input id="sheet-option-tempo" type="checkbox" checked />
+                Tempo (BPM)
+              </label>
+              <label class="check">
+                <input id="sheet-option-duration" type="checkbox" checked />
+                Time
+              </label>
+              <label class="check">
+                <input id="sheet-option-comment" type="checkbox" checked />
+                Comment
+              </label>
+            </div>
+            <p id="sheet-options-hint" class="sheet-options-hint">
+              Title, venue, date, and song titles always print.
+            </p>
+          </fieldset>
+
           <div id="sheet-scroll" class="sheet-scroll">
             <div id="sheet-frame" class="sheet-frame">
               <div

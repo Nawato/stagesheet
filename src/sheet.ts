@@ -8,41 +8,60 @@
 
 import { el } from "./dom";
 import { formatDuration, formatGigDate, formatRuntime, setlistDurationSecs } from "./format";
+import { withSheetDefaults } from "./types";
 import type { LogoAlignment, Setlist, Song } from "./types";
 
-export interface SheetOptions {
+export interface SheetRenderOptions {
   logoUrl: string | null;
   grayscaleLogo: boolean;
   /** Called when the logo changes the sheet height (load/error). */
   onLogoLayout?: () => void;
 }
 
+interface SheetVisibility {
+  hasTuning: boolean;
+  showKey: boolean;
+  showTempo: boolean;
+  showDuration: boolean;
+  showComment: boolean;
+}
+
 export function renderSetlistSheet(
   root: HTMLElement,
   setlist: Setlist,
-  options: SheetOptions,
+  options: SheetRenderOptions,
 ): void {
   const title = setlist.title.trim() || "Untitled setlist";
   const date = formatGigDate(setlist.date);
   const totalSecs = setlistDurationSecs(setlist);
   const songCount = setlist.items.filter((item) => "Song" in item).length;
-  const hasTuning = setlist.items.some(
-    (item) => "Song" in item && Boolean(item.Song.tuning?.trim()),
-  );
+  const sheetOptions = withSheetDefaults(setlist.sheet_options);
 
-  // The tuning column only exists when at least one song needs it, so a
-  // setlist without retunes keeps the baseline five-column layout.
+  // The tuning column only exists when the toggle is on *and* at least one
+  // song needs it, so a setlist without retunes keeps the narrower layout.
+  const visibility: SheetVisibility = {
+    hasTuning:
+      sheetOptions.show_tuning &&
+      setlist.items.some((item) => "Song" in item && Boolean(item.Song.tuning?.trim())),
+    showKey: sheetOptions.show_key,
+    showTempo: sheetOptions.show_tempo,
+    showDuration: sheetOptions.show_duration,
+    showComment: sheetOptions.show_comment,
+  };
+
   const columns: Array<[string, string]> = [
     ["#", "col-index"],
     ["Song", "col-song"],
-    ["Key", "col-key"],
-    ...(hasTuning ? [["Tuning", "col-tuning"] as [string, string]] : []),
-    ["BPM", "col-bpm"],
-    ["Time", "col-time"],
   ];
+  if (visibility.showKey) columns.push(["Key", "col-key"]);
+  if (visibility.hasTuning) columns.push(["Tuning", "col-tuning"]);
+  // The editor toggle says "Tempo (BPM)"; the sheet keeps the compact BPM
+  // heading so it stays legible in the narrow numeric column.
+  if (visibility.showTempo) columns.push(["BPM", "col-bpm"]);
+  if (visibility.showDuration) columns.push(["Time", "col-time"]);
   const columnCount = columns.length;
 
-  const table = el("table", hasTuning ? "sheet-table has-tuning" : "sheet-table");
+  const table = el("table", sheetTableClass(columnCount));
   const caption = el(
     "caption",
     "sr-only",
@@ -89,7 +108,7 @@ export function renderSetlistSheet(
     for (const item of setlist.items) {
       if ("Song" in item) {
         songNumber += 1;
-        tbody.append(buildSongRow(item.Song, songNumber, hasTuning));
+        tbody.append(buildSongRow(item.Song, songNumber, visibility));
       } else {
         tbody.append(
           buildBreakRow(
@@ -97,6 +116,7 @@ export function renderSetlistSheet(
             item.Break.note,
             item.Break.label,
             columnCount,
+            visibility.showComment,
           ),
         );
       }
@@ -129,7 +149,7 @@ function buildBrand(
   setlist: Setlist,
   title: string,
   date: string | null,
-  options: SheetOptions,
+  options: SheetRenderOptions,
 ): HTMLElement {
   const brand = el("div", "sheet-brand");
 
@@ -171,27 +191,41 @@ function buildBrand(
   return brand;
 }
 
-function buildSongRow(song: Song, number: number, hasTuning: boolean): HTMLTableRowElement {
+function buildSongRow(
+  song: Song,
+  number: number,
+  visibility: SheetVisibility,
+): HTMLTableRowElement {
   const row = el("tr", "song-row");
   row.append(cell("col-index tabular", String(number)));
 
   const songCell = el("td", "col-song song-cell");
   songCell.append(el("span", "song-title", song.title));
+  // The artist line is part of the song identity and always shows.
   if (song.artist?.trim()) {
     songCell.append(el("span", "song-artist", song.artist.trim()));
   }
-  // Feature 4 will gate the song comment behind `show_comment`; keeping the
-  // lookup in a helper means that toggle only changes this call.
-  const commentText = songCommentText(song.notes);
+  const commentText = visibility.showComment ? songCommentText(song.notes) : null;
   if (commentText) songCell.append(el("span", "song-notes", commentText));
   row.append(songCell);
 
-  row.append(cell("col-key tabular", song.key?.trim() || "—"));
-  if (hasTuning) {
+  if (visibility.showKey) {
+    row.append(cell("col-key tabular", song.key?.trim() || "—"));
+  }
+  if (visibility.hasTuning) {
     row.append(cell("col-tuning tabular", song.tuning?.trim() || "—"));
   }
-  row.append(cell("col-bpm tabular", song.bpm ? String(song.bpm) : "—"));
-  row.append(cell("col-time tabular", song.duration_secs != null ? formatDuration(song.duration_secs) : "—"));
+  if (visibility.showTempo) {
+    row.append(cell("col-bpm tabular", song.bpm ? String(song.bpm) : "—"));
+  }
+  if (visibility.showDuration) {
+    row.append(
+      cell(
+        "col-time tabular",
+        song.duration_secs != null ? formatDuration(song.duration_secs) : "—",
+      ),
+    );
+  }
 
   return row;
 }
@@ -201,16 +235,17 @@ function buildBreakRow(
   note: string | null,
   label: string | null | undefined,
   columnCount: number,
+  showComment: boolean,
 ): HTMLTableRowElement {
   const row = el("tr", "break-row");
   const cellNode = el("td", "break-cell");
   cellNode.colSpan = columnCount;
 
-  // Feature 4 will gate the label and comment behind `show_comment`; keeping
-  // both text lookups in helpers means that toggle only changes these two
-  // calls. The duration is structural and always renders.
-  const labelText = breakLabelText(label);
-  const commentText = breakCommentText(note);
+  // The duration is structural and always renders. There is no separate label
+  // toggle, so the Comment toggle gates both the label and the comment; with
+  // it off the row is just `N min`.
+  const labelText = showComment ? breakLabelText(label) : null;
+  const commentText = showComment ? breakCommentText(note) : null;
   if (labelText) cellNode.append(el("span", "break-label", labelText));
   cellNode.append(el("span", "break-duration tabular", `${durationMins} min`));
   if (commentText) cellNode.append(el("span", "break-note", commentText));
@@ -219,7 +254,7 @@ function buildBreakRow(
   return row;
 }
 
-/** Song comment, or `null` when empty (Feature 4 will also gate it). */
+/** Song comment, or `null` when empty or the Comment toggle is off. */
 function songCommentText(note: string | null | undefined): string | null {
   const trimmed = note?.trim();
   return trimmed ? trimmed : null;
@@ -230,10 +265,22 @@ function breakLabelText(label: string | null | undefined): string {
   return label?.trim() || "Break";
 }
 
-/** Break comment, or `null` when empty (Feature 4 will also gate it). */
+/** Break comment, or `null` when empty. */
 function breakCommentText(note: string | null | undefined): string | null {
   const trimmed = note?.trim();
   return trimmed ? trimmed : null;
+}
+
+/**
+ * Width preset for the visible column set. The three named presets come from
+ * the Feature 4 spec; `cols-2`/`cols-4` cover toggle combinations that leave
+ * fewer columns visible.
+ */
+function sheetTableClass(columnCount: number): string {
+  if (columnCount >= 6) return "sheet-table cols-5-tuning";
+  if (columnCount === 5) return "sheet-table cols-5";
+  if (columnCount === 3) return "sheet-table cols-minimal";
+  return `sheet-table cols-${columnCount}`;
 }
 
 function cell(className: string, text: string): HTMLTableCellElement {

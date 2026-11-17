@@ -298,6 +298,37 @@ impl SetlistItem {
     }
 }
 
+/// Which optional blocks the printable sheet shows.
+///
+/// The container-level `#[serde(default)]` fills missing fields from the
+/// all-`true` `Default`, so partial or pre-feature JSON renders exactly as it
+/// did before the toggles existed. Do not add field-level defaults here: a
+/// missing `bool` would then silently mean `false`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct SheetOptions {
+    pub show_key: bool,
+    pub show_tuning: bool,
+    /// Tempo (BPM) column.
+    pub show_tempo: bool,
+    /// Time (song duration) column.
+    pub show_duration: bool,
+    /// Song and break comments; also gates the break label.
+    pub show_comment: bool,
+}
+
+impl Default for SheetOptions {
+    fn default() -> Self {
+        Self {
+            show_key: true,
+            show_tuning: true,
+            show_tempo: true,
+            show_duration: true,
+            show_comment: true,
+        }
+    }
+}
+
 /// A printable setlist.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Setlist {
@@ -313,6 +344,9 @@ pub struct Setlist {
     /// keeps old files loadable.
     #[serde(default, alias = "logo_config")]
     pub logo: LogoConfig,
+    /// Missing in pre-Feature-4 files; defaults to the all-visible sheet.
+    #[serde(default)]
+    pub sheet_options: SheetOptions,
     #[serde(default = "Utc::now")]
     pub created_at: DateTime<Utc>,
     #[serde(default = "Utc::now")]
@@ -329,6 +363,7 @@ impl Setlist {
             date: None,
             items: Vec::new(),
             logo: LogoConfig::default(),
+            sheet_options: SheetOptions::default(),
             created_at: now,
             updated_at: now,
         }
@@ -498,6 +533,80 @@ mod tests {
         let decoded: Setlist = serde_json::from_str(&json).expect("deserialize");
 
         assert_eq!(decoded, setlist);
+    }
+
+    #[test]
+    fn sheet_options_default_to_all_visible() {
+        let options = SheetOptions::default();
+
+        assert!(options.show_key);
+        assert!(options.show_tuning);
+        assert!(options.show_tempo);
+        assert!(options.show_duration);
+        assert!(options.show_comment);
+        assert_eq!(options, Setlist::new("Gig").sheet_options);
+    }
+
+    #[test]
+    fn legacy_setlist_without_sheet_options_gets_all_true() {
+        let legacy = serde_json::json!({
+            "id": Uuid::new_v4(),
+            "title": "Old Gig",
+            "venue": null,
+            "date": null,
+            "items": [],
+            "logo": {
+                "file_name": null,
+                "width_mm": 40.0,
+                "alignment": "Center"
+            }
+        });
+
+        let setlist: Setlist = serde_json::from_value(legacy).expect("pre-feature setlist parses");
+        assert_eq!(setlist.sheet_options, SheetOptions::default());
+    }
+
+    #[test]
+    fn partial_sheet_options_keep_missing_fields_true() {
+        // Only one field is present. A field-level serde default would turn the
+        // absent booleans into `false`; the container-level default must keep
+        // them `true`.
+        let setlist: Setlist = serde_json::from_value(serde_json::json!({
+            "id": Uuid::new_v4(),
+            "title": "Partial options",
+            "sheet_options": { "show_duration": false }
+        }))
+        .expect("partial sheet options parse");
+
+        assert_eq!(
+            setlist.sheet_options,
+            SheetOptions {
+                show_key: true,
+                show_tuning: true,
+                show_tempo: true,
+                show_duration: false,
+                show_comment: true,
+            }
+        );
+    }
+
+    #[test]
+    fn sheet_options_round_trip_with_disabled_blocks() {
+        let mut setlist = sample_setlist();
+        setlist.sheet_options = SheetOptions {
+            show_key: false,
+            show_tuning: true,
+            show_tempo: false,
+            show_duration: false,
+            show_comment: false,
+        };
+
+        let json = serde_json::to_string(&setlist).expect("serialize sheet options");
+        assert!(json.contains("\"show_duration\":false"));
+        assert_eq!(
+            serde_json::from_str::<Setlist>(&json).expect("deserialize sheet options"),
+            setlist
+        );
     }
 
     #[test]
@@ -870,6 +979,7 @@ mod tests {
         assert_eq!(setlist.logo.alignment, LogoAlignment::Left);
         assert_eq!(setlist.logo.file_name, None);
         assert_eq!(setlist.logo.width_mm, DEFAULT_LOGO_WIDTH_MM);
+        assert_eq!(setlist.sheet_options, SheetOptions::default());
         assert_eq!(setlist.items.len(), 2);
         assert_eq!(setlist.total_duration_secs(), 240 + 600);
         assert_eq!(

@@ -29,8 +29,8 @@ values still load; their next save fails with a clear message, and the UI
 
 ## Feature 1: Song tuning (free text) — Done
 
-Status: shipped. The column is shown whenever at least one song in the setlist
-has tuning set; the `show_tuning` toggle that can hide it ships with Feature 4.
+Status: shipped. The column is shown when the setlist's `show_tuning` toggle is
+on *and* at least one song in the setlist has tuning set.
 
 ### Spec
 
@@ -112,14 +112,14 @@ needed beyond the serde default for `label`.
 - TS: add `label?: string | null` to the `Break` variant in `types.ts`; existing
   JSON without it stays valid.
 
-## Feature 3: Comment field on songs + breaks — In progress
+## Feature 3: Comment field on songs + breaks — Done
 
-Status: bounds + UX are done. `Song.notes` and `Break.note` stay serialized
-under their original names, are labeled **"Comment"** in the library form and
-both editor panels, carry `maxlength=140`, and are rejected on save when longer
-than 140 chars after trim (shipped with Feature 2). Song comments render under
-the title and break comments inline, with blank values emitting no element. The
-only remainder is the sheet-level **Comment toggle**, which ships with Feature 4.
+Status: complete. `Song.notes` and `Break.note` stay serialized under their
+original names, are labeled **"Comment"** in the library form and both editor
+panels, carry `maxlength=140`, and are rejected on save when longer than 140
+chars after trim (shipped with Feature 2). Song comments render under the title
+and break comments inline when the setlist's Comment toggle is on; blank values
+emit no element.
 
 - Keep serialized names (`notes` / `note`) for JSON back-compat; label both
   **"Comment"** in the library form and editor so users find the same concept
@@ -134,7 +134,17 @@ only remainder is the sheet-level **Comment toggle**, which ships with Feature 4
   it. Accepted; no silent truncation.
 - Both gated by the Comment toggle (Feature 4).
 
-## Feature 4: Toggleable sheet blocks — Todo
+## Feature 4: Toggleable sheet blocks — Done
+
+Status: shipped. `SheetOptions` is persisted per setlist with all five blocks
+defaulting to visible; old files and partial objects load unchanged. The editor
+has a "Sheet columns" checkbox group above the preview (44px targets); each
+change marks the setlist dirty and re-renders preview and print from the same
+options. `sheet.ts` builds the visible columns, header, `<colgroup>`, and
+colspans dynamically, and the table uses the width presets below. The Comment
+toggle gates song comments, break comments, **and the break label** (there is no
+separate label toggle); break duration always renders. The tempo toggle is
+labeled "Tempo (BPM)" while the narrow printed heading stays `BPM`.
 
 Goal: every optional info block can be switched on/off per setlist; off = not
 on the page (preview, print, and export all follow).

@@ -137,22 +137,22 @@ change.
   minutes, comment), up/down + drag reorder, inline BPM/key/tuning editing,
   Comment fields for songs and breaks (max 140 chars) that render on the sheet,
   and logo upload with width/alignment controls.
+- Per-setlist "Sheet columns" toggles for Key, Tuning, Tempo (BPM), Time, and
+  Comment, persisted with the setlist and applied to both preview and print.
+  Title/venue/date and song titles always print; the Time column can be hidden,
+  while break durations always render.
 - Validation hardening on save: break length `0..=600`, break label ≤ 24 chars,
   and song/break comments ≤ 140 chars (after trim). Old files still load; their
   next save reports the violation instead of truncating.
 - A4 black-on-white preview with `@page`, repeated table header/footer on print, and
-  `break-inside: avoid` for rows. The `Tuning` column appears only when at least
-  one song in the setlist has tuning set.
+  `break-inside: avoid` for rows. The `Tuning` column appears only when its toggle
+  is on and at least one song in the setlist has tuning set.
 - Single-A4 cap with automatic type shrink: the sheet is locked to one page and
   scales down (minimum 50%) to fit, with a live fit indicator in the preview.
 - Printing through the native webview print dialog (Ctrl/Cmd + P).
 
 ### Still missing (per plan)
 
-- Toggleable sheet blocks (key, tuning, tempo, duration, comment) persisted per
-  setlist.
-- Sheet-level Comment toggle for song/break comments (the fields and 140-char
-  bounds already ship).
 - Multi-page A4 mode for setlists too long to stay legible on a single page.
 - PNG/PDF export (`html-to-image` + `jspdf`, A4) and the "open after export"
   print flow.

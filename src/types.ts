@@ -38,6 +38,42 @@ export interface BreakItem {
 /** Serde's default externally tagged enum representation. */
 export type SetlistItem = { Song: Song } | { Break: BreakItem };
 
+/** Which optional blocks the printable sheet shows. Mirrors `SheetOptions`. */
+export interface SheetOptions {
+  show_key: boolean;
+  show_tuning: boolean;
+  /** Tempo (BPM) column. */
+  show_tempo: boolean;
+  /** Time (song duration) column. */
+  show_duration: boolean;
+  /** Song and break comments; also gates the break label. */
+  show_comment: boolean;
+}
+
+export const DEFAULT_SHEET_OPTIONS: Readonly<SheetOptions> = Object.freeze({
+  show_key: true,
+  show_tuning: true,
+  show_tempo: true,
+  show_duration: true,
+  show_comment: true,
+});
+
+/**
+ * Fills a possibly missing/partial `sheet_options` object with the all-visible
+ * defaults. Old setlist files load exactly as before the toggles existed.
+ */
+export function withSheetDefaults(
+  options?: Partial<SheetOptions> | null,
+): SheetOptions {
+  return {
+    show_key: options?.show_key ?? true,
+    show_tuning: options?.show_tuning ?? true,
+    show_tempo: options?.show_tempo ?? true,
+    show_duration: options?.show_duration ?? true,
+    show_comment: options?.show_comment ?? true,
+  };
+}
+
 export interface Setlist {
   id: string;
   title: string;
@@ -46,6 +82,8 @@ export interface Setlist {
   date: string | null;
   items: SetlistItem[];
   logo: LogoConfig;
+  /** Missing in pre-Feature-4 files; use `withSheetDefaults` when loading. */
+  sheet_options?: SheetOptions;
   /** RFC 3339 timestamps. */
   created_at: string;
   updated_at: string;

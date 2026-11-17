@@ -41,6 +41,14 @@ pub struct Song {
     pub notes: Option<String>,     // "Comment" in the UI; ≤ 140 chars
 }
 
+pub struct SheetOptions {
+    pub show_key: bool,       // every field defaults to true
+    pub show_tuning: bool,
+    pub show_tempo: bool,     // Tempo (BPM) column
+    pub show_duration: bool,  // Time column
+    pub show_comment: bool,   // song/break comments + break label
+}
+
 pub enum SetlistItem {
     Song(Song),
     Break {
@@ -57,6 +65,7 @@ pub struct Setlist {
     pub date: Option<chrono::NaiveDate>, // "YYYY-MM-DD"
     pub items: Vec<SetlistItem>,
     pub logo: LogoConfig,            // serde alias: logo_config
+    pub sheet_options: SheetOptions, // missing in old files -> all true
     pub created_at: chrono::DateTime<chrono::Utc>,
     pub updated_at: chrono::DateTime<chrono::Utc>,
 }
@@ -70,6 +79,12 @@ Serde notes:
   A missing `note`/`label` deserializes to `None` (old files stay valid).
 - `LogoAlignment` deserializes case-insensitively (`"left"`, `"Left"`, `"CENTER"`).
 - `Song.key` and all optional fields default when missing.
+- `Setlist.sheet_options` carries a field-level `#[serde(default)]`; the
+  `SheetOptions` struct carries a **container-level** `#[serde(default)]` and a
+  manual `Default` with every field `true`. So a missing field, a partial
+  object, and a pre-feature file all render every optional block. Never add
+  field-level bool defaults inside `SheetOptions`: an absent bool would silently
+  mean `false`.
 - `Song.tuning` and `Break.label` are trimmed in both directions;
   whitespace-only values serialize as `null` and deserialize as `None`, so
   pre-feature files stay equal to new ones. Comments (`Song.notes`,
@@ -87,6 +102,9 @@ Serde notes:
     (the break "Comment") ≤ 140 chars. Lengths are counted after trimming.
 - `Setlist.logo` accepts the legacy key `logo_config`; missing timestamps default to
   `Utc::now`.
+- TS mirror: `SheetOptions`, `DEFAULT_SHEET_OPTIONS`, and
+  `withSheetDefaults()` live in `types.ts`. Run setlists through the helper when
+  loading/cloning so a field left off by an older writer still means "visible".
 - Unknown legacy fields are ignored, so the first-draft schema still loads.
 
 ## Storage
@@ -114,18 +132,25 @@ JS argument keys are camelCase (`setlistId`, `fileName`); model fields are snake
 ## Sheet markup and CSS
 
 - `<div id="setlist-sheet">` contains a `<table class="sheet-table">`.
-- Columns: `#`, `Song`, `Key`, `Tuning`, `BPM`, `Time`. The `Tuning` column renders
-  only when at least one song in the setlist has tuning set; without it the
-  five-column layout is unchanged.
+- Columns are built from `Setlist.sheet_options`: `#` and `Song` always exist;
+  `Key`, `Tuning`, `BPM`, and `Time` each render only while their toggle is on.
+  `Tuning` additionally requires at least one song in the setlist to have tuning
+  set. The editor labels the tempo toggle **"Tempo (BPM)"**; the sheet keeps the
+  compact `BPM` heading.
+- The table carries a width preset for the visible column count: `.cols-5`
+  (baseline 7/55/10/10/18), `.cols-5-tuning` (six columns,
+  6/50/9/10/9/16), `.cols-minimal` (index/song and one info column, 8/72/20),
+  plus `.cols-2` / `.cols-4` fallbacks for toggle combinations in between.
 - `<thead>` carries the logo/title/venue/date header and column labels; it repeats on
   every printed page. `<tfoot>` repeats the footer.
 - Rows use `.song-row` / `.break-row` and must keep `break-inside: avoid`.
-- Song comments render under the title in the song cell; a blank comment emits
-  no element. Break rows render `[label] · [duration] · [comment]` inside one
-  full-width dashed cell: the label defaults to `Break`, is bold/uppercase, and
-  the duration is always shown. The label and comments will be gated by the
-  Feature 4 `show_comment` toggle; keep their text lookups in helpers
-  (`songCommentText`, `breakLabelText`, `breakCommentText` in `sheet.ts`).
+- Song artist always renders under the title; a song comment renders there only
+  when `show_comment` is on, and a blank comment emits no element. Break rows
+  render `[label] · [duration] · [comment]` inside one full-width dashed cell:
+  the duration is always shown, while the label (default `Break`, bold/uppercase)
+  and the comment are gated by `show_comment`. There is no separate label
+  toggle. Keep the text lookups in helpers (`songCommentText`, `breakLabelText`,
+  `breakCommentText` in `sheet.ts`).
 - Typography targets: title 22–26pt bold, meta 11–12pt, song rows 12–14pt, tabular
   figures for numbers/BPM/key.
 - Screen preview is a real A4 box scaled with `--sheet-scale`; print resets the

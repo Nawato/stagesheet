@@ -12,14 +12,16 @@ import {
 } from "./format";
 import { storedLogoUrl } from "./logo";
 import { renderSetlistSheet } from "./sheet";
-import type { BreakItem, LogoAlignment, Setlist, Song } from "./types";
+import type { BreakItem, LogoAlignment, Setlist, SheetOptions, Song } from "./types";
 import {
   DEFAULT_LOGO_WIDTH_MM,
+  DEFAULT_SHEET_OPTIONS,
   LOGO_MAX_WIDTH_MM,
   LOGO_MIN_WIDTH_MM,
   MAX_BREAK_LABEL_CHARS,
   MAX_BREAK_MINS,
   MAX_COMMENT_CHARS,
+  withSheetDefaults,
 } from "./types";
 
 const A4_WIDTH_PX = (210 / 25.4) * 96;
@@ -89,6 +91,15 @@ const sheet = byId<HTMLDivElement>("setlist-sheet");
 const sheetFrame = byId<HTMLDivElement>("sheet-frame");
 const sheetScroll = byId<HTMLDivElement>("sheet-scroll");
 const previewMeta = byId<HTMLParagraphElement>("preview-meta");
+
+/** Editor "Sheet columns" checkboxes, in display order. */
+const sheetOptionInputs: Array<[keyof SheetOptions, HTMLInputElement]> = [
+  ["show_key", byId<HTMLInputElement>("sheet-option-key")],
+  ["show_tuning", byId<HTMLInputElement>("sheet-option-tuning")],
+  ["show_tempo", byId<HTMLInputElement>("sheet-option-tempo")],
+  ["show_duration", byId<HTMLInputElement>("sheet-option-duration")],
+  ["show_comment", byId<HTMLInputElement>("sheet-option-comment")],
+];
 
 // ---------------------------------------------------------------------------
 // Boot
@@ -165,6 +176,17 @@ function bindEvents(): void {
   }
   grayscaleLogoInput.addEventListener("change", renderSheet);
 
+  for (const [key, input] of sheetOptionInputs) {
+    input.addEventListener("change", () => {
+      if (!current) return;
+      const options = withSheetDefaults(current.sheet_options);
+      options[key] = input.checked;
+      current.sheet_options = options;
+      markDirty();
+      renderSheet();
+    });
+  }
+
   window.addEventListener("keydown", (event) => {
     if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "s") {
       event.preventDefault();
@@ -196,7 +218,10 @@ async function init(): Promise<void> {
       api.listSetlists(),
     ]);
     songs = loadedSongs.sort((left, right) => left.title.localeCompare(right.title));
-    setlists = loadedSetlists;
+    setlists = loadedSetlists.map((setlist) => ({
+      ...setlist,
+      sheet_options: withSheetDefaults(setlist.sheet_options),
+    }));
     current = setlists[0] ? cloneSetlist(setlists[0]) : createDraft();
     dirty = setlists.length === 0;
   } catch (error) {
@@ -234,6 +259,7 @@ function createDraft(): Setlist {
       width_mm: DEFAULT_LOGO_WIDTH_MM,
       alignment: "Center",
     },
+    sheet_options: { ...DEFAULT_SHEET_OPTIONS },
     created_at: now,
     updated_at: now,
   };
@@ -246,6 +272,7 @@ function cloneSetlist(setlist: Setlist): Setlist {
       "Song" in item ? { Song: { ...item.Song } } : { Break: { ...item.Break } },
     ),
     logo: { ...setlist.logo },
+    sheet_options: withSheetDefaults(setlist.sheet_options),
   };
 }
 
@@ -415,6 +442,7 @@ function renderAll(): void {
   renderSetlistSelect();
   renderMeta();
   renderLogoControls();
+  renderSheetOptions();
   renderItems();
   renderLibrary();
   renderSheet();
@@ -466,6 +494,15 @@ function renderLogoControls(): void {
 
   for (const radio of alignmentRadios) {
     radio.checked = radio.value === current.logo.alignment;
+  }
+}
+
+function renderSheetOptions(): void {
+  if (!current) return;
+
+  const options = withSheetDefaults(current.sheet_options);
+  for (const [key, input] of sheetOptionInputs) {
+    input.checked = options[key];
   }
 }
 
