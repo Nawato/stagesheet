@@ -1,9 +1,8 @@
 # StageSheet — Development Plan
 
 Planning docs for StageSheet, the offline-first setlist manager that prints
-black-on-white A4 sheets. These files are versioned with the code and supersede
-the earlier drafts that lived outside the repo (`~/.opencode/plan/`, kept only
-as history).
+black-on-white A4 sheets. These files are versioned with the code and replace
+the earlier drafts that lived outside the repo (now removed).
 
 | Doc | Contents |
 | --- | --- |
