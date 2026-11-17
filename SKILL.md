@@ -128,6 +128,11 @@ Serde notes:
 - Writes: temp file + rename, serialized by a tokio mutex.
 - Logo file names are plain names (no separators, `..`, drive letters, or `:`).
 - Content sniffing decides the stored extension; never trust the client MIME type.
+- `import_logo` decodes PNG/JPEG (invalid bodies are rejected), and when the
+  longest edge exceeds `MAX_LOGO_DIMENSION` (1024 px) it downscales with aspect
+  ratio preserved. Small rasters are stored untouched; JPEG re-encodes at
+  quality 85; SVG is stored byte-for-byte and remains vector. The 5 MiB cap is
+  checked before and after processing.
 - Capability: `$APPDATA/stagesheet/**` for the frontend `fs` plugin (the dialog
   save/open integration extends it to the one selected file);
   `opener:allow-open-path` is scoped to `$HOME/**`, `$TEMP/**`, and the app-data
@@ -268,7 +273,8 @@ JS argument keys are camelCase (`setlistId`, `fileName`); model fields are snake
 ## Tests that must stay green
 
 - `cargo test` in `src-tauri`: model round-trips, first-draft JSON migration, reorder
-  bounds, duration with breaks, storage CRUD, logo validation/traversal rejection.
+  bounds, duration with breaks, storage CRUD, logo validation/traversal rejection,
+  raster downscaling, and untouched small/SVG logos.
   (The `tauri` crate needs the `webkit2gtk-4.1` system libraries from the README to
   compile, even for pure model tests.)
 - `npm run build`: TypeScript strict mode + Vite production bundle.

@@ -11,9 +11,12 @@
 //! Writes go through a temporary file plus rename so a crash cannot leave a
 //! half-written JSON document behind.
 
+use std::borrow::Cow;
+use std::io::Cursor;
 use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
 
+use image::ImageFormat;
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 use tauri::{AppHandle, Manager};
@@ -25,6 +28,16 @@ use crate::models::{Setlist, Song, is_plain_file_name};
 
 /// Maximum accepted logo file size (5 MiB).
 pub const MAX_LOGO_BYTES: usize = 5 * 1024 * 1024;
+
+/// Longest edge kept for imported raster logos, in pixels.
+///
+/// Logos print at up to 80 mm wide; 1024 px still gives roughly 325 dpi there,
+/// while trimming multi-megapixel camera/design exports to a fraction of the
+/// file size and decode memory.
+pub const MAX_LOGO_DIMENSION: u32 = 1024;
+
+/// JPEG quality used when a logo has to be re-encoded after downscaling.
+const LOGO_JPEG_QUALITY: u8 = 85;
 
 /// Filesystem-backed store. Cheap to clone only via shared `State`; it is
 /// intentionally not `Clone` because it owns the per-process write lock.
@@ -182,11 +195,13 @@ impl Storage {
     // Logos
     // ---------------------------------------------------------------------
 
-    /// Validates and stores a logo, returning the generated file name.
+    /// Validates, optionally downscales, and stores a logo.
     ///
     /// The extension is derived from the file contents rather than the client
     /// supplied name, so a mislabelled upload cannot smuggle a different format
-    /// into the preview.
+    /// into the preview. Raster logos larger than [`MAX_LOGO_DIMENSION`] are
+    /// decoded and resized with their aspect ratio intact; small rasters are
+    /// stored byte-for-byte and SVGs stay vector.
     pub async fn import_logo(&self, original_name: &str, bytes: &[u8]) -> Result<String, AppError> {
         if bytes.is_empty() {
             return Err(AppError::InvalidInput("logo file is empty".into()));
@@ -205,12 +220,41 @@ impl Storage {
             ))
         })?;
 
+        let data = match extension {
+            "svg" => Cow::Borrowed(bytes),
+            _ => {
+                let (format, label) = if extension == "png" {
+                    (ImageFormat::Png, "PNG")
+                } else {
+                    (ImageFormat::Jpeg, "JPEG")
+                };
+                let downscaled = downscale_raster_logo(bytes, format).map_err(|_| {
+                    AppError::InvalidInput(format!(
+                        "`{original_name}` is not a valid {label} image"
+                    ))
+                })?;
+                match downscaled {
+                    Some(downscaled) => Cow::Owned(downscaled),
+                    None => Cow::Borrowed(bytes),
+                }
+            }
+        };
+
+        // Re-check after downscaling: the cap also covers the written file, not
+        // just the upload. PNG re-encoding can occasionally grow a file.
+        if data.len() > MAX_LOGO_BYTES {
+            return Err(AppError::InvalidInput(format!(
+                "logo must be at most {} MiB",
+                MAX_LOGO_BYTES / (1024 * 1024)
+            )));
+        }
+
         let file_name = format!("{}.{extension}", Uuid::new_v4());
         let logos_dir = self.logos_dir();
         let _guard = self.write_lock.lock().await;
 
         tokio::fs::create_dir_all(&logos_dir).await?;
-        tokio::fs::write(logos_dir.join(&file_name), bytes).await?;
+        tokio::fs::write(logos_dir.join(&file_name), data.as_ref()).await?;
 
         Ok(file_name)
     }
@@ -265,6 +309,41 @@ impl Storage {
     }
 }
 
+/// Returns re-encoded bytes when the longest edge exceeds
+/// [`MAX_LOGO_DIMENSION`], or `None` when the source already fits and should be
+/// stored untouched.
+fn downscale_raster_logo(
+    bytes: &[u8],
+    format: ImageFormat,
+) -> Result<Option<Vec<u8>>, image::ImageError> {
+    let image = image::load_from_memory_with_format(bytes, format)?;
+    if image.width().max(image.height()) <= MAX_LOGO_DIMENSION {
+        return Ok(None);
+    }
+
+    let resized = image.resize(
+        MAX_LOGO_DIMENSION,
+        MAX_LOGO_DIMENSION,
+        image::imageops::FilterType::Lanczos3,
+    );
+
+    let mut encoded = Vec::new();
+    let mut cursor = Cursor::new(&mut encoded);
+    match format {
+        ImageFormat::Png => resized.write_to(&mut cursor, ImageFormat::Png)?,
+        ImageFormat::Jpeg => {
+            // JPEG has no alpha channel; the incoming JPEG is RGB anyway.
+            let rgb = resized.to_rgb8();
+            let mut encoder =
+                image::codecs::jpeg::JpegEncoder::new_with_quality(&mut cursor, LOGO_JPEG_QUALITY);
+            encoder.encode_image(&rgb)?;
+        }
+        _ => unreachable!("only PNG and JPEG reach the logo downscaler"),
+    }
+
+    Ok(Some(encoded))
+}
+
 fn detect_logo_extension(bytes: &[u8]) -> Option<&'static str> {
     const PNG_MAGIC: [u8; 8] = [0x89, b'P', b'N', b'G', 0x0d, 0x0a, 0x1a, 0x0a];
 
@@ -309,6 +388,23 @@ mod tests {
         let dir = tempfile::tempdir().expect("temp dir");
         let storage = Storage::new(dir.path().join("stagesheet"));
         (dir, storage)
+    }
+
+    fn raster_bytes(width: u32, height: u32, format: ImageFormat) -> Vec<u8> {
+        let image = image::RgbImage::from_fn(width, height, |x, y| {
+            image::Rgb([(x % 251) as u8, (y % 241) as u8, ((x + y) % 239) as u8])
+        });
+        let mut bytes = Vec::new();
+        image::DynamicImage::ImageRgb8(image)
+            .write_to(&mut Cursor::new(&mut bytes), format)
+            .expect("encode fixture image");
+        bytes
+    }
+
+    async fn stored_logo_bytes(storage: &Storage, file_name: &str) -> Vec<u8> {
+        tokio::fs::read(storage.logos_dir().join(file_name))
+            .await
+            .expect("read stored logo")
     }
 
     #[test]
@@ -487,7 +583,7 @@ mod tests {
     #[tokio::test]
     async fn logo_import_is_content_checked_and_traversal_safe() {
         let (_dir, storage) = storage();
-        let png = [0x89, b'P', b'N', b'G', 0x0d, 0x0a, 0x1a, 0x0a, 0, 0];
+        let png = raster_bytes(16, 16, ImageFormat::Png);
 
         let file_name = storage
             .import_logo("band logo.png", &png)
@@ -517,6 +613,88 @@ mod tests {
                 .await
                 .is_err()
         );
+
+        // A valid magic prefix with a broken body is still not an image.
+        let broken_png = [0x89, b'P', b'N', b'G', 0x0d, 0x0a, 0x1a, 0x0a, 0, 0];
+        assert!(
+            storage
+                .import_logo("broken.png", &broken_png)
+                .await
+                .is_err()
+        );
+
         assert!(storage.remove_logo("../songs.json").await.is_err());
+    }
+
+    #[tokio::test]
+    async fn large_png_is_downscaled_before_storage() {
+        let (_dir, storage) = storage();
+        let source = raster_bytes(2000, 1000, ImageFormat::Png);
+
+        let file_name = storage
+            .import_logo("wide.png", &source)
+            .await
+            .expect("import large png");
+        let stored = stored_logo_bytes(&storage, &file_name).await;
+        let decoded = image::load_from_memory_with_format(&stored, ImageFormat::Png)
+            .expect("stored png decodes");
+
+        assert_eq!((decoded.width(), decoded.height()), (1024, 512));
+        assert!(
+            stored.len() < source.len(),
+            "downscaling should trim the file size"
+        );
+        assert!(file_name.ends_with(".png"));
+    }
+
+    #[tokio::test]
+    async fn large_jpeg_keeps_format_and_aspect_ratio() {
+        let (_dir, storage) = storage();
+        let source = raster_bytes(1600, 900, ImageFormat::Jpeg);
+
+        let file_name = storage
+            .import_logo("photo.jpg", &source)
+            .await
+            .expect("import large jpeg");
+        let stored = stored_logo_bytes(&storage, &file_name).await;
+
+        assert!(file_name.ends_with(".jpg"));
+        assert!(stored.starts_with(&[0xff, 0xd8, 0xff]));
+        let decoded = image::load_from_memory_with_format(&stored, ImageFormat::Jpeg)
+            .expect("stored jpeg decodes");
+        assert_eq!((decoded.width(), decoded.height()), (1024, 576));
+    }
+
+    #[tokio::test]
+    async fn logos_within_the_limit_are_stored_untouched() {
+        let (_dir, storage) = storage();
+        let png = raster_bytes(320, 180, ImageFormat::Png);
+        let jpeg = raster_bytes(640, 640, ImageFormat::Jpeg);
+
+        let png_name = storage
+            .import_logo("small.png", &png)
+            .await
+            .expect("import small png");
+        assert_eq!(stored_logo_bytes(&storage, &png_name).await, png);
+
+        let jpeg_name = storage
+            .import_logo("small.jpg", &jpeg)
+            .await
+            .expect("import small jpeg");
+        assert_eq!(stored_logo_bytes(&storage, &jpeg_name).await, jpeg);
+    }
+
+    #[tokio::test]
+    async fn svg_logos_stay_vector_and_untouched() {
+        let (_dir, storage) = storage();
+        let svg = br#"<?xml version="1.0"?><svg xmlns="http://www.w3.org/2000/svg" width="4000" height="3000"><rect width="1" height="1"/></svg>"#;
+
+        let file_name = storage
+            .import_logo("logo.svg", svg)
+            .await
+            .expect("import svg");
+
+        assert!(file_name.ends_with(".svg"));
+        assert_eq!(stored_logo_bytes(&storage, &file_name).await, svg);
     }
 }

@@ -111,8 +111,10 @@ scoped to `$APPDATA/stagesheet/**`, so no other paths are reachable from the web
 Writes use a temp file plus rename, and mutations are serialized with a tokio mutex.
 
 Logos are validated by content (PNG/JPEG magic bytes, SVG root tag), capped at 5 MiB,
-and stored under a generated UUID name. Absolute paths are never persisted. Image
-downscaling is deferred until the export phase.
+and stored under a generated UUID name. Absolute paths are never persisted. Raster
+logos whose longest edge exceeds 1024 px are decoded and downscaled on import with
+the aspect ratio preserved (PNG stays PNG, JPEG stays JPEG at quality 85); SVGs are
+stored byte-for-byte and stay vector.
 
 ## Song library
 
@@ -202,7 +204,8 @@ change.
 - Setlist editor: title/venue/date, break insertion (custom label, length in
   minutes, comment), up/down + drag reorder, inline BPM/key/tuning editing,
   Comment fields for songs and breaks (max 140 chars) that render on the sheet,
-  and logo upload with width/alignment controls.
+  and logo upload with width/alignment controls. Oversized raster logos are
+  downscaled on import; SVG logos stay vector.
 - Per-setlist "Sheet columns" toggles for Key, Tuning, Tempo (BPM), Time, and
   Comment, persisted with the setlist and applied to both preview and print.
   Title/venue/date and song titles always print; the Time column can be hidden,
@@ -257,7 +260,6 @@ change.
   does not repeat `thead`/`tfoot` in native print (WebKit bug 17205); the PDF
   exporter composites them itself.
 - Selectable/vector PDF text (post-MVP via `typst`).
-- Logo downscaling on import.
 - Android/iOS project initialization (`tauri android init` / `tauri ios init`) and
   native mobile share.
 - Signing and release automation (P3); CI covers the build/test gate only.

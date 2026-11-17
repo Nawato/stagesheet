@@ -1744,7 +1744,7 @@ async function handleLogoFile(): Promise<void> {
     renderLogoControls();
     markDirty();
     renderSheet();
-    setStatus(`Logo imported (${Math.max(1, Math.round(file.size / 1024))} KB).`, "success");
+    setStatus("Logo imported.", "success");
   } catch (error) {
     setStatus(`Could not import logo: ${describeError(error)}`, "error");
     // Keep the previous logo (if any) visible after a failed replacement.

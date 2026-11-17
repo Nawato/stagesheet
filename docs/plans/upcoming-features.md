@@ -384,6 +384,22 @@ tuning and adds three view controls:
 Verification: `npm run build` and `cargo test` (33 tests; no Rust or data-model
 changes).
 
+## Feature 9: Logo downscale on import — Done
+
+Status: shipped. Imported PNG/JPEG logos are decoded in Rust; when either edge
+exceeds `MAX_LOGO_DIMENSION` (1024 px) the image is resized with Lanczos3 and
+its aspect ratio preserved. PNG stays PNG; JPEG re-encodes at quality 85.
+Smaller rasters are stored byte-for-byte, and SVG stays vector and untouched.
+Broken image bodies are rejected as invalid input even when the magic bytes
+match. The 5 MiB upload cap is checked before and after processing.
+
+Why post-export: export already rasterizes the logo at its printed millimetre
+size rather than its source pixel size, so downscaling is not needed for print
+fidelity. It still trims stored file size, decode memory, and disk use. At the
+80 mm maximum print width, 1024 px is roughly 325 dpi.
+
+Verification: `npm run build` and `cargo test` (37 tests).
+
 ## Roadmap backlog (prioritized)
 
 - **P0 — PNG/PDF export + print**: Feature 6 done. Physical-paper QA and
@@ -404,8 +420,7 @@ changes).
 - **P2 — Mobile**: `android`/`ios init` on a provisioned machine, share-sheet
   export (verify a community share plugin first — not an official Tauri v2
   plugin).
-- **P2 — Logo downscale** on import: safely post-export — export rasterizes at
-  the printed mm size, not the source pixel size; downscale still trims file
-  size and memory.
+- **P2 — Logo downscale**: Done (Feature 9). Raster logos are downscaled on
+  import to a 1024 px longest edge; SVGs stay vector.
 - **P3 — Scale-out**: SQLite migration past ~1000 songs; CI-based signing,
   release automation, auto-update.
