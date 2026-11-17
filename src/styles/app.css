@@ -429,6 +429,23 @@ input[type="file"]::file-selector-button {
   margin-bottom: 10px;
 }
 
+.library-controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 6px 10px;
+  margin-bottom: 10px;
+}
+
+.library-sort {
+  flex: 0 1 118px;
+}
+
+.library-filter {
+  flex: 0 1 auto;
+  font-size: 12.5px;
+}
+
 .song-list {
   display: flex;
   flex-direction: column;

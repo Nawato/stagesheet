@@ -114,6 +114,17 @@ Logos are validated by content (PNG/JPEG magic bytes, SVG root tag), capped at 5
 and stored under a generated UUID name. Absolute paths are never persisted. Image
 downscaling is deferred until the export phase.
 
+## Song library
+
+The library pane keeps reusable songs and offers instant search across title,
+artist, key, and tuning. A view-only sort control orders the list by title
+(default), artist, key, or tuning; missing values sort last and ties fall back to
+title. The **Has tuning** checkbox narrows the list to songs with a tuning set and
+combines with the search query. Each row adds the song to the running order,
+duplicates it into the library under a new id with a `(copy)` suffix, or removes
+it after a confirmation. Sorting and filtering never mark a setlist dirty or
+change the stored data.
+
 ## Backup and restore
 
 The library pane has **Back up** and **Restore** actions. Both operate on one
@@ -184,8 +195,10 @@ change.
   `NaiveDate`, and created/updated timestamps, with migration-friendly serde
   defaults and aliases.
 - JSON storage + capability scoping + the full command list above.
-- Song library with instant search and one-click add, including free-text tuning
-  (max 24 chars) in search, the add form, and each song's editor details.
+- Song library with instant search (title, artist, key, tuning), view-only sort by
+  title/artist/key/tuning, a "Has tuning" filter, one-click add, per-row duplicate
+  under a new id, and delete with confirmation. Free-text tuning (max 24 chars) is
+  part of search, the add form, and each song's editor details.
 - Setlist editor: title/venue/date, break insertion (custom label, length in
   minutes, comment), up/down + drag reorder, inline BPM/key/tuning editing,
   Comment fields for songs and breaks (max 140 chars) that render on the sheet,

@@ -71,6 +71,25 @@
             />
           </div>
 
+          <div class="library-controls" role="group" aria-label="Sort and filter songs">
+            <div class="field library-sort">
+              <label for="song-sort">Sort by</label>
+              <select id="song-sort">
+                <option value="title" selected>Title</option>
+                <option value="artist">Artist</option>
+                <option value="key">Key</option>
+                <option value="tuning">Tuning</option>
+              </select>
+            </div>
+            <label class="check library-filter">
+              <input
+                id="song-tuning-only"
+                type="checkbox"
+              />
+              Has tuning
+            </label>
+          </div>
+
           <ul id="song-list" class="song-list"></ul>
 
           <form id="song-form" class="song-form" novalidate>

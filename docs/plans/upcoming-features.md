@@ -362,6 +362,28 @@ Verification: `npm run build` and `cargo test` (33 tests; no Rust changes).
 Manual QA still needs a real desktop run (save dialog scope, restore counts, and
 a fresh-profile round trip).
 
+## Feature 8: Library polish — Done
+
+Status: shipped. The library keeps instant search across title, artist, key, and
+tuning and adds three view controls:
+
+- **Duplicate song**: a per-row copy action saves a new song with a fresh UUID and
+  a non-colliding ` (copy)`, ` (copy 2)`, … title suffix. Fields are copied
+  verbatim; setlist items already hold song copies, so duplicating never touches a
+  running order.
+- **Sort**: a select for title (default), artist, key, or tuning. Blank values sort
+  last, ties fall back to title, and the choice is in-memory only: it never marks a
+  setlist dirty and is not backed up.
+- **Tuning filter**: a **Has tuning** checkbox that shows only songs with a
+  non-empty tuning. It combines with the instant search; the empty state names
+  whichever filter/search is active.
+- **Accessibility**: all new controls keep the 44px target. The sort and filter
+  have visible labels; the icon-only duplicate button carries an aria-label and
+  tooltip. Add, search, and delete-with-confirm are unchanged.
+
+Verification: `npm run build` and `cargo test` (33 tests; no Rust or data-model
+changes).
+
 ## Roadmap backlog (prioritized)
 
 - **P0 — PNG/PDF export + print**: Feature 6 done. Physical-paper QA and
@@ -377,8 +399,8 @@ a fresh-profile round trip).
   webkit2gtk-4.1/gtk3/libsoup3 dev packages from the README) for pushes to
   `main` and pull requests. No secrets, bundles, signing, or mobile builds;
   signing/release automation stays P3.
-- **P1 — Library polish**: duplicate-song, sort by artist/key/tuning, tuning
-  filter.
+- **P1 — Library polish**: Done (Feature 8). Duplicate song, view-only sort by
+  title/artist/key/tuning, and a "Has tuning" filter; no data-model changes.
 - **P2 — Mobile**: `android`/`ios init` on a provisioned machine, share-sheet
   export (verify a community share plugin first — not an official Tauri v2
   plugin).

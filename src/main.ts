@@ -52,8 +52,13 @@ let backendAvailable = true;
 let logoSrc: string | null = null;
 let logoRequestId = 0;
 let statusTimer: number | undefined;
+/** Library view controls. In-memory only: sorting/filtering never dirties a setlist. */
+let songSort: SongSortKey = "title";
+let tuningOnly = false;
 /** Logo files to delete only after a setlist save succeeds. */
 const pendingLogoRemovals = new Set<string>();
+
+type SongSortKey = "title" | "artist" | "key" | "tuning";
 
 // ---------------------------------------------------------------------------
 // Elements
@@ -71,6 +76,8 @@ const exportOpenAfterInput = byId<HTMLInputElement>("export-open-after");
 const deleteSetlistButton = byId<HTMLButtonElement>("delete-setlist");
 
 const songSearch = byId<HTMLInputElement>("song-search");
+const songSortSelect = byId<HTMLSelectElement>("song-sort");
+const songTuningOnlyInput = byId<HTMLInputElement>("song-tuning-only");
 const songListEl = byId<HTMLUListElement>("song-list");
 const songCountEl = byId<HTMLSpanElement>("song-count");
 const songForm = byId<HTMLFormElement>("song-form");
@@ -172,6 +179,14 @@ function bindEvents(): void {
   });
 
   songSearch.addEventListener("input", renderLibrary);
+  songSortSelect.addEventListener("change", () => {
+    songSort = isSongSortKey(songSortSelect.value) ? songSortSelect.value : "title";
+    renderLibrary();
+  });
+  songTuningOnlyInput.addEventListener("change", () => {
+    tuningOnly = songTuningOnlyInput.checked;
+    renderLibrary();
+  });
   songForm.addEventListener("submit", (event) => {
     void handleSongSubmit(event);
   });
@@ -325,7 +340,8 @@ function adoptLoadedState(
   loadedSetlists: Setlist[],
   preferredId?: string | null,
 ): void {
-  songs = [...loadedSongs].sort((left, right) => left.title.localeCompare(right.title));
+  songs = [...loadedSongs];
+  sortSongsByTitle();
   setlists = loadedSetlists.map((setlist) => ({
     ...setlist,
     sheet_options: withSheetDefaults(setlist.sheet_options),
@@ -822,12 +838,17 @@ function renderPageModeControls(): void {
 
 function renderLibrary(): void {
   const query = songSearch.value.trim().toLocaleLowerCase();
-  const matching = songs.filter((song) => {
-    if (!query) return true;
-    return [song.title, song.artist, song.key, song.tuning]
-      .filter((value): value is string => Boolean(value))
-      .some((value) => value.toLocaleLowerCase().includes(query));
-  });
+  const matching = songs
+    .filter((song) => {
+      if (!query) return true;
+      return [song.title, song.artist, song.key, song.tuning]
+        .filter((value): value is string => Boolean(value))
+        .some((value) => value.toLocaleLowerCase().includes(query));
+    })
+    .filter((song) => !tuningOnly || Boolean(song.tuning?.trim()));
+  const ordered = [...matching].sort((left, right) =>
+    compareLibrarySongs(left, right, songSort),
+  );
 
   songCountEl.textContent = String(songs.length);
   songCountEl.setAttribute(
@@ -835,21 +856,44 @@ function renderLibrary(): void {
     `${songs.length} ${songs.length === 1 ? "song" : "songs"} in the library`,
   );
 
-  if (matching.length === 0) {
-    const empty = el(
-      "li",
-      "empty-state",
-      songs.length === 0 ? "No songs yet. Add the first one below." : "No songs match that search.",
-    );
-    songListEl.replaceChildren(empty);
+  if (ordered.length === 0) {
+    songListEl.replaceChildren(el("li", "empty-state", libraryEmptyMessage(query)));
     return;
   }
 
   const fragment = document.createDocumentFragment();
-  for (const song of matching) {
+  for (const song of ordered) {
     fragment.append(buildLibraryRow(song));
   }
   songListEl.replaceChildren(fragment);
+}
+
+function libraryEmptyMessage(query: string): string {
+  if (songs.length === 0) return "No songs yet. Add the first one below.";
+  if (query) {
+    return tuningOnly
+      ? "No songs with tuning match that search."
+      : "No songs match that search.";
+  }
+  if (tuningOnly) return "No songs have a tuning set.";
+  return "No songs match that search.";
+}
+
+function sortSongsByTitle(): void {
+  songs.sort((left, right) => left.title.localeCompare(right.title));
+}
+
+/** Sorts by the chosen field, puts missing values last, and falls back to title. */
+function compareLibrarySongs(left: Song, right: Song, sort: SongSortKey): number {
+  const leftValue = (left[sort] ?? "").trim();
+  const rightValue = (right[sort] ?? "").trim();
+
+  if (!leftValue && rightValue) return 1;
+  if (leftValue && !rightValue) return -1;
+
+  const primary = leftValue.localeCompare(rightValue);
+  if (primary !== 0) return primary;
+  return sort === "title" ? 0 : left.title.localeCompare(right.title);
 }
 
 function buildLibraryRow(song: Song): HTMLLIElement {
@@ -874,6 +918,15 @@ function buildLibraryRow(song: Song): HTMLLIElement {
   addButton.setAttribute("aria-label", `Add ${song.title} to the setlist`);
   addButton.addEventListener("click", () => addSongToSetlist(song));
 
+  const copyButton = el("button", "icon-button");
+  copyButton.type = "button";
+  copyButton.title = `Duplicate ${song.title}`;
+  copyButton.setAttribute("aria-label", `Duplicate ${song.title} in the library`);
+  copyButton.append(copyIcon());
+  copyButton.addEventListener("click", () => {
+    void duplicateLibrarySong(song);
+  });
+
   const removeButton = el("button", "icon-button", "✕");
   removeButton.type = "button";
   removeButton.title = `Remove ${song.title} from the library`;
@@ -882,9 +935,39 @@ function buildLibraryRow(song: Song): HTMLLIElement {
     void deleteLibrarySong(song);
   });
 
-  actions.append(addButton, removeButton);
+  actions.append(addButton, copyButton, removeButton);
   row.append(info, actions);
   return row;
+}
+
+/** Copy glyph (two overlapping sheets) built as SVG so no font fallback is needed. */
+function copyIcon(): SVGSVGElement {
+  const ns = "http://www.w3.org/2000/svg";
+  const svg = document.createElementNS(ns, "svg");
+  svg.setAttribute("viewBox", "0 0 24 24");
+  svg.setAttribute("width", "17");
+  svg.setAttribute("height", "17");
+  svg.setAttribute("fill", "none");
+  svg.setAttribute("stroke", "currentColor");
+  svg.setAttribute("stroke-width", "1.8");
+  svg.setAttribute("stroke-linejoin", "round");
+  svg.setAttribute("aria-hidden", "true");
+  svg.setAttribute("focusable", "false");
+
+  for (const [x, y] of [
+    ["9", "9"],
+    ["4", "4"],
+  ] as const) {
+    const sheet = document.createElementNS(ns, "rect");
+    sheet.setAttribute("x", x);
+    sheet.setAttribute("y", y);
+    sheet.setAttribute("width", "11");
+    sheet.setAttribute("height", "11");
+    sheet.setAttribute("rx", "2");
+    svg.append(sheet);
+  }
+
+  return svg;
 }
 
 function renderItems(): void {
@@ -1537,7 +1620,7 @@ async function handleSongSubmit(event: SubmitEvent): Promise<void> {
   try {
     await api.saveSong(song);
     songs.push(song);
-    songs.sort((left, right) => left.title.localeCompare(right.title));
+    sortSongsByTitle();
     songForm.reset();
     renderLibrary();
     setStatus(`Added “${song.title}” to the library.`, "success");
@@ -1545,6 +1628,41 @@ async function handleSongSubmit(event: SubmitEvent): Promise<void> {
   } catch (error) {
     setStatus(`Could not save song: ${describeError(error)}`, "error");
   }
+}
+
+/** Saves a copy of a library song under a new id and a non-colliding “(copy)” title. */
+async function duplicateLibrarySong(song: Song): Promise<void> {
+  if (!ensureBackend()) return;
+
+  const copy: Song = {
+    ...song,
+    id: newId(),
+    title: duplicateSongTitle(song.title),
+  };
+
+  try {
+    const saved = await api.saveSong(copy);
+    songs.push(saved);
+    sortSongsByTitle();
+    renderLibrary();
+    setStatus(`Duplicated “${song.title}” as “${saved.title}”.`, "success");
+  } catch (error) {
+    setStatus(`Could not duplicate song: ${describeError(error)}`, "error");
+  }
+}
+
+/** `Song` → `Song (copy)`, incrementing the suffix instead of stacking copies. */
+function duplicateSongTitle(title: string): string {
+  const base = title.replace(/\s+\(copy(?: \d+)?\)$/i, "").trim() || title.trim();
+  const used = new Set(songs.map((entry) => entry.title));
+
+  let candidate = `${base} (copy)`;
+  let index = 2;
+  while (used.has(candidate)) {
+    candidate = `${base} (copy ${index})`;
+    index += 1;
+  }
+  return candidate;
 }
 
 function addSongToSetlist(song: Song): void {
@@ -1788,6 +1906,10 @@ function isLogoAlignment(value: string): value is LogoAlignment {
 
 function isPageMode(value: string): value is PageMode {
   return value === "Single" || value === "Multiple";
+}
+
+function isSongSortKey(value: string): value is SongSortKey {
+  return value === "title" || value === "artist" || value === "key" || value === "tuning";
 }
 
 interface FieldHandle {
