@@ -4,12 +4,14 @@ Per-feature specs for what ships next, ordered by priority. The current data
 contract lives in `SKILL.md`; these specs extend it and must update it in the
 same commit. Statuses: **Todo** / **In progress** / **Done**.
 
-Context: `Song` today is `{ title, artist, bpm, key, duration_secs, notes }`
-(`src-tauri/src/models.rs`, `src/types.ts`). Setlist items store Song *copies*
-(deliberate: editing the library never rewrites saved setlists). The sheet
-defaults to a single A4 page with auto-fit shrink (`--sheet-fit`, min 50%),
-implemented in `main.ts` (`fitSheetToPage`) and `print.css`; per-setlist
-`page_mode` (Feature 5) opts into multiple pages instead.
+Context: `Song` today is `{ title, artist, bpm, key, tuning, duration_secs,
+notes }` (`src-tauri/src/models.rs`, `src/types.ts`). Setlist items store Song
+*copies* (deliberate: editing the library never rewrites saved setlists). The
+sheet defaults to a single A4 page with auto-fit shrink (`--sheet-fit`, min
+50%), implemented in `main.ts` (`fitSheetToPage`) and `print.css`; per-setlist
+`page_mode` (Feature 5) opts into multiple pages instead. Column widths come
+from count-based presets in `app.css` (see Feature 10 for the known gaps);
+multi-page preview uses dashed separator overlays (see Feature 11).
 
 Decisions locked in: tuning is a **free-text optional field** (same pattern as
 `key`), not a preset picker or per-instrument map.
@@ -178,6 +180,10 @@ on the page (preview, print, and export all follow).
   - `.cols-5` (today's baseline): index 7 / song 55 / key 10 / bpm 10 / time 18
   - `.cols-5-tuning` (Feature 1): 6 / 50 / 9 / 10 / 9 / 16
   - `.cols-minimal` (title + time only): 8 / 72 / 20
+- Known issue (see Feature 10): the `.cols-4` and `.cols-minimal` presets do
+  not sum to 100% for every toggle combination (e.g. key+bpm = 92%), so the
+  header/body alignment drifts when some toggles are off. Do not extend the
+  count-based presets; fix per Feature 10 instead.
 - UI wording: label BPM as **"Tempo (BPM)"** to match band vocabulary.
 
 ## Feature 5: Multi-page A4 mode — Done (implemented; physical-paper QA pending)
@@ -400,8 +406,81 @@ fidelity. It still trims stored file size, decode memory, and disk use. At the
 
 Verification: `npm run build` and `cargo test` (37 tests).
 
+## Feature 10: Column widths rebalance + header alignment — Todo (P0 fix)
+
+Reported from real use: with some sheet toggles off, the table header no
+longer aligns with the body text. Root cause: widths come from count-based
+presets (`.cols-2` / `.cols-minimal` / `.cols-4` / `.cols-5` /
+`.cols-5-tuning`), but `.cols-4` only sums to 100% for 2 of its 6 column
+combinations (key+bpm = 92%, key+tuning = 94%, tuning+bpm = 94%, bpm+time =
+98%); `.cols-minimal` gives any lone info column 20% whether it is a narrow
+Key or a Time column. With `table-layout: fixed` the browser distributes the
+slack, so header and body cells drift apart.
+
+### Spec
+
+- Replace count-based presets with per-combination widths that sum to 100%:
+  4 combos for 3-column tables (which single info column is visible), 6 combos
+  for 4-column tables (which two are visible). Keep `.cols-5` (7/55/10/10/18)
+  and `.cols-5-tuning` (6/50/9/10/9/16) as the verified anchors; derive the
+  smaller sets from the same proportions.
+- Single width source: `<colgroup>` only. Audit and remove any competing `th`
+  width rules; check text-align/padding symmetry between header and body cells
+  sharing a class.
+- No data-model or IPC change. Print and export follow automatically (same
+  `sheet.ts` path, same colgroup workaround in the exporter).
+
+### Tests + QA
+
+- QA matrix over every toggle combination (2-col, 3-col ×4, 4-col ×6, 5-col,
+  6-col): header vs body alignment per combo, at full and narrowed preview
+  widths, plus the Phase 6 paper setlists.
+- `npm run build` clean; `cargo test` green (no Rust change expected).
+
+## Feature 11: Paginated multi-page preview + print — Todo (P0 fix)
+
+Reported from real use: in multi-page mode the preview looks like the sheet
+is cut off mid-text instead of showing multiple pages. Root cause: the preview
+is one tall sheet with dashed sibling-overlay lines (`#sheet-page-marks`)
+every 271 mm of content height. Rows can visually straddle a dashed line on
+screen (`break-inside: avoid` only binds in print), and no header/footer
+repeats per visual page — while the export PDF (Feature 6) *does* composite
+header/footer per page, so preview and export disagree.
+
+### Spec
+
+- Paginate rows by measured height in JS and render one A4 frame per page,
+  each with its own cloned brand/header (logo, title, venue/date, column
+  labels) and footer. Separator overlays become real page boundaries; nothing
+  straddles them.
+- Print the page frames instead of the tall sheet, so preview, print, and
+  export all agree. This also sidesteps WebKitGTK bug 17205 (`thead`/`tfoot`
+  never repeat on native print): repeated headers become real content,
+  engine-independent. Keep the existing `thead`/`tfoot` repeat rules for
+  engines that support them.
+- The `≈ N pages` estimate is replaced by the actual frame count. The <70%
+  legibility nudge and 50% floor (Feature 5) stay as-is.
+- Export keeps its current compositing path (already correct); after this
+  lands, preview matches export instead of contradicting it.
+- Accepted fallback if frames prove too invasive: snap overlay lines to row
+  tops and render ghost header labels at each boundary. This preserves the
+  cut-off feel and is explicitly the worse option — take the frames unless
+  measurement shows otherwise.
+
+### Tests + QA
+
+- 25 songs + 2 breaks at default and narrowed preview widths: no row straddles
+  a page boundary on screen; every frame carries header + footer; frame count
+  equals exported PDF page count.
+- Native print (WebKitGTK first): page count within ±1 of the frame count,
+  rows intact, headers on every page.
+- `npm run build` clean; `cargo test` green.
+
 ## Roadmap backlog (prioritized)
 
+- **P0 — Sheet correctness fixes (from real use)**: Feature 10 (column widths
+  rebalance + header alignment) and Feature 11 (paginated preview/print
+  frames). Both outrank new tooling: the sheet is the product.
 - **P0 — PNG/PDF export + print**: Feature 6 done. Physical-paper QA and
   cross-engine checks remain in Phase 6.
 - **P0 — Overflow tooling for the single-A4 cap**: Feature 5 shipped

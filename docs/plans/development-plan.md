@@ -84,7 +84,8 @@ Done: A4 black-on-white preview, native print via `window.print()`,
 them; WebKitGTK does not — see Feature 5's engine note), `break-inside: avoid`,
 single-A4 cap with auto-fit table zoom (min 50%, applied and mirrored in the
 fit label), plus per-setlist multiple-page mode (`page_mode`) with preview page
-boundaries and an approximate page count. PDF/PNG export ships as a 300 dpi
+boundaries and an approximate page count (preview limitations found in real use
+→ Features 10–11 in `upcoming-features.md`). PDF/PNG export ships as a 300 dpi
 raster with full-height capture, sliced A4 pages, repeated header/footer, and
 `Page N / M`; the native print path remains the text-sharp paper route.
 The implemented print CSS uses explicit layout resets (`display: none` on
@@ -122,10 +123,13 @@ colgroup workaround, header/footer decision). Findings were folded into
 `SKILL.md` and the Feature 6 implementation; the spike note and untracked
 harness were removed when the exporter shipped.
 
-### Phase 6 — Cross-OS polish + QA/release — Todo
+### Phase 6 — Cross-OS polish + QA/release — In progress
 
 - Minimal frontend test harness (see QA strategy) and 44px touch targets. CI
   (`.github/workflows/ci.yml`) already runs the frontend build and Rust tests.
+- Sheet correctness fixes from real use (Features 10–11 in
+  `upcoming-features.md`): column-width rebalance + header alignment, and
+  paginated preview/print frames. Both outrank new tooling.
 - `tauri android init` / `ios init` on provisioned machines; native share.
 - Print QA on real A4 (checklist below), backup/restore, app versioning,
   signing/release automation (tracked in the roadmap, P3).
@@ -172,6 +176,8 @@ WebView2/WKWebView when available):**
 | `cargo test` needs webkit2gtk system libs locally and in CI | README prerequisite; `.github/workflows/ci.yml` installs the packages; optional dependency-light test crate if blocked |
 | Temp+rename writes have no `fsync`; a crash can lose the newest write (Windows does remove+rename, widening the window) | Accepted for MVP; backup/restore (P1) gives users an escape hatch; add fsync if data loss is ever reported |
 | `songs.json` degrades past ~1000 songs / slow search | Trigger to migrate to SQLite (P3) |
+| Count-based column presets drift for some toggle combos | Feature 10: per-combination widths summing to 100% + alignment QA matrix |
+| Tall-sheet + overlay preview reads as cut-off text | Feature 11: paginated A4 frames with repeated header/footer for preview and print |
 | `zoom` in print CSS is WebKit/Blink-only | All Tauri engines are WebKit-family; revisit only if a plain-browser build is ever shipped |
 
 ## Status log
@@ -189,3 +195,9 @@ WebView2/WKWebView when available):**
 - 2026-11-17: P1 CI gate added (`.github/workflows/ci.yml`): `npm ci` +
   `npm run build` + `npm run test:rust` on `ubuntu-latest` with the Tauri Linux
   packages, npm/Cargo caching, no secrets, bundles, signing, or mobile builds.
+- 2026-11-17: Plan cleanup from real use: header/body misalignment with some
+  toggles off (count-based `.cols-4`/`.cols-minimal` presets don't sum to 100%
+  for all combos) and multi-page preview reading as cut-off text (dashed
+  overlays, no repeated header/footer). Tracked as Features 10 (widths
+  rebalance + alignment matrix) and 11 (paginated preview/print frames);
+  both P0, above new tooling.
