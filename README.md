@@ -266,9 +266,11 @@ change.
 
 ### Still missing (per plan)
 
-- Planned library/setlist tooling (Features 12–15, Todo): in-place library
-  song editing, setlist duplication as a preset base, an in-memory artist
-  filter, and a toggleable per-setlist artist lock.
+- Planned library/setlist tooling (Features 12–18, Todo): in-place library
+  song editing, setlist duplication as a preset base, managed artists
+  (name + logo) with record-based library filter and per-artist setlist
+  picker + lock, break durations with second precision, and Delete-clarity
+  (Delete moves next to Save, away from Add Break).
 - Paginated split-setlist helper (duplicate setlist, move second half) as an
   alternative to multi-page mode.
 - Physical-paper QA on A4 (page count, header/footer per engine, legibility),

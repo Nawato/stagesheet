@@ -5,18 +5,26 @@ contract lives in `SKILL.md`; these specs extend it and must update it in the
 same commit. Statuses: **Todo** / **In progress** / **Done**.
 
 Context: `Song` today is `{ title, artist, bpm, key, tuning, duration_secs,
-notes }` (`src-tauri/src/models.rs`, `src/types.ts`). Setlist items store Song
-*copies* (deliberate: editing the library never rewrites saved setlists). The
-sheet defaults to a single A4 page with auto-fit shrink (`--sheet-fit`, min
-50%), implemented in `main.ts` (`fitSheetToPage`) and `print.css`; per-setlist
-`page_mode` (Feature 5) opts into multiple pages instead. Column widths come
-from per-combination presets in `app.css` (Feature 10; each sums to 100%);
+notes }` (`src-tauri/src/models.rs`, `src/types.ts`), with `artist` as free
+text and no artist records. Setlist items store Song *copies* (deliberate:
+editing the library never rewrites saved setlists). The sheet defaults to a
+single A4 page with auto-fit shrink (`--sheet-fit`, min 50%), implemented in
+`main.ts` (`fitSheetToPage`) and `print.css`; per-setlist `page_mode`
+(Feature 5) opts into multiple pages instead. Column widths come from
+per-combination presets in `app.css` (Feature 10; each sums to 100%);
 multi-page preview and print use measured A4 page frames (Feature 11).
 
 Decisions locked in: tuning is a **free-text optional field** (same pattern as
-`key`), not a preset picker or per-instrument map. The artist lock (Feature 15)
-is an **editor-only constraint**: it filters the library and gates adds, but it
-never rewrites existing setlist items and never changes the printed sheet.
+`key`), not a preset picker or per-instrument map. The **library is the
+canonical place for song data** (Feature 12): setlist items are gig-specific
+snapshots, so fixing a song happens once in the library and saved setlists
+keep their copies — there will be no propagation of library edits into
+setlists. The artist lock (Feature 16) is an **editor-only constraint**: it
+filters the library and gates adds, but it never rewrites existing setlist
+items and never changes the printed sheet. **Artists become records**
+(Feature 14): one managed artist list with names and logos that songs and
+setlists reference by id, replacing free-text matching everywhere new code is
+written (legacy `artist` text stays as a display fallback until adopted).
 
 ## Shipped (Features 1–11) — summary
 
@@ -28,7 +36,8 @@ behavior.
   every item. Bounds enforced in Rust: break `duration_mins` `0..=600`, break
   `label` ≤ 24 chars after trim, song/break comments ≤ 140 chars after trim.
   Validation runs **on save only**: old files still load; their next save fails
-  with a clear message. No silent truncation.
+  with a clear message. No silent truncation. (Superseded in part by
+  Feature 17, which moves breaks to second precision.)
 - **Feature 1: Song tuning (free text)** — Done. `Song.tuning: Option<String>`,
   trimmed, empty → `None`, max 24 chars, `#[serde(default)]`. Conditional
   `Tuning` column (toggle on *and* ≥1 song with tuning). Library search covers
@@ -51,13 +60,15 @@ behavior.
   floor. Multiple flows whole rows across pages. WebKitGTK's print path does
   not repeat `thead`/`tfoot` (WebKit bug 17205) — recorded per engine, not
   re-argued here.
-- **Feature 6: PDF/PNG export + direct print** — Done. 300 dpi raster of the
+- **Feature 6: PDF/PNG export + print** — Done. 300 dpi raster of the
   natural-height sheet (`html-to-image` + `jsPDF`), export-only data-URL logo,
   colgroup workaround, header/footer composited per page, `Page N / M` in PDFs
   only. Exported text is bitmap; `window.print()` stays text-sharp.
 - **Feature 7: Backup/restore** — Done. One versioned JSON envelope
   (`BACKUP_SCHEMA_VERSION = 1`), frontend-only through `save_song` /
-  `save_setlist`, upsert by id, logos manual in v1.
+  `save_setlist`, upsert by id, logos manual in v1. (Feature 14 adds an
+  `artists` array to the envelope without a version bump — same additive
+  precedent as tuning, sheet options, and page mode.)
 - **Feature 8: Library polish** — Done. Per-row duplicate song (` (copy)` title
   scheme, fresh UUID), in-memory sort (title/artist/key/tuning, blanks last),
   **Has tuning** filter. All view-only: never dirty, never backed up. 44px
@@ -65,6 +76,7 @@ behavior.
 - **Feature 9: Logo downscale on import** — Done. Rasters decoded in Rust;
   longest edge > 1024 px downscaled (Lanczos, aspect kept; PNG stays PNG, JPEG
   re-encodes at quality 85). SVG untouched. 5 MiB cap checked before and after.
+  (Reused by artist logos in Feature 14 — same `import_logo` path.)
 - **Feature 10: Column widths rebalance + header alignment** — Done.
   Per-combination presets (`.cols-2`, `.cols-3-*`, `.cols-4-*`, `.cols-5`,
   `.cols-5-no-time`, `.cols-5-tuning`), each summing to 100%; `<colgroup>` is
@@ -83,13 +95,21 @@ exists (title/venue/date inputs plus per-row "Edit details" / "Edit break"),
 so this feature is the library half of "edit existing songs and playlists";
 no setlist-editor change ships here.
 
+Locked answer to the "songs must be uniform" feedback: the library is the one
+canonical edit place, and setlist items stay copies on purpose (a gig snapshot
+may legitimately differ — capo, shortened version — from the library
+original). Fixing a song happens once in the library; saved setlists are
+never rewritten. There is no propagation feature planned; the status line
+keeps the copy semantics visible instead.
+
 ### Data model
 
 None. `save_song` already upserts by `id` (`storage.rs`), and `Song::validate`
 already enforces the add-form bounds (non-empty title, tuning ≤ 24, comment ≤
 140 after trim). Re-saving an edited song keeps its id; setlist items hold
 copies, so saved setlists are untouched — the same guarantee Duplicate relies
-on. No serde, storage, backup, or IPC change.
+on. No serde, storage, backup, or IPC change. (After Feature 14 the artist
+field is a record dropdown; until then it stays the free-text input.)
 
 ### UI
 
@@ -98,7 +118,7 @@ on. No serde, storage, backup, or IPC change.
   fields and limits as the "Add to library" form (title required, BPM 1–400,
   duration `mm:ss`, tuning `maxlength=24`, comment `maxlength=140`).
 - **Save** re-saves through `save_song` with the stable id, then re-sorts and
-  re-renders the library (including the Feature 14 artist list); **Cancel**
+  re-renders the library (including the Feature 15 artist list); **Cancel**
   discards without touching the cache. Field-level error messages match the
   add form; failures report through the status line.
 - The status line confirms with `Updated “<title>” in the library. Setlists
@@ -130,15 +150,16 @@ None. The duplicate is a new `Setlist` written through the existing
 `save_setlist`: fresh UUID, fresh `created_at`/`updated_at`, deep-copied items
 (item `Song` snapshots keep their song ids — they are values, not references),
 copied `venue`, `date`, `logo` config, `sheet_options`, `page_mode`, and
-`artist_lock` (Feature 15). The logo `file_name` is **shared**, not copied:
+`artist_id` (Feature 16). The logo `file_name` is **shared**, not copied:
 setlist deletion already skips `remove_logo` while another setlist references
 the file, so sharing is safe. Title follows the library pattern
 (`X` → `X (copy)` → `X (copy 2)`, non-colliding over setlist titles).
 
 ### UI
 
-- **Duplicate** button in the editor's running-order actions (next to Delete,
-  same sizing). No confirmation (non-destructive, mirrors Duplicate song).
+- **Duplicate** button next to **Delete** in its Feature 18 location
+  (away from Add Break), same sizing. No confirmation (non-destructive,
+  mirrors Duplicate song).
 - If the editor is dirty, save first — same rule as Print/Backup/Export — so
   the preset is the saved state; if the save fails, abort with the save error.
   Backend unavailable aborts with the standard message.
@@ -157,8 +178,8 @@ time.
 
 - `npm run build` clean; `cargo test` green (no Rust change).
 - Manual QA: duplicate a setlist with songs + breaks + logo + non-default
-  options/page mode/lock; title suffix increments without stacking
-  (`X (copy)` → `X (copy 2)`); items, logo, options, and lock copied;
+  options/page mode/artist; title suffix increments without stacking
+  (`X (copy)` → `X (copy 2)`); items, logo, options, and artist copied;
   timestamps differ; deleting the source keeps the copy's logo working;
   duplicating with backend unavailable reports cleanly.
 
@@ -169,114 +190,286 @@ time.
 3. Remaining overflow slice stays open: split-setlist (move second half to a
   new setlist) as the alternative to multi-page mode.
 
-## Feature 14: Filter library by artist — Todo
+## Feature 14: Artist records with logos — Todo
 
-Status: Todo. Sort-by-artist (Feature 8) orders the list but cannot narrow it;
-bands with a multi-artist library cannot isolate one artist's songs. This is
-the in-memory, view-only filter; the persisted per-setlist variant is Feature
-15.
+Status: Todo, builds before Features 15–16. From user feedback: artists must
+be creatable in one place — name plus logo — and songs (and later setlists)
+are assigned to an artist there, instead of retyping free text on every song.
+This replaces free-text matching everywhere new code is written; legacy
+`Song.artist` text stays as a display fallback until adopted.
 
 ### Data model
 
-None. New in-memory state (e.g. `artistFilter: string | null`, default
-`null` = all artists) alongside `songSort`/`tuningOnly`: it never marks a
-setlist dirty, is never persisted, and never enters the backup envelope.
+- New `Artist { id: Uuid, name: String, logo: LogoConfig }` in `models.rs`
+  (+ TS mirror in `types.ts`). Name trimmed, non-empty (`validate()` error
+  otherwise); logo rules are exactly the setlist-logo rules (plain file name,
+  10–80 mm, same alignment enum).
+- Storage: `artists.json: Vec<Artist>` under `<app_data_dir>/stagesheet/`,
+  temp-file + rename writes under the same mutex. New commands
+  `list_artists`, `save_artist` (upsert by id, like songs), `delete_artist`
+  (refuses while referenced? No — see below), all `async` returning
+  `Result<T, AppError>`. Logo files are shared with the setlist logo pool
+  (`logos/` + `import_logo`/`remove_logo`, including the Feature 9 downscale);
+  the existing "skip removal while referenced" check extends to artist
+  references.
+- `Song.artist_id: Option<Uuid>`, `#[serde(default)]`; legacy `artist` text
+  stays untouched as the display fallback. Display resolution (frontend
+  helper, also used by search/sort): artist record name when `artist_id`
+  resolves, else the legacy `artist` text, else blank. Saving a song with an
+  artist record stores both the id and a name snapshot in `artist`, so a
+  later-deleted artist still shows its last name.
+- `Setlist.artist_id: Option<Uuid>`, `#[serde(default)]` (wired in Feature 16;
+  declared here so the field ships once).
+- Backup envelope gains `artists: [...]`; `BACKUP_SCHEMA_VERSION` stays 1
+  (additive; old readers ignore unknown top-level arrays, same precedent as
+  before). Restore saves artists first, then songs, then setlists, and
+  reports per-record like today.
+- Logo resolution for a setlist (used by preview/print/export from
+  Feature 16 on): setlist's own logo if set, else its artist's logo if set,
+  else the placeholder. No print-path change — the resolved URL flows through
+  the existing `logoUrl` plumbing.
 
 ### UI
 
-- An **Artist** select in `.library-controls` (`All artists` default) populated
-  from the distinct trimmed non-blank library artists, sorted with
-  `localeCompare`. Songs with a blank artist appear only under `All artists`.
+- **Artists** section in the library pane: list with logo thumbnails and song
+  counts; **New artist** (name + the same logo upload/width/alignment
+  controls as setlists, 44px targets); rename inline (propagates
+  automatically — everything references the id); **Delete** with the standard
+  `window.confirm` naming the artist. Deleting nulls `artist_id` on
+  referencing songs/setlists via `save_*` loops (snapshots keep their names,
+  setlists become unlocked); nothing else is deleted. Failures report
+  per-record in the status line.
+- Song form + Feature 12 editor: the artist text input becomes a dropdown of
+  artist records plus **No artist**. Legacy-text songs keep showing their
+  text until assigned; assigning sets id + snapshot.
+- The search box keeps matching the resolved display name, so legacy and
+  record-backed songs filter identically.
+
+### Tests + QA
+
+- Rust: `Artist` round trip; name validation (blank fails); legacy song
+  without `artist_id` loads as `None`; id + snapshot survive a round trip;
+  logo bounds shared with setlists; `cargo test` green.
+- `npm run build` clean.
+- Manual QA: create/rename/delete artist; rename reflects in library +
+  setlists without touching them; delete nulls references (snapshots shown,
+  setlists unlocked, nothing else deleted); logo resolution chain
+  (setlist → artist → placeholder) in preview and export; backup/restore
+  round trip incl. artists; old-build restore drops artists but keeps
+  songs/setlists (documented, accepted).
+
+### Build order
+
+1. Rust model + storage + commands + tests; TS types + resolution helper.
+2. Artists section + song-form dropdown + Feature 12 editor dropdown.
+3. Backup `artists` array + restore ordering.
+4. QA + `SKILL.md` + this file status + commit.
+
+## Feature 15: Filter library by artist — Todo
+
+Status: Todo, builds on Feature 14. Sort-by-artist (Feature 8) orders the
+list but cannot narrow it; bands with a multi-artist library cannot isolate
+one artist's songs. This is the in-memory, view-only filter; the persisted
+per-setlist variant is Feature 16.
+
+### Data model
+
+None. New in-memory state (e.g. `artistFilter: string | null`, holding an
+artist id or `"none"` for unassigned, default `null` = all artists) alongside
+`songSort`/`tuningOnly`: it never marks a setlist dirty, is never persisted,
+and never enters the backup envelope.
+
+### UI
+
+- An **Artist** select in `.library-controls` (`All artists` default) listing
+  artist records with song counts, plus **No artist** for unassigned songs
+  (legacy-text songs without an id count under their record once adopted,
+  otherwise under No artist only if they have no text at all — resolved
+  display name decides, exactly like search).
 - Combines with instant search, **Has tuning**, and sort (filter first, then
   the existing sort). The empty state names the active constraint
-  (`No songs by “<artist>” match that search.` / `No songs by “<artist>” yet.`
-  as appropriate). The song-count badge keeps reporting total library size.
-- The list refreshes on add/edit (Feature 12)/duplicate/delete/restore so the
-  dropdown never goes stale. 44px target, visible label, same as sort/filter.
+  (`No songs by “<name>” match that search.` / `No songs by “<name>” yet.` as
+  appropriate). The song-count badge keeps reporting total library size.
+- The list refreshes on add/edit (Feature 12)/duplicate/delete/restore and on
+  artist create/rename/delete (Feature 14) so the dropdown never goes stale.
+  44px target, visible label, same as sort/filter.
 
 ### Tests + QA
 
 - `npm run build` clean; `cargo test` green (no Rust change).
 - Manual QA matrix: each artist × search text × Has tuning × each sort;
-  blank-artist songs under All only; empty-state wording per combination;
-  dropdown updates after add/edit/duplicate/delete/restore.
+  No-artist grouping; legacy-text songs filter by their text; empty-state
+  wording per combination; dropdown updates after
+  add/edit/duplicate/delete/restore and after artist changes.
 
 ### Build order
 
-1. Distinct-artist derivation (shared helper — Feature 15 reuses it) +
-  select + predicate + empty states.
+1. Record-based predicate + select + empty states (reuses Feature 14's
+  resolution helper).
 2. QA + this file status + commit.
 
-## Feature 15: Per-setlist artist lock (toggleable) — Todo
+## Feature 16: Setlist artist + per-artist setlist picker (lock) — Todo
 
-Status: Todo, builds on Feature 14. A tribute gig or single-artist night drawn
-from a multi-artist library should not collect stray songs: the setlist locks
-to one artist, the library narrows to match, and adds of other artists are
-refused with a clear message. Unlocking restores the previous view.
+Status: Todo, builds on Features 14–15. From user feedback: songs belong to
+the same artist the setlist belongs to, and picking an artist in the first
+dropdown shows that artist's setlists in the second dropdown. The lock is the
+toggleable enforcement of that assignment: while locked, only matching songs
+can be added.
 
 ### Data model
 
-- New `Setlist.artist_lock: Option<String>` — trimmed free text, blank →
-  `None`, `#[serde(default)]` with the same trimmed-text serde helpers as
-  `tuning`/`label`, so pre-feature files load as unlocked. TS mirror:
-  `artist_lock?: string | null` plus a normalizer (missing/blank → `null`)
-  applied everywhere `withSheetDefaults`/`withPageModeDefaults` are applied
-  (load, clone, restore).
-- Validation (save only, like everything else): no length bound — `Song.artist`
-  has none, and the lock must accept any artist value a song can carry. A blank
-  lock normalizes to `None` before validation rather than failing.
-- Backup envelope carries the field automatically as part of `Setlist`;
-  `BACKUP_SCHEMA_VERSION` stays 1 (purely additive — same precedent as tuning,
-  sheet options, and page mode). Restoring a locked setlist on an older build
-  drops the lock and keeps everything else; the restore summary already covers
-  per-record notes, so no new envelope machinery.
-- `Setlist::new` defaults to `None`. Duplication (Feature 13) copies the value.
+- `Setlist.artist_id: Option<Uuid>` (declared in Feature 14):
+  `#[serde(default)]`, missing in old files → `None` = unlocked. TS
+  normalizer (missing/blank → `None`) applied wherever
+  `withSheetDefaults`/`withPageModeDefaults` run. No length bound — any
+  record id is accepted; dangling ids (artist deleted on another device)
+  resolve as unlocked with the stored snapshot shown, never a save error.
+- Validation on save: none beyond the id resolving or dangling (both fine);
+  the gate below is UI-only, like the Feature 8 filters.
+- Backup carries the field as part of `Setlist` (schema stays 1); restoring
+  on an older build drops the assignment and keeps everything else.
+- Duplication (Feature 13) copies the value.
 
 ### UI
 
-- Editor **Artist lock** section (below the setlist meta, above the running
-  order): a checkbox `Lock this setlist to one artist` plus an artist input
-  with a `datalist` of distinct library artists (Feature 14 helper — free text
-  stays allowed so a setlist can lock to an artist with no songs yet). Both
-  persist on the setlist and mark it dirty like any edit.
-- While locked to artist A (case-insensitive trimmed match, mirroring search):
-  - The library list is narrowed to A, combined with the existing search,
-    Has-tuning filter, and sort. The global Artist select (Feature 14) is
-    forced to A and disabled with a note; unlocking restores the previous
-    in-memory selection.
+- Editor **Artist** section (below the setlist meta, above the running
+  order): a select of artist records plus **No artist** (= unlocked),
+  persisted on the setlist, marks dirty like any edit. Logo note: with no
+  own logo the setlist shows its artist's logo (Feature 14 resolution chain).
+- Header **artist picker** (first dropdown, left of the setlist select):
+  `All artists` default. Selecting an artist filters the **setlist select**
+  (second dropdown) to that artist's setlists; with zero matches the select
+  shows its empty state and **New** starts a setlist pre-assigned to that
+  artist. Switching back to All restores the full list; the current setlist
+  stays selected even if it falls outside the filter (never yank the editor
+  out from under the user).
+- While the current setlist has an artist A (case-insensitive id match;
+  legacy-text songs match when their trimmed text equals A's name, so old
+  libraries gate sensibly before adoption):
+  - The library list narrows to A, combined with search, Has-tuning filter,
+    and sort. The Feature 15 select is forced to A and disabled with a note;
+    unlocking restores the previous in-memory selection.
   - **Add gate:** adding a non-A song is refused with
-    `“<title>” is not by <A> — unlock the setlist to add it.` Breaks have no
-    artist and are always allowed. Search/add flows otherwise unchanged.
-  - Existing items are never touched: non-A rows already in the running order
-    stay, and the setlist summary gains a `· locked to <A>` suffix (plus a
-    non-matching count when > 0, e.g. `· locked to ABBA (2 other-artist
-    songs)`). No retroactive removal, consistent with copy semantics.
-- Unlocking (unchecking) keeps the items, clears the gate, and restores the
-  library view.
+    `“<title>” is not by <A> — switch the setlist artist to add it.` Breaks
+    have no artist and are always allowed.
+  - Existing items are never touched: non-A rows stay, and the setlist
+    summary gains a `· <A>` suffix (plus a non-matching count when > 0).
+    No retroactive removal, consistent with copy semantics.
 
 ### Sheet + print
 
-Explicitly none: the lock is editor chrome, never printed markup. No sheet,
-`<colgroup>`, frame, print-CSS, or exporter change; existing paper QA stands.
+Explicitly none: the artist assignment is editor chrome plus logo
+resolution, never extra printed markup. No sheet, `<colgroup>`, frame,
+print-CSS, or exporter change; existing paper QA stands.
 
 ### Tests + QA
 
-- Rust: serde round trip with/without the lock; legacy JSON without the field
-  loads as `None`; blank lock normalizes to `None`; save-time validation
-  accepts any non-blank lock and still rejects bad items (delegation
-  unchanged). `cargo test` green.
+- Rust: round trip with/without `artist_id`; legacy JSON without the field
+  loads as `None`; dangling id validates fine; `cargo test` green.
 - `npm run build` clean.
-- Manual QA: lock/unlock round trip; add gate per artist (match, mismatch,
-  blank-artist song, break allowed); search + tuning filter still narrow within
-  the lock; global artist select disabled/restored; summary suffix + mismatch
-  count; duplicate (Feature 13) carries the lock; backup/restore on the same
-  build preserves it; dirty/save flows treat lock edits like any edit.
+- Manual QA: assign/unassign artist; header picker filters the setlist
+  select (incl. zero-match + pre-assigned New); lock/unlock round trip; add
+  gate per case (match, mismatch, blank-artist song, legacy-text song,
+  break allowed); search + tuning filter still narrow within the lock;
+  Feature 15 select disabled/restored; summary suffix + mismatch count;
+  duplicate carries the artist; backup/restore preserves it; dirty/save
+  flows treat artist edits like any edit.
 
 ### Build order
 
-1. Rust model + validation + tests; TS types + normalizer.
-2. Editor section + library predicate/gate + summary suffix.
-3. Backup/restore spot-check + QA + `SKILL.md` + this file status + commit.
+1. `Setlist.artist_id` wiring end-to-end (selector section + header picker
+  + gate + summary).
+2. QA + `SKILL.md` + this file status + commit.
+
+## Feature 17: Breaks with second precision — Todo
+
+Status: Todo, independent of the artist chain. From user feedback: real
+breaks can be 11 seconds (EOAK set), and minute-only granularity cannot
+express that. Replaces the `duration_mins` side of the validation-hardening
+contract; everything else (labels, comments, bounds philosophy) stays.
+
+### Data model
+
+- `Break { duration_secs: u32 }` replaces `duration_mins`. Validation
+  `0..=36000` (the old 600-minute cap, now in seconds), save-only like
+  before. Deserialization accepts the legacy shape: prefer `duration_secs`,
+  fall back to `duration_mins × 60`, so pre-feature files load with identical
+  totals. TS `BreakItem` mirrors the field; a load-time normalizer applies
+  the same fallback for JSON that bypasses serde (backup restore path).
+- Rust `duration_secs()` contribution is unchanged in kind (already seconds).
+  Display helper (shared frontend, e.g. `formatBreakDuration`): under 60 s →
+  `11 sec`; whole minutes → `10 min` (unchanged); otherwise `1 min 5 sec`.
+  Totals via `formatRuntime` are untouched.
+
+### UI
+
+- Break editor: the Minutes number input becomes an `mm:ss` text field
+  reusing the song-duration `parseDuration`/`durationInputValue` helpers
+  (`maxlength` fitting `600:00`, same `is-invalid` + status-line pattern as
+  song durations). Sheet and editor meta use the shared display helper, so
+  preview, print, export, and the summary always agree.
+- No migration UI: old breaks load converted and save converted on next
+  save; the status line explains nothing unless validation fails (same
+  save-only philosophy as before).
+
+### Sheet + print
+
+No structural change: the break row keeps `[label] · [duration] · [comment]`
+with the new duration text. Row heights shift slightly for second-precision
+labels; auto-fit absorbs it in Single mode, frames re-measure in Multiple
+mode. No column, frame, print-CSS, or exporter change.
+
+### Tests + QA
+
+- Rust: round trip with `duration_secs`; legacy `duration_mins` JSON loads
+  as × 60; bounds 0/36000 pass, 36001 fails; save-only loading of oversized
+  legacy values still parses but fails validation. `cargo test` green.
+- `npm run build` clean.
+- Manual QA: 11-second break end to end (edit → sheet → print → export →
+  total runtime); legacy setlist with minute breaks loads identical and
+  saves converted; invalid input (`99:99`, blanks) follows the song-duration
+  error pattern.
+
+### Build order
+
+1. Rust model + migration + tests; TS types + normalizer + display helper.
+2. Editor field + sheet/meta rendering.
+3. QA + `SKILL.md` + this file status + commit.
+
+## Feature 18: Delete-clarity (setlist) — Todo
+
+Status: Todo, tiny, independent. From user feedback: **Delete** sitting
+directly next to **Add break** reads as "delete the break", and deleting a
+saved setlist must always ask first. The confirm already exists
+(`deleteCurrent`); this feature moves the button where it can't be
+misread instead of adding new behavior.
+
+### Spec
+
+- Move the **Delete** button out of the running-order actions row — next to
+  **Save** in the header actions (or under the setlist meta if header space
+  loses on narrow screens; decide at implementation, keep 44px). The header
+  context (right beside Save, acting on the current setlist) already makes
+  the target unambiguous, so the label stays **Delete** — no rename.
+  **Add break** stays where it is; each break row keeps its own ✕ remove
+  action, unchanged.
+- Keep the existing `window.confirm` (`Delete “<title>”? This cannot be
+  undone.` / discard-draft variant); unsaved-draft wording stays (`Discard`
+  label when the setlist was never persisted). No data-model, IPC, or
+  storage change.
+- Feature 13's **Duplicate** button lands beside it in the new location.
+
+### Tests + QA
+
+- `npm run build` clean; `cargo test` green (no Rust change).
+- Manual QA: button location at full and narrowed widths; confirm
+  appears for persisted setlists and drafts; cancel keeps everything;
+  post-delete selection + logo-cleanup behavior unchanged.
+
+### Build order
+
+1. Move + rename (+ Feature 13 button placement follows it).
+2. QA + this file status + commit.
 
 ## Roadmap backlog (prioritized)
 
@@ -289,12 +482,14 @@ Explicitly none: the lock is editor chrome, never printed markup. No sheet,
   (multi-page mode + sub-70% legibility nudge). Feature 13 adds setlist
   duplication; the remaining slice is a split-setlist helper (move second half
   to a new setlist) as an alternative to multi-page.
-- **P1 — Library/setlist tooling**: Features 12 (edit library songs), 13
-  (duplicate setlist as preset base), 14 (artist filter), 15 (per-setlist
-  artist lock) — Todo, in that build order (15 reuses 14's artist derivation;
-  13 copies 15's lock value).
+- **P1 — Library/setlist tooling**: Feature 12 (edit library songs) and
+  Feature 13 (duplicate setlist as preset base) in any order; Feature 18
+  (delete clarity) and Feature 17 (break seconds) likewise independent. Then
+  the artist chain in order: 14 (artist records + logos) → 15 (library artist
+  filter) → 16 (setlist artist + per-artist picker + lock).
 - **P1 — Backup/restore**: Done (Feature 7). One versioned JSON envelope for
   the full library + setlists; logos are re-imported manually in v1.
+  Feature 14 adds the `artists` array without a version bump.
 - **P1 — CI**: Done. `.github/workflows/ci.yml` runs `npm ci` + `npm run build`
   and `npm run test:rust` on `ubuntu-latest` (Node 20, stable Rust, the
   webkit2gtk-4.1/gtk3/libsoup3 dev packages from the README) for pushes to
@@ -306,6 +501,7 @@ Explicitly none: the lock is editor chrome, never printed markup. No sheet,
   export (verify a community share plugin first — not an official Tauri v2
   plugin).
 - **P2 — Logo downscale**: Done (Feature 9). Raster logos are downscaled on
-  import to a 1024 px longest edge; SVGs stay vector.
+  import to a 1024 px longest edge; SVGs stay vector. Artist logos reuse the
+  same path.
 - **P3 — Scale-out**: SQLite migration past ~1000 songs; CI-based signing,
   release automation, auto-update.

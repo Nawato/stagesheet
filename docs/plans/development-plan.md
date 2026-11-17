@@ -130,10 +130,11 @@ harness were removed when the exporter shipped.
 - Sheet correctness fixes from real use: Feature 10 done (per-combination
   column widths + header alignment); Feature 11 done (paginated
   preview/print frames). Both outrank new tooling.
-- Library/setlist tooling slice (Features 12–15, Todo): in-place library song
-  editing, setlist duplication as a preset base, an in-memory artist filter,
-  then a toggleable per-setlist artist lock. Build in that order — 15 reuses
-  14's artist derivation and 13 copies 15's lock value.
+- Library/setlist tooling slice (Features 12–18, Todo): in-place library song
+  editing, setlist duplication as a preset base, break seconds + delete
+  clarity (independent, any order), then the artist chain in order — 14
+  (artist records + logos) → 15 (library artist filter) → 16 (setlist artist
+  + per-artist picker + lock).
 - `tauri android init` / `ios init` on provisioned machines; native share.
 - Print QA on real A4 (checklist below), backup/restore, app versioning,
   signing/release automation (tracked in the roadmap, P3).
@@ -158,9 +159,10 @@ auto-fit loop and fit indicator, item add/remove/reorder, break insertion, and
 assertions that `@page { size: A4 }` exists and `#setlist-sheet` stays
 black-on-white. Plus Vitest units for `format.ts` (`parseDuration`,
 `formatDuration`, `formatRuntime`). Keep the harness small; paper QA stays
-manual by design. Features 12–15 land with the manual QA matrices in their
-specs (edit validation + id stability, duplicate fidelity, filter
-combinations, lock gating + backup round trip); harness coverage follows the
+manual by design. Features 12–18 land with the manual QA matrices in their
+specs (edit validation + id stability, duplicate fidelity, break conversion,
+delete flows, artist CRUD + adoption, filter combinations, lock gating +
+backup round trip); harness coverage follows the
 same pattern once built.
 
 **Print QA checklist (manual, real A4, per engine — WebKitGTK now;
@@ -215,6 +217,19 @@ WebView2/WKWebView when available):**
   `upcoming-features.md` cleaned up in the same pass: shipped Features 1–11
   condensed to summaries (contract facts live in `SKILL.md`), full specs kept
   for the Todo slice, backlog reprioritized.
+- 2026-11-17: German user feedback folded into the plan as Features 14–18:
+  managed artists (name + logo) that songs and setlists reference by id,
+  record-based library filter, setlist artist with a per-artist setlist
+  picker + lock, break durations with second precision (11-second breaks),
+  and Delete-clarity (Delete moves next to Save, away from Add Break; the
+  label stays Delete, the confirm already exists). Features 14–16 form a build chain;
+  12, 13, 17, 18 are independent. Former free-text artist filter/lock specs
+  rewritten onto artist records; library-canonical song data locked as a
+  decision (no propagation of library edits into setlists).
 - 2026-11-17: Feature 10 shipped (per-combination column presets summing to
   100%, colgroup-only widths, header/body alignment symmetry). Feature 11
   (paginated preview/print frames) remains Todo.
+- 2026-11-18: Feature 11 shipped (measured A4 page frames with cloned header
+  and footer in preview and print; frame count equals exported PDF page
+  count). Both P0 sheet-correctness items from real use are now done;
+  physical-paper QA and cross-engine checks remain on the Phase 6 checklist.
