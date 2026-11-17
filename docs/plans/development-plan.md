@@ -128,8 +128,12 @@ harness were removed when the exporter shipped.
 - Minimal frontend test harness (see QA strategy) and 44px touch targets. CI
   (`.github/workflows/ci.yml`) already runs the frontend build and Rust tests.
 - Sheet correctness fixes from real use: Feature 10 done (per-combination
-  column widths + header alignment); Feature 11 pending (paginated
+  column widths + header alignment); Feature 11 done (paginated
   preview/print frames). Both outrank new tooling.
+- Library/setlist tooling slice (Features 12–15, Todo): in-place library song
+  editing, setlist duplication as a preset base, an in-memory artist filter,
+  then a toggleable per-setlist artist lock. Build in that order — 15 reuses
+  14's artist derivation and 13 copies 15's lock value.
 - `tauri android init` / `ios init` on provisioned machines; native share.
 - Print QA on real A4 (checklist below), backup/restore, app versioning,
   signing/release automation (tracked in the roadmap, P3).
@@ -154,7 +158,10 @@ auto-fit loop and fit indicator, item add/remove/reorder, break insertion, and
 assertions that `@page { size: A4 }` exists and `#setlist-sheet` stays
 black-on-white. Plus Vitest units for `format.ts` (`parseDuration`,
 `formatDuration`, `formatRuntime`). Keep the harness small; paper QA stays
-manual by design.
+manual by design. Features 12–15 land with the manual QA matrices in their
+specs (edit validation + id stability, duplicate fidelity, filter
+combinations, lock gating + backup round trip); harness coverage follows the
+same pattern once built.
 
 **Print QA checklist (manual, real A4, per engine — WebKitGTK now;
 WebView2/WKWebView when available):**
@@ -202,6 +209,12 @@ WebView2/WKWebView when available):**
   overlays, no repeated header/footer). Tracked as Features 10 (widths
   rebalance + alignment matrix) and 11 (paginated preview/print frames);
   both P0, above new tooling.
+- 2026-11-17: Features 12–15 specced (library/setlist tooling, Todo):
+  in-place library song editing, setlist duplication as a preset base,
+  in-memory artist filter, then a toggleable per-setlist artist lock.
+  `upcoming-features.md` cleaned up in the same pass: shipped Features 1–11
+  condensed to summaries (contract facts live in `SKILL.md`), full specs kept
+  for the Todo slice, backlog reprioritized.
 - 2026-11-17: Feature 10 shipped (per-combination column presets summing to
   100%, colgroup-only widths, header/body alignment symmetry). Feature 11
   (paginated preview/print frames) remains Todo.
