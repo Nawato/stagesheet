@@ -43,7 +43,11 @@ pub struct Song {
 
 pub enum SetlistItem {
     Song(Song),
-    Break { duration_mins: u32, note: Option<String> },
+    Break {
+        duration_mins: u32,         // 0..=600, checked in Setlist::validate
+        note: Option<String>,       // "Comment" in the UI; trimmed, ≤ 140 chars
+        label: Option<String>,      // e.g. "Intermission"; trimmed, ≤ 24 chars
+    },
 }
 
 pub struct Setlist {
@@ -61,12 +65,26 @@ pub struct Setlist {
 Serde notes:
 
 - `SetlistItem` uses serde's default externally tagged form:
-  `{"Song": {...}}` and `{"Break": {"duration_mins": 10, "note": null}}`.
+  `{"Song": {...}}` and
+  `{"Break": {"duration_mins": 10, "note": null, "label": null}}`.
+  A missing `note`/`label` deserializes to `None` (old files stay valid).
 - `LogoAlignment` deserializes case-insensitively (`"left"`, `"Left"`, `"CENTER"`).
 - `Song.key` and all optional fields default when missing.
-- `Song.tuning` is trimmed in both directions; whitespace-only values serialize as
-  `null` and deserialize as `None`, so pre-tuning files stay equal to new ones.
-  `Song::validate()` rejects values longer than 24 characters (after trim).
+- `Song.tuning` and `Break.label` are trimmed in both directions;
+  whitespace-only values serialize as `null` and deserialize as `None`, so
+  pre-feature files stay equal to new ones. Comments (`Song.notes`,
+  `Break.note`) are trimmed by the UI and counted after trim, but not rewritten
+  by serde.
+- Validation runs **on save only** (`Setlist::validate`), never during
+  deserialization: old files with over-long values still load, and their next
+  save fails with a clear message. No silent truncation.
+  - `Song::validate()`: title non-empty; `tuning` ≤ 24 chars; `notes` (the song
+    "Comment") ≤ 140 chars.
+  - `Setlist::validate()`: title non-empty; logo width 10..=80 mm and plain file
+    name; every item via `SetlistItem::validate()`.
+  - `SetlistItem::validate()`: songs delegate to `Song::validate()`; breaks
+    require `duration_mins` in `0..=600`, `label` ≤ 24 chars, and `note`
+    (the break "Comment") ≤ 140 chars. Lengths are counted after trimming.
 - `Setlist.logo` accepts the legacy key `logo_config`; missing timestamps default to
   `Utc::now`.
 - Unknown legacy fields are ignored, so the first-draft schema still loads.
@@ -102,6 +120,11 @@ JS argument keys are camelCase (`setlistId`, `fileName`); model fields are snake
 - `<thead>` carries the logo/title/venue/date header and column labels; it repeats on
   every printed page. `<tfoot>` repeats the footer.
 - Rows use `.song-row` / `.break-row` and must keep `break-inside: avoid`.
+- A break row renders `[label] · [duration] · [comment]` inside one full-width
+  dashed cell: the label defaults to `Break`, is bold/uppercase, and the
+  duration is always shown. The label and comment will be gated by the Feature 4
+  `show_comment` toggle; keep their text lookups in helpers (`breakLabelText`,
+  `breakCommentText` in `sheet.ts`).
 - Typography targets: title 22–26pt bold, meta 11–12pt, song rows 12–14pt, tabular
   figures for numbers/BPM/key.
 - Screen preview is a real A4 box scaled with `--sheet-scale`; print resets the

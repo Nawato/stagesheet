@@ -12,11 +12,14 @@ import {
 } from "./format";
 import { storedLogoUrl } from "./logo";
 import { renderSetlistSheet } from "./sheet";
-import type { LogoAlignment, Setlist, Song } from "./types";
+import type { BreakItem, LogoAlignment, Setlist, Song } from "./types";
 import {
   DEFAULT_LOGO_WIDTH_MM,
   LOGO_MAX_WIDTH_MM,
   LOGO_MIN_WIDTH_MM,
+  MAX_BREAK_LABEL_CHARS,
+  MAX_BREAK_MINS,
+  MAX_COMMENT_CHARS,
 } from "./types";
 
 const A4_WIDTH_PX = (210 / 25.4) * 96;
@@ -650,7 +653,8 @@ function buildSongItem(song: Song, index: number, songNumber: number): HTMLLIEle
     renderSheet();
   });
 
-  const notesField = textField("Notes", song.notes ?? "", "Count-in, capo, cue…");
+  const notesField = textField("Comment", song.notes ?? "", "Count-in, capo, cue…");
+  notesField.input.maxLength = MAX_COMMENT_CHARS;
   notesField.input.addEventListener("input", () => {
     song.notes = trimmedOrNull(notesField.input.value);
     markDirty();
@@ -673,10 +677,7 @@ function buildSongItem(song: Song, index: number, songNumber: number): HTMLLIEle
   return row;
 }
 
-function buildBreakItem(
-  breakItem: { duration_mins: number; note: string | null },
-  index: number,
-): HTMLLIElement {
+function buildBreakItem(breakItem: BreakItem, index: number): HTMLLIElement {
   const row = el("li", "item-row break-item");
   row.draggable = true;
   row.dataset.index = String(index);
@@ -684,10 +685,14 @@ function buildBreakItem(
   const number = buildItemLead("—");
   const main = el("div", "item-main");
   const heading = el("div", "item-heading");
-  const titleNode = el("span", "item-title", "Break");
+  const titleNode = el("span", "item-title", breakHeading(breakItem.label));
   const metaNode = el("span", "item-sub");
   heading.append(titleNode, metaNode);
   main.append(heading);
+
+  const refreshTitle = (): void => {
+    titleNode.textContent = breakHeading(breakItem.label);
+  };
 
   const refreshMeta = (): void => {
     metaNode.textContent = [
@@ -703,18 +708,31 @@ function buildBreakItem(
   details.append(el("summary", "item-details-summary", "Edit break"));
 
   const fields = el("div", "item-fields");
-  const minutesField = numberField("Minutes", breakItem.duration_mins, 0, 600);
+
+  const labelField = textField("Label", breakItem.label ?? "", "Intermission / Encore");
+  labelField.input.maxLength = MAX_BREAK_LABEL_CHARS;
+  labelField.input.addEventListener("input", () => {
+    breakItem.label = trimmedOrNull(labelField.input.value);
+    refreshTitle();
+    markDirty();
+    renderSheet();
+  });
+
+  const minutesField = numberField("Minutes", breakItem.duration_mins, 0, MAX_BREAK_MINS);
   minutesField.input.dataset.field = "break-minutes";
   minutesField.input.addEventListener("change", () => {
     const value = minutesField.input.valueAsNumber;
-    breakItem.duration_mins = Number.isFinite(value) ? clamp(Math.round(value), 0, 600) : 0;
+    breakItem.duration_mins = Number.isFinite(value)
+      ? clamp(Math.round(value), 0, MAX_BREAK_MINS)
+      : 0;
     minutesField.input.value = String(breakItem.duration_mins);
     refreshMeta();
     markDirty();
     renderSheet();
   });
 
-  const noteField = textField("Note", breakItem.note ?? "", "Tune down, speech…");
+  const noteField = textField("Comment", breakItem.note ?? "", "Tune down, speech…");
+  noteField.input.maxLength = MAX_COMMENT_CHARS;
   noteField.input.addEventListener("input", () => {
     breakItem.note = trimmedOrNull(noteField.input.value);
     refreshMeta();
@@ -722,12 +740,17 @@ function buildBreakItem(
     renderSheet();
   });
 
-  fields.append(minutesField.element, noteField.element);
+  fields.append(labelField.element, minutesField.element, noteField.element);
   details.append(fields);
   main.append(details);
 
   row.append(number, main, buildItemActions(index));
   return row;
+}
+
+/** Custom break heading, falling back to the generic `Break`. */
+function breakHeading(label: string | null | undefined): string {
+  return label?.trim() || "Break";
 }
 
 function buildItemLead(label: string): HTMLSpanElement {
@@ -911,7 +934,7 @@ function removeItem(index: number): void {
 function addBreak(): void {
   if (!current) return;
 
-  current.items.push({ Break: { duration_mins: 10, note: null } });
+  current.items.push({ Break: { duration_mins: 10, note: null, label: null } });
   markDirty();
   renderItems();
   renderSheet();

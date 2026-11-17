@@ -23,6 +23,23 @@ pub const DEFAULT_LOGO_WIDTH_MM: f32 = 40.0;
 /// printed column is sized for short labels such as `E Std` or `Drop D`.
 pub const MAX_TUNING_CHARS: usize = 24;
 
+/// Longest accepted break label, in characters after trimming.
+///
+/// Labels sit inline in the dashed break row, so they share the tuning bound.
+pub const MAX_BREAK_LABEL_CHARS: usize = 24;
+
+/// Longest accepted comment text, in characters after trimming.
+///
+/// Applies to `Song.notes` and `Break.note`: both render inside the sheet body,
+/// so one verbose comment must not blow the single-A4 budget.
+pub const MAX_COMMENT_CHARS: usize = 140;
+
+/// Largest accepted break length, in minutes.
+///
+/// Enforced in `validate()` rather than by the integer type so old files with
+/// oversized values still load and only fail on their next save.
+pub const MAX_BREAK_MINS: u32 = 600;
+
 /// Horizontal placement of the band logo in the printed sheet.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize)]
 pub enum LogoAlignment {
@@ -126,8 +143,8 @@ pub struct Song {
     /// files without the field and empty form submissions compare equal.
     #[serde(
         default,
-        deserialize_with = "deserialize_tuning",
-        serialize_with = "serialize_tuning"
+        deserialize_with = "deserialize_trimmed_text",
+        serialize_with = "serialize_trimmed_text"
     )]
     pub tuning: Option<String>,
     #[serde(default)]
@@ -165,29 +182,38 @@ impl Song {
             }
         }
 
+        if let Some(notes) = &self.notes {
+            // Count the trimmed value so stray padding cannot fail validation.
+            if notes.trim().chars().count() > MAX_COMMENT_CHARS {
+                return Err(format!(
+                    "song comment must be at most {MAX_COMMENT_CHARS} characters"
+                ));
+            }
+        }
+
         Ok(())
     }
 }
 
-/// Trims a tuning label and maps blank input to `None`.
-fn normalize_tuning(value: Option<String>) -> Option<String> {
+/// Trims a free-text value and maps blank input to `None`.
+fn normalize_trimmed_text(value: Option<String>) -> Option<String> {
     value
         .map(|text| text.trim().to_string())
         .filter(|text| !text.is_empty())
 }
 
-fn deserialize_tuning<'de, D>(deserializer: D) -> Result<Option<String>, D::Error>
+fn deserialize_trimmed_text<'de, D>(deserializer: D) -> Result<Option<String>, D::Error>
 where
     D: serde::Deserializer<'de>,
 {
-    Option::<String>::deserialize(deserializer).map(normalize_tuning)
+    Option::<String>::deserialize(deserializer).map(normalize_trimmed_text)
 }
 
-fn serialize_tuning<S>(value: &Option<String>, serializer: S) -> Result<S::Ok, S::Error>
+fn serialize_trimmed_text<S>(value: &Option<String>, serializer: S) -> Result<S::Ok, S::Error>
 where
     S: serde::Serializer,
 {
-    normalize_tuning(value.clone()).serialize(serializer)
+    normalize_trimmed_text(value.clone()).serialize(serializer)
 }
 
 /// One entry in a setlist: either a song or a timed break.
@@ -195,8 +221,21 @@ where
 pub enum SetlistItem {
     Song(Song),
     Break {
+        /// Break length in minutes; `0..=MAX_BREAK_MINS`, checked in `validate()`.
         duration_mins: u32,
+        /// Free-text comment shown inline after the length.
+        #[serde(default)]
         note: Option<String>,
+        /// Optional custom heading, e.g. `Intermission` or `Encore`.
+        ///
+        /// `None` renders as `Break` in the UI. Stored trimmed, and
+        /// whitespace-only values load as `None`.
+        #[serde(
+            default,
+            deserialize_with = "deserialize_trimmed_text",
+            serialize_with = "serialize_trimmed_text"
+        )]
+        label: Option<String>,
     },
 }
 
@@ -219,6 +258,42 @@ impl SetlistItem {
 
     pub fn is_break(&self) -> bool {
         matches!(self, Self::Break { .. })
+    }
+
+    pub fn validate(&self) -> Result<(), String> {
+        match self {
+            Self::Song(song) => song.validate(),
+            Self::Break {
+                duration_mins,
+                note,
+                label,
+            } => {
+                if *duration_mins > MAX_BREAK_MINS {
+                    return Err(format!(
+                        "break length must be between 0 and {MAX_BREAK_MINS} minutes"
+                    ));
+                }
+
+                if let Some(label) = label {
+                    // Count the trimmed value so stray padding cannot fail.
+                    if label.trim().chars().count() > MAX_BREAK_LABEL_CHARS {
+                        return Err(format!(
+                            "break label must be at most {MAX_BREAK_LABEL_CHARS} characters"
+                        ));
+                    }
+                }
+
+                if let Some(note) = note {
+                    if note.trim().chars().count() > MAX_COMMENT_CHARS {
+                        return Err(format!(
+                            "break comment must be at most {MAX_COMMENT_CHARS} characters"
+                        ));
+                    }
+                }
+
+                Ok(())
+            }
+        }
     }
 }
 
@@ -303,9 +378,7 @@ impl Setlist {
         self.logo.validate()?;
 
         for item in &self.items {
-            if let SetlistItem::Song(song) = item {
-                song.validate()?;
-            }
+            item.validate()?;
         }
 
         Ok(())
@@ -357,6 +430,7 @@ mod tests {
             SetlistItem::Break {
                 duration_mins: 10,
                 note: Some("Tune down".into()),
+                label: Some("Intermission".into()),
             },
             SetlistItem::Song(song("Closer", Some(240))),
         ];
@@ -529,6 +603,204 @@ mod tests {
             setlist.validate().is_err(),
             "setlist validation delegates to song validation"
         );
+    }
+
+    #[test]
+    fn break_label_round_trips_and_old_json_defaults_to_none() {
+        let with_label = SetlistItem::Break {
+            duration_mins: 15,
+            note: Some("Change strings".into()),
+            label: Some("Encore".into()),
+        };
+        let json = serde_json::to_string(&with_label).expect("serialize with label");
+        assert!(json.contains("\"label\":\"Encore\""));
+        assert_eq!(
+            serde_json::from_str::<SetlistItem>(&json).expect("deserialize with label"),
+            with_label
+        );
+
+        // Old break JSON written before the label field existed.
+        let legacy: SetlistItem =
+            serde_json::from_str(r#"{"Break":{"duration_mins":10,"note":null}}"#)
+                .expect("legacy break parses");
+        match &legacy {
+            SetlistItem::Break { label, .. } => assert_eq!(*label, None),
+            SetlistItem::Song(_) => panic!("expected a break"),
+        }
+        assert!(legacy.validate().is_ok());
+    }
+
+    #[test]
+    fn break_label_is_trimmed_and_blank_becomes_none() {
+        let padded: SetlistItem = serde_json::from_str(
+            r#"{"Break":{"duration_mins":10,"note":null,"label":"  Encore  "}}"#,
+        )
+        .expect("padded label parses");
+        match &padded {
+            SetlistItem::Break { label, .. } => assert_eq!(label.as_deref(), Some("Encore")),
+            SetlistItem::Song(_) => panic!("expected a break"),
+        }
+
+        let blank: SetlistItem =
+            serde_json::from_str(r#"{"Break":{"duration_mins":10,"note":null,"label":"   "}}"#)
+                .expect("blank label parses");
+        match &blank {
+            SetlistItem::Break { label, .. } => assert_eq!(*label, None),
+            SetlistItem::Song(_) => panic!("expected a break"),
+        }
+
+        let serialized = serde_json::to_value(SetlistItem::Break {
+            duration_mins: 10,
+            note: None,
+            label: Some("  Intermission  ".into()),
+        })
+        .expect("serialize padded label");
+        assert_eq!(
+            serialized["Break"]["label"],
+            serde_json::json!("Intermission")
+        );
+
+        let empty = serde_json::to_value(SetlistItem::Break {
+            duration_mins: 10,
+            note: None,
+            label: Some(String::new()),
+        })
+        .expect("serialize empty label");
+        assert_eq!(empty["Break"]["label"], serde_json::Value::Null);
+    }
+
+    #[test]
+    fn validation_bounds_break_label_after_trimming() {
+        let valid = SetlistItem::Break {
+            duration_mins: 10,
+            note: None,
+            label: Some("x".repeat(MAX_BREAK_LABEL_CHARS)),
+        };
+        assert!(valid.validate().is_ok(), "the limit itself is allowed");
+
+        let padded = SetlistItem::Break {
+            duration_mins: 10,
+            note: None,
+            label: Some(format!("  {}  ", "x".repeat(MAX_BREAK_LABEL_CHARS))),
+        };
+        assert!(padded.validate().is_ok(), "padding must not count");
+
+        let too_long = SetlistItem::Break {
+            duration_mins: 10,
+            note: None,
+            label: Some("x".repeat(MAX_BREAK_LABEL_CHARS + 1)),
+        };
+        assert!(too_long.validate().is_err());
+
+        let mut setlist = Setlist::new("Gig");
+        setlist.items.push(too_long);
+        assert!(
+            setlist.validate().is_err(),
+            "setlist validation delegates to item validation"
+        );
+    }
+
+    #[test]
+    fn validation_bounds_break_duration() {
+        for minutes in [0, 1, MAX_BREAK_MINS] {
+            let item = SetlistItem::Break {
+                duration_mins: minutes,
+                note: None,
+                label: None,
+            };
+            assert!(item.validate().is_ok(), "{minutes} minutes is allowed");
+        }
+
+        for minutes in [MAX_BREAK_MINS + 1, u32::MAX] {
+            let item = SetlistItem::Break {
+                duration_mins: minutes,
+                note: None,
+                label: None,
+            };
+            assert!(item.validate().is_err(), "{minutes} minutes is too long");
+        }
+
+        // The old IPC hole: a u32-sized value arrives as valid JSON, loads,
+        // and is only rejected when the setlist is validated on save.
+        let huge: SetlistItem =
+            serde_json::from_str(r#"{"Break":{"duration_mins":4000000000,"note":null}}"#)
+                .expect("u32-sized duration parses");
+        assert_eq!(huge.duration_secs(), 4_000_000_000 * 60);
+        assert!(huge.validate().is_err());
+
+        let mut setlist = Setlist::new("Gig");
+        setlist.items.push(huge);
+        assert!(setlist.validate().is_err());
+    }
+
+    #[test]
+    fn validation_bounds_comments_on_songs_and_breaks() {
+        let mut song = Song::new("Opener");
+
+        song.notes = Some("x".repeat(MAX_COMMENT_CHARS));
+        assert!(song.validate().is_ok(), "the limit itself is allowed");
+
+        song.notes = Some(format!("  {}  ", "x".repeat(MAX_COMMENT_CHARS)));
+        assert!(song.validate().is_ok(), "padding must not count");
+
+        song.notes = Some("x".repeat(MAX_COMMENT_CHARS + 1));
+        assert!(song.validate().is_err());
+
+        let mut setlist = Setlist::new("Gig");
+        setlist.items.push(SetlistItem::Song(song));
+        assert!(
+            setlist.validate().is_err(),
+            "setlist validation delegates to song validation"
+        );
+
+        let mut break_item = SetlistItem::Break {
+            duration_mins: 10,
+            note: Some("x".repeat(MAX_COMMENT_CHARS)),
+            label: None,
+        };
+        assert!(break_item.validate().is_ok(), "the limit itself is allowed");
+
+        if let SetlistItem::Break { note, .. } = &mut break_item {
+            *note = Some(format!("  {}  ", "x".repeat(MAX_COMMENT_CHARS)));
+        }
+        assert!(break_item.validate().is_ok(), "padding must not count");
+
+        if let SetlistItem::Break { note, .. } = &mut break_item {
+            *note = Some("x".repeat(MAX_COMMENT_CHARS + 1));
+        }
+        assert!(break_item.validate().is_err());
+
+        let mut setlist = Setlist::new("Gig");
+        setlist.items.push(break_item);
+        assert!(
+            setlist.validate().is_err(),
+            "setlist validation delegates to item validation"
+        );
+    }
+
+    #[test]
+    fn over_long_comments_still_load_but_fail_validation() {
+        let notes = "n".repeat(MAX_COMMENT_CHARS + 1);
+        let song: Song = serde_json::from_value(serde_json::json!({
+            "id": Uuid::new_v4(),
+            "title": "Legacy verbose song",
+            "notes": notes,
+        }))
+        .expect("over-long song comment still loads");
+        assert_eq!(
+            song.notes.as_deref().map(str::len),
+            Some(MAX_COMMENT_CHARS + 1)
+        );
+        assert!(song.validate().is_err(), "next save must fail");
+
+        let break_item: SetlistItem = serde_json::from_value(serde_json::json!({
+            "Break": {
+                "duration_mins": 10,
+                "note": "b".repeat(MAX_COMMENT_CHARS + 1),
+            }
+        }))
+        .expect("over-long break comment still loads");
+        assert!(break_item.validate().is_err(), "next save must fail");
     }
 
     #[test]

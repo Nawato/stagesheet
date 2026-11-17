@@ -13,17 +13,15 @@ implemented in `main.ts` (`fitSheetToPage`) and `print.css`.
 Decisions locked in: tuning is a **free-text optional field** (same pattern as
 `key`), not a preset picker or per-instrument map.
 
-## Cross-cutting: validation hardening (ships with Features 2–3)
+## Cross-cutting: validation hardening (shipped with Feature 2) — Done
 
-`Setlist::validate()` currently walks only songs and the logo config; break
-items are unvalidated, so the IPC surface accepts e.g.
-`duration_mins: 4_000_000_000` and prints it. Before Feature 2 lands, extend
-Rust-side validation so every bound is enforced where the data enters:
+`Setlist::validate()` now walks every item, so break items are validated at the
+same boundary as songs and the logo config. All bounds are enforced in Rust:
 
 - Break `duration_mins` within `0..=600` (error otherwise; the UI clamps the
   same range).
 - Break `label` (Feature 2) ≤ 24 chars after trim.
-- `Song.notes` and `Break.note` ≤ 140 chars after trim (Feature 3).
+- `Song.notes` and `Break.note` (Feature 3's "Comment") ≤ 140 chars after trim.
 
 Back-compat rule: validation runs **on save only**. Old files with over-long
 values still load; their next save fails with a clear message, and the UI
@@ -89,10 +87,15 @@ has tuning set; the `show_tuning` toggle that can hide it ships with Feature 4.
    Feature 4).
 4. QA + `SKILL.md` + this file status + commit.
 
-## Feature 2: Customizable break block — Todo
+## Feature 2: Customizable break block — Done
 
-Status: breaks already scaffolded as `{ duration_mins: u32 (0–600 in the UI),
-note }` with editor fields — keep the schema shape, extend the UX.
+Shipped: `Break` gained an optional trimmed `label` (max 24 chars), the editor
+has a Label field plus Minutes and Comment, and the sheet/editor render
+`[label] · [duration] · [comment]` with `Break` as the fallback label. The
+Rust-side break bounds from validation hardening landed in the same change.
+
+Status: the scaffolded break shape was kept and the UX extended — no migration
+needed beyond the serde default for `label`.
 
 - **Length input stays**: minutes number field (0–600), already in the editor;
   the bound moves into Rust `validate()` (see validation hardening above).
@@ -109,10 +112,12 @@ note }` with editor fields — keep the schema shape, extend the UX.
 - TS: add `label?: string | null` to the `Break` variant in `types.ts`; existing
   JSON without it stays valid.
 
-## Feature 3: Comment field on songs + breaks — Todo
+## Feature 3: Comment field on songs + breaks — In progress
 
 Status: both halves already exist (`Song.notes`, `Break.note`) — this feature
-unifies and bounds them.
+unifies and bounds them. The UI now labels both **"Comment"**, the add form has
+`maxlength=140`, and Rust rejects >140 chars after trim (shipped with Feature
+2). Remaining: the sheet-level Comment toggle, which lives in Feature 4.
 
 - Keep serialized names (`notes` / `note`) for JSON back-compat; label both
   **"Comment"** in the library form and editor so users find the same concept

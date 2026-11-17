@@ -91,7 +91,14 @@ export function renderSetlistSheet(
         songNumber += 1;
         tbody.append(buildSongRow(item.Song, songNumber, hasTuning));
       } else {
-        tbody.append(buildBreakRow(item.Break.duration_mins, item.Break.note, columnCount));
+        tbody.append(
+          buildBreakRow(
+            item.Break.duration_mins,
+            item.Break.note,
+            item.Break.label,
+            columnCount,
+          ),
+        );
       }
     }
   }
@@ -191,18 +198,35 @@ function buildSongRow(song: Song, number: number, hasTuning: boolean): HTMLTable
 function buildBreakRow(
   durationMins: number,
   note: string | null,
+  label: string | null | undefined,
   columnCount: number,
 ): HTMLTableRowElement {
   const row = el("tr", "break-row");
   const cellNode = el("td", "break-cell");
   cellNode.colSpan = columnCount;
-  cellNode.append(el("span", "break-label", "Break"));
+
+  // Feature 4 will gate the label and comment behind `show_comment`; keeping
+  // both text lookups in helpers means that toggle only changes these two
+  // calls. The duration is structural and always renders.
+  const labelText = breakLabelText(label);
+  const commentText = breakCommentText(note);
+  if (labelText) cellNode.append(el("span", "break-label", labelText));
   cellNode.append(el("span", "break-duration tabular", `${durationMins} min`));
-  if (note?.trim()) {
-    cellNode.append(el("span", "break-note", note.trim()));
-  }
+  if (commentText) cellNode.append(el("span", "break-note", commentText));
+
   row.append(cellNode);
   return row;
+}
+
+/** Custom label, falling back to the generic `Break` heading. */
+function breakLabelText(label: string | null | undefined): string {
+  return label?.trim() || "Break";
+}
+
+/** Break comment, or `null` when empty (Feature 4 will also gate it). */
+function breakCommentText(note: string | null | undefined): string | null {
+  const trimmed = note?.trim();
+  return trimmed ? trimmed : null;
 }
 
 function cell(className: string, text: string): HTMLTableCellElement {

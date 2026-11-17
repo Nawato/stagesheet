@@ -133,9 +133,12 @@ change.
 - JSON storage + capability scoping + the full command list above.
 - Song library with instant search and one-click add, including free-text tuning
   (max 24 chars) in search, the add form, and each song's editor details.
-- Setlist editor: title/venue/date, break insertion (length in minutes + note),
-  up/down + drag reorder, inline BPM/key/tuning/notes editing, logo upload with
-  width/alignment controls.
+- Setlist editor: title/venue/date, break insertion (custom label, length in
+  minutes, comment), up/down + drag reorder, inline BPM/key/tuning/comment
+  editing, logo upload with width/alignment controls.
+- Validation hardening on save: break length `0..=600`, break label ≤ 24 chars,
+  and song/break comments ≤ 140 chars (after trim). Old files still load; their
+  next save reports the violation instead of truncating.
 - A4 black-on-white preview with `@page`, repeated table header/footer on print, and
   `break-inside: avoid` for rows. The `Tuning` column appears only when at least
   one song in the setlist has tuning set.
@@ -145,11 +148,10 @@ change.
 
 ### Still missing (per plan)
 
-- Customizable break block: custom label (Intermission, Encore, ...) on top of the
-  existing duration + note.
-- Unified comment field UX and length bounds for songs and breaks.
 - Toggleable sheet blocks (key, tuning, tempo, duration, comment) persisted per
   setlist.
+- Sheet-level Comment toggle for song/break comments (the fields and 140-char
+  bounds already ship).
 - Multi-page A4 mode for setlists too long to stay legible on a single page.
 - PNG/PDF export (`html-to-image` + `jspdf`, A4) and the "open after export"
   print flow.

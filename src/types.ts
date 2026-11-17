@@ -27,10 +27,16 @@ export interface Song {
   notes: string | null;
 }
 
+/** The `Break` payload of a setlist item. */
+export interface BreakItem {
+  duration_mins: number;
+  note: string | null;
+  /** Optional heading such as `Intermission`; `null`/missing renders `Break`. */
+  label?: string | null;
+}
+
 /** Serde's default externally tagged enum representation. */
-export type SetlistItem =
-  | { Song: Song }
-  | { Break: { duration_mins: number; note: string | null } };
+export type SetlistItem = { Song: Song } | { Break: BreakItem };
 
 export interface Setlist {
   id: string;
@@ -48,3 +54,8 @@ export interface Setlist {
 export const LOGO_MIN_WIDTH_MM = 10;
 export const LOGO_MAX_WIDTH_MM = 80;
 export const DEFAULT_LOGO_WIDTH_MM = 40;
+
+/** Mirrors the Rust validation bounds in `models.rs`. */
+export const MAX_BREAK_MINS = 600;
+export const MAX_BREAK_LABEL_CHARS = 24;
+export const MAX_COMMENT_CHARS = 140;

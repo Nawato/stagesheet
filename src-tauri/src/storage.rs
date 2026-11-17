@@ -379,6 +379,7 @@ mod tests {
             SetlistItem::Break {
                 duration_mins: 10,
                 note: Some("Tune down".into()),
+                label: Some("Intermission".into()),
             },
             SetlistItem::Song(closer),
         ];
@@ -413,6 +414,57 @@ mod tests {
         assert!(matches!(
             storage.get_setlist(setlist.id).await,
             Err(AppError::SetlistNotFound(id)) if id == setlist.id
+        ));
+    }
+
+    #[tokio::test]
+    async fn invalid_breaks_are_rejected_on_save_but_old_files_still_load() {
+        let (_dir, storage) = storage();
+
+        let mut setlist = Setlist::new("Gig");
+        setlist.items.push(SetlistItem::Break {
+            duration_mins: crate::models::MAX_BREAK_MINS + 1,
+            note: None,
+            label: None,
+        });
+        assert!(matches!(
+            storage.save_setlist(&setlist).await,
+            Err(AppError::InvalidInput(message)) if message.contains("break length")
+        ));
+
+        // Simulate a file written before validation hardening: it must load.
+        let id = Uuid::new_v4();
+        let legacy = serde_json::json!({
+            "id": id,
+            "title": "Legacy gig",
+            "items": [{
+                "Break": {
+                    "duration_mins": 4_000_000_000_u32,
+                    "note": "x".repeat(crate::models::MAX_COMMENT_CHARS + 1),
+                }
+            }],
+            "logo": {
+                "file_name": null,
+                "width_mm": 40.0,
+                "alignment": "Center",
+            },
+        });
+        let path = storage.setlist_path(id);
+        tokio::fs::create_dir_all(storage.setlists_dir())
+            .await
+            .expect("create setlists dir");
+        tokio::fs::write(
+            &path,
+            serde_json::to_vec(&legacy).expect("serialize legacy"),
+        )
+        .await
+        .expect("write legacy setlist");
+
+        let loaded = storage.get_setlist(id).await.expect("legacy setlist loads");
+        assert!(loaded.validate().is_err(), "next save must fail");
+        assert!(matches!(
+            storage.save_setlist(&loaded).await,
+            Err(AppError::InvalidInput(_))
         ));
     }
 
