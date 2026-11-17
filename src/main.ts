@@ -58,6 +58,7 @@ const songForm = byId<HTMLFormElement>("song-form");
 const newSongTitle = byId<HTMLInputElement>("new-song-title");
 const newSongArtist = byId<HTMLInputElement>("new-song-artist");
 const newSongKey = byId<HTMLInputElement>("new-song-key");
+const newSongTuning = byId<HTMLInputElement>("new-song-tuning");
 const newSongBpm = byId<HTMLInputElement>("new-song-bpm");
 const newSongDuration = byId<HTMLInputElement>("new-song-duration");
 const newSongNotes = byId<HTMLInputElement>("new-song-notes");
@@ -469,7 +470,7 @@ function renderLibrary(): void {
   const query = songSearch.value.trim().toLocaleLowerCase();
   const matching = songs.filter((song) => {
     if (!query) return true;
-    return [song.title, song.artist, song.key]
+    return [song.title, song.artist, song.key, song.tuning]
       .filter((value): value is string => Boolean(value))
       .some((value) => value.toLocaleLowerCase().includes(query));
   });
@@ -505,6 +506,7 @@ function buildLibraryRow(song: Song): HTMLLIElement {
   const metaParts = [
     song.artist?.trim(),
     song.key?.trim(),
+    song.tuning?.trim(),
     song.bpm ? `${song.bpm} BPM` : null,
     song.duration_secs != null ? formatDuration(song.duration_secs) : null,
   ].filter((part): part is string => Boolean(part));
@@ -572,6 +574,7 @@ function buildSongItem(song: Song, index: number, songNumber: number): HTMLLIEle
     const parts = [
       song.artist?.trim(),
       song.key?.trim(),
+      song.tuning?.trim(),
       song.bpm ? `${song.bpm} BPM` : null,
       song.duration_secs != null ? formatDuration(song.duration_secs) : null,
     ].filter((part): part is string => Boolean(part));
@@ -603,6 +606,15 @@ function buildSongItem(song: Song, index: number, songNumber: number): HTMLLIEle
   const keyField = textField("Key", song.key ?? "", "Em");
   keyField.input.addEventListener("input", () => {
     song.key = trimmedOrNull(keyField.input.value);
+    refreshMeta();
+    markDirty();
+    renderSheet();
+  });
+
+  const tuningField = textField("Tuning", song.tuning ?? "", "E Std");
+  tuningField.input.maxLength = 24;
+  tuningField.input.addEventListener("input", () => {
+    song.tuning = trimmedOrNull(tuningField.input.value);
     refreshMeta();
     markDirty();
     renderSheet();
@@ -649,6 +661,7 @@ function buildSongItem(song: Song, index: number, songNumber: number): HTMLLIEle
     titleField.element,
     artistField.element,
     keyField.element,
+    tuningField.element,
     bpmField.element,
     durationField.element,
     notesField.element,
@@ -1020,6 +1033,7 @@ async function handleSongSubmit(event: SubmitEvent): Promise<void> {
     artist: trimmedOrNull(newSongArtist.value),
     bpm,
     key: trimmedOrNull(newSongKey.value),
+    tuning: trimmedOrNull(newSongTuning.value),
     duration_secs: duration,
     notes: trimmedOrNull(newSongNotes.value),
   };

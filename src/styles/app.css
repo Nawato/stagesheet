@@ -955,6 +955,7 @@ input[type="file"]::file-selector-button {
 
 .sheet-columns .col-index,
 .sheet-columns .col-key,
+.sheet-columns .col-tuning,
 .sheet-columns .col-bpm,
 .sheet-columns .col-time {
   text-align: right;
@@ -978,6 +979,32 @@ input[type="file"]::file-selector-button {
 
 .sheet-table col.col-time {
   width: 18%;
+}
+
+/* Feature 1: the six-column layout only exists while a setlist has tuning.
+   Widths are rebalanced to keep the song cell dominant. */
+.sheet-table.has-tuning col.col-index {
+  width: 6%;
+}
+
+.sheet-table.has-tuning col.col-song {
+  width: 50%;
+}
+
+.sheet-table.has-tuning col.col-key {
+  width: 9%;
+}
+
+.sheet-table.has-tuning col.col-tuning {
+  width: 10%;
+}
+
+.sheet-table.has-tuning col.col-bpm {
+  width: 9%;
+}
+
+.sheet-table.has-tuning col.col-time {
+  width: 16%;
 }
 
 .song-row td {

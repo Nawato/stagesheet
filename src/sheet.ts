@@ -26,8 +26,23 @@ export function renderSetlistSheet(
   const date = formatGigDate(setlist.date);
   const totalSecs = setlistDurationSecs(setlist);
   const songCount = setlist.items.filter((item) => "Song" in item).length;
+  const hasTuning = setlist.items.some(
+    (item) => "Song" in item && Boolean(item.Song.tuning?.trim()),
+  );
 
-  const table = el("table", "sheet-table");
+  // The tuning column only exists when at least one song needs it, so a
+  // setlist without retunes keeps the baseline five-column layout.
+  const columns: Array<[string, string]> = [
+    ["#", "col-index"],
+    ["Song", "col-song"],
+    ["Key", "col-key"],
+    ...(hasTuning ? [["Tuning", "col-tuning"] as [string, string]] : []),
+    ["BPM", "col-bpm"],
+    ["Time", "col-time"],
+  ];
+  const columnCount = columns.length;
+
+  const table = el("table", hasTuning ? "sheet-table has-tuning" : "sheet-table");
   const caption = el(
     "caption",
     "sr-only",
@@ -38,7 +53,7 @@ export function renderSetlistSheet(
   // Fixed table layout takes column widths from <colgroup>; without it the
   // full-width brand row (colspan) would give every column an equal share.
   const colgroup = document.createElement("colgroup");
-  for (const className of ["col-index", "col-song", "col-key", "col-bpm", "col-time"]) {
+  for (const [, className] of columns) {
     const column = document.createElement("col");
     column.className = className;
     colgroup.append(column);
@@ -48,19 +63,12 @@ export function renderSetlistSheet(
   const thead = el("thead");
   const brandRow = el("tr", "sheet-brand-row");
   const brandCell = el("th", "sheet-brand-cell");
-  brandCell.colSpan = 5;
+  brandCell.colSpan = columnCount;
   brandCell.append(buildBrand(setlist, title, date, options));
   brandRow.append(brandCell);
   thead.append(brandRow);
 
   const columnRow = el("tr", "sheet-columns");
-  const columns: Array<[string, string]> = [
-    ["#", "col-index"],
-    ["Song", "col-song"],
-    ["Key", "col-key"],
-    ["BPM", "col-bpm"],
-    ["Time", "col-time"],
-  ];
   for (const [label, className] of columns) {
     const heading = el("th", className, label);
     heading.scope = "col";
@@ -73,7 +81,7 @@ export function renderSetlistSheet(
   if (setlist.items.length === 0) {
     const emptyRow = el("tr", "sheet-empty-row");
     const emptyCell = el("td", "sheet-empty-cell", "No songs yet — add songs from the library.");
-    emptyCell.colSpan = 5;
+    emptyCell.colSpan = columnCount;
     emptyRow.append(emptyCell);
     tbody.append(emptyRow);
   } else {
@@ -81,9 +89,9 @@ export function renderSetlistSheet(
     for (const item of setlist.items) {
       if ("Song" in item) {
         songNumber += 1;
-        tbody.append(buildSongRow(item.Song, songNumber));
+        tbody.append(buildSongRow(item.Song, songNumber, hasTuning));
       } else {
-        tbody.append(buildBreakRow(item.Break.duration_mins, item.Break.note));
+        tbody.append(buildBreakRow(item.Break.duration_mins, item.Break.note, columnCount));
       }
     }
   }
@@ -92,7 +100,7 @@ export function renderSetlistSheet(
   const tfoot = el("tfoot");
   const footerRow = el("tr", "sheet-footer-row");
   const footerCell = el("td", "sheet-footer-cell");
-  footerCell.colSpan = 5;
+  footerCell.colSpan = columnCount;
   const footer = el("div", "sheet-footer");
   footer.append(
     el("span", "sheet-footer-title", title),
@@ -156,7 +164,7 @@ function buildBrand(
   return brand;
 }
 
-function buildSongRow(song: Song, number: number): HTMLTableRowElement {
+function buildSongRow(song: Song, number: number, hasTuning: boolean): HTMLTableRowElement {
   const row = el("tr", "song-row");
   row.append(cell("col-index tabular", String(number)));
 
@@ -171,16 +179,23 @@ function buildSongRow(song: Song, number: number): HTMLTableRowElement {
   row.append(songCell);
 
   row.append(cell("col-key tabular", song.key?.trim() || "—"));
+  if (hasTuning) {
+    row.append(cell("col-tuning tabular", song.tuning?.trim() || "—"));
+  }
   row.append(cell("col-bpm tabular", song.bpm ? String(song.bpm) : "—"));
   row.append(cell("col-time tabular", song.duration_secs != null ? formatDuration(song.duration_secs) : "—"));
 
   return row;
 }
 
-function buildBreakRow(durationMins: number, note: string | null): HTMLTableRowElement {
+function buildBreakRow(
+  durationMins: number,
+  note: string | null,
+  columnCount: number,
+): HTMLTableRowElement {
   const row = el("tr", "break-row");
   const cellNode = el("td", "break-cell");
-  cellNode.colSpan = 5;
+  cellNode.colSpan = columnCount;
   cellNode.append(el("span", "break-label", "Break"));
   cellNode.append(el("span", "break-duration tabular", `${durationMins} min`));
   if (note?.trim()) {

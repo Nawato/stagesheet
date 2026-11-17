@@ -36,6 +36,7 @@ pub struct Song {
     pub artist: Option<String>,
     pub bpm: Option<u16>,
     pub key: Option<String>,       // e.g. "Em"
+    pub tuning: Option<String>,    // e.g. "Drop D"; trimmed, ≤ 24 chars
     pub duration_secs: Option<u32>,
     pub notes: Option<String>,
 }
@@ -63,6 +64,9 @@ Serde notes:
   `{"Song": {...}}` and `{"Break": {"duration_mins": 10, "note": null}}`.
 - `LogoAlignment` deserializes case-insensitively (`"left"`, `"Left"`, `"CENTER"`).
 - `Song.key` and all optional fields default when missing.
+- `Song.tuning` is trimmed in both directions; whitespace-only values serialize as
+  `null` and deserialize as `None`, so pre-tuning files stay equal to new ones.
+  `Song::validate()` rejects values longer than 24 characters (after trim).
 - `Setlist.logo` accepts the legacy key `logo_config`; missing timestamps default to
   `Utc::now`.
 - Unknown legacy fields are ignored, so the first-draft schema still loads.
@@ -92,6 +96,9 @@ JS argument keys are camelCase (`setlistId`, `fileName`); model fields are snake
 ## Sheet markup and CSS
 
 - `<div id="setlist-sheet">` contains a `<table class="sheet-table">`.
+- Columns: `#`, `Song`, `Key`, `Tuning`, `BPM`, `Time`. The `Tuning` column renders
+  only when at least one song in the setlist has tuning set; without it the
+  five-column layout is unchanged.
 - `<thead>` carries the logo/title/venue/date header and column labels; it repeats on
   every printed page. `<tfoot>` repeats the footer.
 - Rows use `.song-row` / `.break-row` and must keep `break-inside: avoid`.

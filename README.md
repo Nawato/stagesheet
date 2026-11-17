@@ -127,22 +127,24 @@ change.
 ### Currently implemented
 
 - Tauri v2 desktop app with the `lib.rs` / `main.rs` split needed for mobile targets.
-- Corrected data models including key, logo alignment enum, `NaiveDate`, and
-  created/updated timestamps, with migration-friendly serde defaults and aliases.
+- Corrected data models including key, free-text tuning, logo alignment enum,
+  `NaiveDate`, and created/updated timestamps, with migration-friendly serde
+  defaults and aliases.
 - JSON storage + capability scoping + the full command list above.
-- Song library with instant search and one-click add.
+- Song library with instant search and one-click add, including free-text tuning
+  (max 24 chars) in search, the add form, and each song's editor details.
 - Setlist editor: title/venue/date, break insertion (length in minutes + note),
-  up/down + drag reorder, inline BPM/key/notes editing, logo upload with
+  up/down + drag reorder, inline BPM/key/tuning/notes editing, logo upload with
   width/alignment controls.
 - A4 black-on-white preview with `@page`, repeated table header/footer on print, and
-  `break-inside: avoid` for rows.
+  `break-inside: avoid` for rows. The `Tuning` column appears only when at least
+  one song in the setlist has tuning set.
 - Single-A4 cap with automatic type shrink: the sheet is locked to one page and
   scales down (minimum 50%) to fit, with a live fit indicator in the preview.
 - Printing through the native webview print dialog (Ctrl/Cmd + P).
 
 ### Still missing (per plan)
 
-- Song tuning field (free text) and its sheet column.
 - Customizable break block: custom label (Intermission, Encore, ...) on top of the
   existing duration + note.
 - Unified comment field UX and length bounds for songs and breaks.

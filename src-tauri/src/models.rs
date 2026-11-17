@@ -17,6 +17,12 @@ pub const LOGO_MAX_WIDTH_MM: f32 = 80.0;
 /// Width used when no logo width has been chosen yet.
 pub const DEFAULT_LOGO_WIDTH_MM: f32 = 40.0;
 
+/// Longest accepted tuning label, in characters after trimming.
+///
+/// The bound keeps a single tuning value from blowing up the A4 row width; the
+/// printed column is sized for short labels such as `E Std` or `Drop D`.
+pub const MAX_TUNING_CHARS: usize = 24;
+
 /// Horizontal placement of the band logo in the printed sheet.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize)]
 pub enum LogoAlignment {
@@ -114,6 +120,16 @@ pub struct Song {
     /// serde default so older files still load.
     #[serde(default)]
     pub key: Option<String>,
+    /// Free-text tuning label, e.g. `E Std`, `Drop D`, or `Capo 2`.
+    ///
+    /// Stored trimmed, and whitespace-only values load as `None`, so older
+    /// files without the field and empty form submissions compare equal.
+    #[serde(
+        default,
+        deserialize_with = "deserialize_tuning",
+        serialize_with = "serialize_tuning"
+    )]
+    pub tuning: Option<String>,
     #[serde(default)]
     pub duration_secs: Option<u32>,
     #[serde(default)]
@@ -128,6 +144,7 @@ impl Song {
             artist: None,
             bpm: None,
             key: None,
+            tuning: None,
             duration_secs: None,
             notes: None,
         }
@@ -137,8 +154,40 @@ impl Song {
         if self.title.trim().is_empty() {
             return Err("song title must not be empty".into());
         }
+
+        if let Some(tuning) = &self.tuning {
+            // Count the trimmed value so stray padding cannot fail validation.
+            let trimmed = tuning.trim();
+            if trimmed.chars().count() > MAX_TUNING_CHARS {
+                return Err(format!(
+                    "song tuning must be at most {MAX_TUNING_CHARS} characters"
+                ));
+            }
+        }
+
         Ok(())
     }
+}
+
+/// Trims a tuning label and maps blank input to `None`.
+fn normalize_tuning(value: Option<String>) -> Option<String> {
+    value
+        .map(|text| text.trim().to_string())
+        .filter(|text| !text.is_empty())
+}
+
+fn deserialize_tuning<'de, D>(deserializer: D) -> Result<Option<String>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    Option::<String>::deserialize(deserializer).map(normalize_tuning)
+}
+
+fn serialize_tuning<S>(value: &Option<String>, serializer: S) -> Result<S::Ok, S::Error>
+where
+    S: serde::Serializer,
+{
+    normalize_tuning(value.clone()).serialize(serializer)
 }
 
 /// One entry in a setlist: either a song or a timed break.
@@ -286,6 +335,7 @@ mod tests {
             artist: Some("The Band".into()),
             bpm: Some(128),
             key: Some("Em".into()),
+            tuning: Some("Drop D".into()),
             duration_secs,
             notes: None,
         }
@@ -376,6 +426,112 @@ mod tests {
     }
 
     #[test]
+    fn song_round_trips_with_and_without_tuning() {
+        let with_tuning = Song {
+            tuning: Some("E Std".into()),
+            ..Song::new("Opener")
+        };
+        let json = serde_json::to_string(&with_tuning).expect("serialize with tuning");
+        assert!(json.contains("\"tuning\":\"E Std\""));
+        assert_eq!(
+            serde_json::from_str::<Song>(&json).expect("deserialize with tuning"),
+            with_tuning
+        );
+
+        let without_tuning = Song::new("Closer");
+        let json = serde_json::to_string(&without_tuning).expect("serialize without tuning");
+        assert!(json.contains("\"tuning\":null"));
+        assert_eq!(
+            serde_json::from_str::<Song>(&json).expect("deserialize without tuning"),
+            without_tuning
+        );
+    }
+
+    #[test]
+    fn legacy_song_json_without_tuning_loads_as_none() {
+        let legacy = r#"{
+            "id": "0f8c7a6e-2b3d-4c5e-8f90-1a2b3c4d5e6f",
+            "title": "Old Song",
+            "artist": "The Band",
+            "bpm": 120,
+            "key": "Em",
+            "duration_secs": 240,
+            "notes": null
+        }"#;
+
+        let song: Song = serde_json::from_str(legacy).expect("legacy song parses");
+        assert_eq!(song.tuning, None);
+        assert!(song.validate().is_ok());
+    }
+
+    #[test]
+    fn tuning_is_trimmed_and_blank_becomes_none() {
+        let song: Song = serde_json::from_str(
+            r#"{
+                "id": "0f8c7a6e-2b3d-4c5e-8f90-1a2b3c4d5e6f",
+                "title": "Opener",
+                "tuning": "  Drop D  "
+            }"#,
+        )
+        .expect("song parses");
+        assert_eq!(song.tuning.as_deref(), Some("Drop D"));
+
+        let blank: Song = serde_json::from_str(
+            r#"{
+                "id": "0f8c7a6e-2b3d-4c5e-8f90-1a2b3c4d5e6f",
+                "title": "Opener",
+                "tuning": "   "
+            }"#,
+        )
+        .expect("blank tuning parses");
+        assert_eq!(blank.tuning, None);
+
+        let padded = serde_json::to_value(Song {
+            tuning: Some("  E Std  ".into()),
+            ..Song::new("Opener")
+        })
+        .expect("serialize padded tuning");
+        assert_eq!(padded["tuning"], serde_json::json!("E Std"));
+
+        let empty = serde_json::to_value(Song {
+            tuning: Some(String::new()),
+            ..Song::new("Opener")
+        })
+        .expect("serialize empty tuning");
+        assert_eq!(empty["tuning"], serde_json::Value::Null);
+    }
+
+    #[test]
+    fn validation_bounds_tuning_length_after_trimming() {
+        let mut song = Song::new("Opener");
+
+        song.tuning = Some("  E Std  ".into());
+        assert!(song.validate().is_ok(), "padding must not count");
+
+        song.tuning = Some("   ".into());
+        assert!(song.validate().is_ok(), "blank is treated as no tuning");
+
+        song.tuning = Some("x".repeat(MAX_TUNING_CHARS));
+        assert!(song.validate().is_ok(), "the limit itself is allowed");
+
+        song.tuning = Some(format!("  {}  ", "x".repeat(MAX_TUNING_CHARS)));
+        assert!(song.validate().is_ok(), "trimmed value is at the limit");
+
+        song.tuning = Some("x".repeat(MAX_TUNING_CHARS + 1));
+        assert!(song.validate().is_err(), "one char over the limit fails");
+
+        let mut setlist = Setlist::new("Gig");
+        setlist.items.push(SetlistItem::Song(Song {
+            tuning: Some("y".repeat(MAX_TUNING_CHARS + 1)),
+            ..Song::new("Too long")
+        }));
+        assert!(
+            setlist.validate().is_err(),
+            "setlist validation delegates to song validation"
+        );
+    }
+
+    #[test]
     fn logo_alignment_accepts_any_case() {
         for (raw, expected) in [
             ("Left", LogoAlignment::Left),
@@ -432,6 +588,13 @@ mod tests {
         assert_eq!(setlist.logo.width_mm, DEFAULT_LOGO_WIDTH_MM);
         assert_eq!(setlist.items.len(), 2);
         assert_eq!(setlist.total_duration_secs(), 240 + 600);
+        assert_eq!(
+            setlist.items[0]
+                .as_song()
+                .map(|song| song.tuning.as_deref()),
+            Some(None),
+            "missing tuning deserializes to None"
+        );
         assert!(setlist.created_at <= Utc::now());
     }
 

@@ -21,6 +21,8 @@ export interface Song {
   artist: string | null;
   bpm: number | null;
   key: string | null;
+  /** Free-text tuning label, e.g. `E Std` or `Drop D`; trimmed, max 24 chars. */
+  tuning: string | null;
   duration_secs: number | null;
   notes: string | null;
 }

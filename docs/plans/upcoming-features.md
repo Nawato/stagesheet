@@ -29,7 +29,10 @@ Back-compat rule: validation runs **on save only**. Old files with over-long
 values still load; their next save fails with a clear message, and the UI
 `maxlength`/`max` attributes prevent new violations. No silent truncation.
 
-## Feature 1: Song tuning (free text) — Todo
+## Feature 1: Song tuning (free text) — Done
+
+Status: shipped. The column is shown whenever at least one song in the setlist
+has tuning set; the `show_tuning` toggle that can hide it ships with Feature 4.
 
 ### Spec
 

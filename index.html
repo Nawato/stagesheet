@@ -66,7 +66,7 @@
             <input
               id="song-search"
               type="search"
-              placeholder="Search title, artist, or key"
+              placeholder="Search title, artist, key, or tuning"
               autocomplete="off"
             />
           </div>
@@ -79,14 +79,23 @@
               <label for="new-song-title">Title</label>
               <input id="new-song-title" required autocomplete="off" />
             </div>
+            <div class="field">
+              <label for="new-song-artist">Artist</label>
+              <input id="new-song-artist" autocomplete="off" />
+            </div>
             <div class="field-row">
-              <div class="field">
-                <label for="new-song-artist">Artist</label>
-                <input id="new-song-artist" autocomplete="off" />
-              </div>
               <div class="field field-narrow">
                 <label for="new-song-key">Key</label>
                 <input id="new-song-key" placeholder="Em" maxlength="12" autocomplete="off" />
+              </div>
+              <div class="field">
+                <label for="new-song-tuning">Tuning</label>
+                <input
+                  id="new-song-tuning"
+                  placeholder="E Std"
+                  maxlength="24"
+                  autocomplete="off"
+                />
               </div>
             </div>
             <div class="field-row">
