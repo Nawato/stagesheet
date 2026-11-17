@@ -214,6 +214,24 @@
             <span class="print-hint">Print: Ctrl / ⌘ + P</span>
           </div>
 
+          <fieldset class="sheet-options page-mode" aria-describedby="page-mode-hint">
+            <legend>Page layout</legend>
+            <div class="segmented" role="radiogroup" aria-label="Page layout">
+              <label>
+                <input type="radio" name="page-mode" value="Single" checked />
+                <span>Single</span>
+              </label>
+              <label>
+                <input type="radio" name="page-mode" value="Multiple" />
+                <span>Multiple</span>
+              </label>
+            </div>
+            <p id="page-mode-hint" class="sheet-options-hint">
+              Single shrinks the type to fit one A4 page (minimum 50%). Multiple flows onto
+              as many A4 pages as needed.
+            </p>
+          </fieldset>
+
           <fieldset class="sheet-options" aria-describedby="sheet-options-hint">
             <legend>Sheet columns</legend>
             <div class="sheet-options-list">
@@ -250,6 +268,8 @@
                 class="sheet"
                 aria-label="Printable setlist preview"
               ></div>
+              <!-- Screen-only dashed page boundaries (multiple-page mode). -->
+              <div id="sheet-page-marks" class="sheet-page-marks" aria-hidden="true"></div>
             </div>
           </div>
         </section>

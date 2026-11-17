@@ -74,6 +74,19 @@ export function withSheetDefaults(
   };
 }
 
+/** How the printable sheet paginates. Mirrors `PageMode` in `models.rs`. */
+export type PageMode = "Single" | "Multiple";
+
+export const DEFAULT_PAGE_MODE: PageMode = "Single";
+
+/**
+ * Normalizes a possibly missing page mode. Old setlist files carry no
+ * `page_mode`, and those must keep the single-A4 cap they were printed with.
+ */
+export function withPageModeDefaults(mode?: PageMode | string | null): PageMode {
+  return mode === "Multiple" ? "Multiple" : "Single";
+}
+
 export interface Setlist {
   id: string;
   title: string;
@@ -84,6 +97,8 @@ export interface Setlist {
   logo: LogoConfig;
   /** Missing in pre-Feature-4 files; use `withSheetDefaults` when loading. */
   sheet_options?: SheetOptions;
+  /** Missing in pre-Feature-5 files; use `withPageModeDefaults` when loading. */
+  page_mode?: PageMode;
   /** RFC 3339 timestamps. */
   created_at: string;
   updated_at: string;

@@ -1,8 +1,9 @@
 # Export spike — html-to-image + jsPDF in WebKitGTK
 
-Phase 5a result. **Spike complete; code and this note stay uncommitted until the
-export work lands.** Delete this file (and `spikes/`) when Phase 5a is closed,
-per `docs/plans/development-plan.md`.
+Phase 5a result. **Spike complete and committed (deps + this note); the
+`spikes/` harness stays untracked by design. The export implementation is
+tracked as Feature 6.** Keep this note alongside that work and delete it (and
+`spikes/`) once the exporter ships, per `docs/plans/development-plan.md`.
 
 Date: 2026-11-17
 
@@ -120,10 +121,11 @@ violations** under the production directives
 
 `html-to-image` copies `getComputedStyle(<col>).width` into the SVG clone. In
 WebKitGTK that computed value is **`0px` for every `<col>`**, even though the
-stylesheet assigns percentages. With `table-layout: fixed`, the data cells
-collapse: the key text is painted at the end of the song title (overlap), and
-Tuning/BPM/Time shift left by one column. The header row still looks correct,
-which makes this easy to miss.
+stylesheet assigns percentages. With `table-layout: fixed`, the columns collapse
+and the whole table shifts: the key text is painted at the end of the song title
+(overlap) and Tuning/BPM/Time move left by one column. The header row shifts
+with the body rather than staying correct on its own — it merely looks plausible
+at a glance, which makes this easy to miss.
 
 Reproduced in `short-sheet.svg`: every cloned `<col>` carries `width: 0px`.
 
@@ -166,12 +168,13 @@ Even with a `data:` logo, the **first** `toCanvas` in a fresh WebView produced a
 blank logo region (ink 0) while the live `<img>` was complete (1024 × 1024) and
 visible. Later captures worked. A throwaway warm-up
 `toCanvas(sheet, { canvasWidth: 400, canvasHeight: 566, … })` before the real
-capture fixed it in the rerun (logo ink 0 → 125,776). Feature 5 should warm up
-the raster pipeline once per session, or verify the logo region and retry once.
+capture fixed it in the rerun (logo ink 0 → 125,776). The exporter (Feature 6)
+should warm up the raster pipeline once per session, or verify the logo region
+and retry once.
 
-### 4. `--sheet-fit` is not usable for single-page export
+### 4. `--sheet-fit` is not usable for single-page export (pre-Feature-5 measurement)
 
-`fitSheetToPage()` in `src/main.ts` measures `sheet.offsetHeight`, but
+The pre-Feature-5 `fitSheetToPage()` in `src/main.ts` measured `sheet.offsetHeight`, but
 `#setlist-sheet` is locked to `height: 297mm` with `overflow: hidden`, so
 `offsetHeight` is always ~1123 px. For the long setlist the loop stops at
 **fit = 1** even though natural content is 642.94 mm (needed fit ≈ 0.462).
@@ -180,26 +183,28 @@ capture 190 ms), but the sheet's bounding box becomes **396.84 × 561.25 CSS px*
 — half-width — leaving a blank right/bottom half. It is not an A4-filling
 single-page export.
 
-Consequence for Feature 5: **capture the full sheet and slice for every
+Consequence for the exporter: **capture the full sheet and slice for every
 export**, including short setlists (one page if it fits). Do not depend on
-`--sheet-fit` for export. This also flags the existing single-A4 preview/print
-cap for long lists as a separate pre-existing bug (content is clipped at fit 1);
-it is outside the spike and was not changed.
+`--sheet-fit` for export. This also flagged the single-A4 cap clipping at fit 1
+as a pre-existing bug; Feature 5 fixed it by zooming the table inside the fixed
+sheet box (the exporter still must capture full height, never the fitted zoom),
+and multiple-page mode remains the escape hatch below the 50% floor.
 
 ### 5. Raw slicing does not repeat thead/tfoot
 
 The tall raster contains the brand header once at the top and the footer once at
 the end. Sliced pages after page 1 have no header, and intermediate pages have
-no footer. This is **not** an html-to-image fidelity failure, but Feature 5 must
-handle it explicitly:
+no footer. This is **not** an html-to-image fidelity failure, but the exporter
+must handle it explicitly:
 
 - capture the brand/column header and footer separately and composite them on
   each page, adjusting the 271 mm content height per page, **or**
-- use the native print path for multi-page paper output (it already repeats
-  `thead`/`tfoot`), and keep raster PDF for one-page/PNG fallback.
+- use the native print path for multi-page paper output (rows paginate cleanly,
+  but WebKitGTK does not repeat `thead`/`tfoot` — see Feature 5's engine note in
+  `upcoming-features.md`), and keep raster PDF for one-page/PNG fallback.
 
 The spike intentionally stops at proving raster + slicing; repeated headers are
-Feature 5 work, not spike scope.
+Feature 6 work, not spike scope.
 
 ### 6. Text is bitmap (accepted)
 
@@ -222,7 +227,7 @@ the text-sharp path; vector PDF is post-MVP (`typst`).
 /tmp/opencode/export-spike-out/meta.json                     # raw metrics
 ```
 
-## Plan for Feature 5 (based on this spike)
+## Plan for the exporter (Feature 6, based on this spike)
 
 1. Add `storedLogoDataUrl()` (read existing bytes, base64) and pass that to the
    exporter. Keep blob URLs for the live preview.

@@ -58,6 +58,8 @@ pub enum SetlistItem {
     },
 }
 
+pub enum PageMode { Single, Multiple } // Single is the default
+
 pub struct Setlist {
     pub id: uuid::Uuid,
     pub title: String,
@@ -66,6 +68,7 @@ pub struct Setlist {
     pub items: Vec<SetlistItem>,
     pub logo: LogoConfig,            // serde alias: logo_config
     pub sheet_options: SheetOptions, // missing in old files -> all true
+    pub page_mode: PageMode,         // missing in old files -> Single
     pub created_at: chrono::DateTime<chrono::Utc>,
     pub updated_at: chrono::DateTime<chrono::Utc>,
 }
@@ -85,6 +88,10 @@ Serde notes:
   object, and a pre-feature file all render every optional block. Never add
   field-level bool defaults inside `SheetOptions`: an absent bool would silently
   mean `false`.
+- `Setlist.page_mode` carries a field-level `#[serde(default)]`. `PageMode`
+  serializes by variant name (`"Single"` / `"Multiple"`), and `Single` is the
+  `Default`, so pre-Feature-5 files keep the single-A4 cap they were saved with.
+  Unknown or differently-cased values are rejected, not coerced.
 - `Song.tuning` and `Break.label` are trimmed in both directions;
   whitespace-only values serialize as `null` and deserialize as `None`, so
   pre-feature files stay equal to new ones. Comments (`Song.notes`,
@@ -105,6 +112,8 @@ Serde notes:
 - TS mirror: `SheetOptions`, `DEFAULT_SHEET_OPTIONS`, and
   `withSheetDefaults()` live in `types.ts`. Run setlists through the helper when
   loading/cloning so a field left off by an older writer still means "visible".
+  `PageMode`, `DEFAULT_PAGE_MODE`, and `withPageModeDefaults()` live there too;
+  they normalize a missing `page_mode` to `"Single"`.
 - Unknown legacy fields are ignored, so the first-draft schema still loads.
 
 ## Storage
@@ -141,8 +150,13 @@ JS argument keys are camelCase (`setlistId`, `fileName`); model fields are snake
   (baseline 7/55/10/10/18), `.cols-5-tuning` (six columns,
   6/50/9/10/9/16), `.cols-minimal` (index/song and one info column, 8/72/20),
   plus `.cols-2` / `.cols-4` fallbacks for toggle combinations in between.
-- `<thead>` carries the logo/title/venue/date header and column labels; it repeats on
-  every printed page. `<tfoot>` repeats the footer.
+- `<thead>` carries the logo/title/venue/date header and column labels; `<tfoot>`
+  carries the footer. Both are marked as table header/footer groups
+  (`display: table-header-group` / `table-footer-group`). Chromium-based engines
+  are expected to repeat them on every printed page; WebKitGTK's print path
+  currently does not
+  repeat them (WebKit bug 17205 — see the engine note under Feature 5 in
+  `docs/plans/upcoming-features.md`).
 - Rows use `.song-row` / `.break-row` and must keep `break-inside: avoid`.
 - Song artist always renders under the title; a song comment renders there only
   when `show_comment` is on, and a blank comment emits no element. Break rows
@@ -153,8 +167,23 @@ JS argument keys are camelCase (`setlistId`, `fileName`); model fields are snake
   `breakCommentText` in `sheet.ts`).
 - Typography targets: title 22–26pt bold, meta 11–12pt, song rows 12–14pt, tabular
   figures for numbers/BPM/key.
+- `Setlist.page_mode` drives one class: JS toggles `#setlist-sheet.multipage`
+  from the setlist, and both stylesheets key off it. `Single` (default) keeps
+  the `--sheet-fit` auto-fit cap: the zoom is applied to `.sheet-table` inside
+  the fixed A4 sheet box, measured from the painted table height and clamped to
+  50–100%, so the preview label matches the applied zoom. Zooming the sheet box
+  itself cannot un-clip content (the clip boundary scales with it) — keep the
+  zoom on the table. `Multiple` skips the fit, sets `--sheet-fit: 1`, and lifts
+  the page cap with `height: auto; max-height: none; overflow: visible` in both
+  stylesheets. Never toggle per-mode layout inline; the class is the contract.
 - Screen preview is a real A4 box scaled with `--sheet-scale`; print resets the
-  transform and padding (`@page` owns the margins).
+  transform and padding (`@page` owns the margins). In multiple mode the sheet
+  grows to its natural height and the preview draws dashed page boundaries in
+  `#sheet-page-marks` (a sibling of `#setlist-sheet`, so it never prints or
+  exports) plus an approximate `≈ N pages` label.
+- The single-page fit hint warns below ~70% auto-fit and points at multiple
+  pages. It mirrors the applied table zoom measured from the painted table
+  height (the natural content height feeds only the multiple-page N estimate).
 - `#setlist-sheet` must stay `background: #fff; color: #000` on screen and print.
 - Logos are forced to grayscale in print, regardless of the preview toggle.
 

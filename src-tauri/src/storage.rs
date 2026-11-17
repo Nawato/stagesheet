@@ -302,7 +302,7 @@ fn looks_like_svg(bytes: &[u8]) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::models::{LogoAlignment, SetlistItem};
+    use crate::models::{LogoAlignment, PageMode, SetlistItem};
     use tempfile::TempDir;
 
     fn storage() -> (TempDir, Storage) {
@@ -415,6 +415,22 @@ mod tests {
             storage.get_setlist(setlist.id).await,
             Err(AppError::SetlistNotFound(id)) if id == setlist.id
         ));
+    }
+
+    #[tokio::test]
+    async fn page_mode_round_trips_through_storage() {
+        let (_dir, storage) = storage();
+        let mut setlist = Setlist::new("Two Pages");
+        setlist.page_mode = PageMode::Multiple;
+
+        storage.save_setlist(&setlist).await.expect("create");
+        let loaded = storage.get_setlist(setlist.id).await.expect("get");
+        assert_eq!(loaded.page_mode, PageMode::Multiple);
+
+        setlist.page_mode = PageMode::Single;
+        storage.save_setlist(&setlist).await.expect("update");
+        let loaded = storage.get_setlist(setlist.id).await.expect("get");
+        assert_eq!(loaded.page_mode, PageMode::Single);
     }
 
     #[tokio::test]

@@ -79,14 +79,17 @@ duplicate the struct definitions.
 
 ### Phase 5 — A4 print + export — In progress
 
-Done: A4 black-on-white preview, native print via `window.print()`, repeated
-`thead`/`tfoot` on print, `break-inside: avoid`, single-A4 cap with auto-fit
-type shrink (min 50%) and a live fit indicator. The implemented print CSS uses
-explicit layout resets (`display: none` on chrome, static positioning for the
-sheet) rather than the original `visibility` trick — this is the reference
-approach; do not regress it.
+Done: A4 black-on-white preview, native print via `window.print()`,
+`thead`/`tfoot` marked for repetition on print (Chromium is expected to repeat
+them; WebKitGTK does not — see Feature 5's engine note), `break-inside: avoid`,
+single-A4 cap with auto-fit table zoom (min 50%, applied and mirrored in the
+fit label), plus per-setlist multiple-page mode (`page_mode`) with preview page
+boundaries and an approximate page count.
+The implemented print CSS uses explicit layout resets (`display: none` on
+chrome, static positioning for the sheet) rather than the original `visibility`
+trick — this is the reference approach; do not regress it.
 
-#### Phase 5a — Export spike — Todo (before any export work)
+#### Phase 5a — Export spike — Done
 
 Goal: prove or kill the `html-to-image` raster approach in WebKitGTK **before**
 any remaining feature is built on export expectations. `html-to-image`
@@ -110,6 +113,12 @@ Exit criteria: an A4 PDF that opens with correct dimensions and legible text at
 
 Accepted trade-off: raster export means exported text is bitmap. The native
 print path prints live DOM text and stays the text-sharp path for paper.
+
+Result: **GO (conditional)** for `html-to-image` + `jspdf` in WebKitGTK with a
+preparation step (full-height capture + slicing, data-URL logo, warm-up raster,
+colgroup workaround, header/footer decision). Findings and the reconciled
+Feature 6 spec live in `docs/plans/export-spike.md` and
+`docs/plans/upcoming-features.md`.
 
 ### Phase 6 — Cross-OS polish + QA/release — Todo
 
@@ -143,9 +152,11 @@ WebView2/WKWebView when available):**
 
 - Short setlist (8 songs) and long setlist (25 songs + 2 breaks at min fit).
 - Logo present/absent × grayscale toggle.
-- Rows never split across pages; header and footer repeat on every page.
-- Multi-page mode (after Feature 5): printed page count matches the ≈N
-  estimate within ±1.
+- Rows never split across pages. Header/footer repetition is engine-dependent:
+  Chromium-based engines are expected to repeat the groups, WebKitGTK currently
+  does not — record the result per engine instead of assuming it.
+- Multiple-page mode (`page_mode`): printed page count matches the ≈N estimate
+  within ±1.
 
 ## Risks
 
@@ -162,3 +173,6 @@ WebView2/WKWebView when available):**
 
 - 2026-11: Phases 1–4 done; A4 preview + native print + single-page auto-fit
   done (commits `ed09df4`, `db7f279`). Planning docs moved into the repo.
+- 2026-11-17: Features 1–5 shipped (tuning, break labels, comments, sheet
+  column toggles, multiple-page mode); Phase 5a export spike closed GO
+  (conditional) with the Feature 6 spec updated to its findings.

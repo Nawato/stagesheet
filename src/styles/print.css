@@ -34,6 +34,7 @@
   .preview-toolbar,
   .print-hint,
   .sheet-options,
+  .sheet-page-marks,
   noscript {
     display: none !important;
   }
@@ -60,10 +61,12 @@
 
   #setlist-sheet {
     width: auto !important;
+    /* Let a short sheet end at its content instead of a full 271mm box, which
+       rounds to a blank trailing page. Single mode fits the table, not the box. */
+    height: auto !important;
     min-height: 0 !important;
     max-height: 271mm !important;
     overflow: hidden !important;
-    zoom: var(--sheet-fit, 1) !important;
     margin: 0 !important;
     padding: 0 !important;
     background: #fff !important;
@@ -71,6 +74,17 @@
     border: 0 !important;
     box-shadow: none !important;
     transform: none !important;
+  }
+
+  /* Multiple-page mode: lift the single-page cap for this setlist only. The
+     base rules above keep their !important; the class is a more specific
+     escape hatch that the JS keeps in sync with Setlist.page_mode. The fixed
+     297mm height from the screen stylesheet must go too, or the table would
+     still be clipped before the repeated thead/tfoot can paginate it. */
+  #setlist-sheet.multipage {
+    height: auto !important;
+    max-height: none !important;
+    overflow: visible !important;
   }
 
   /* Never print coloured text or tinted surfaces, even if the screen preview

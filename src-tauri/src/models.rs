@@ -329,6 +329,18 @@ impl Default for SheetOptions {
     }
 }
 
+/// How the printable sheet paginates.
+///
+/// `Single` keeps the original single-A4 cap with auto-fit shrink; `Multiple`
+/// lets the content flow across as many A4 pages as needed. Serialized as
+/// `"Single"` / `"Multiple"`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub enum PageMode {
+    #[default]
+    Single,
+    Multiple,
+}
+
 /// A printable setlist.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Setlist {
@@ -347,6 +359,9 @@ pub struct Setlist {
     /// Missing in pre-Feature-4 files; defaults to the all-visible sheet.
     #[serde(default)]
     pub sheet_options: SheetOptions,
+    /// Missing in pre-Feature-5 files; defaults to the single-page cap.
+    #[serde(default)]
+    pub page_mode: PageMode,
     #[serde(default = "Utc::now")]
     pub created_at: DateTime<Utc>,
     #[serde(default = "Utc::now")]
@@ -364,6 +379,7 @@ impl Setlist {
             items: Vec::new(),
             logo: LogoConfig::default(),
             sheet_options: SheetOptions::default(),
+            page_mode: PageMode::default(),
             created_at: now,
             updated_at: now,
         }
@@ -607,6 +623,67 @@ mod tests {
             serde_json::from_str::<Setlist>(&json).expect("deserialize sheet options"),
             setlist
         );
+    }
+
+    #[test]
+    fn page_mode_defaults_to_single() {
+        assert_eq!(PageMode::default(), PageMode::Single);
+        assert_eq!(Setlist::new("Gig").page_mode, PageMode::Single);
+    }
+
+    #[test]
+    fn page_mode_serializes_as_variant_names() {
+        assert_eq!(
+            serde_json::to_value(PageMode::Single).expect("serialize Single"),
+            serde_json::json!("Single")
+        );
+        assert_eq!(
+            serde_json::to_value(PageMode::Multiple).expect("serialize Multiple"),
+            serde_json::json!("Multiple")
+        );
+
+        let multiple: PageMode = serde_json::from_str("\"Multiple\"").expect("parse Multiple");
+        assert_eq!(multiple, PageMode::Multiple);
+        assert!(
+            serde_json::from_str::<PageMode>("\"multiple\"").is_err(),
+            "variant names are case-sensitive"
+        );
+        assert!(
+            serde_json::from_str::<PageMode>("\"Stacked\"").is_err(),
+            "unknown modes must be rejected"
+        );
+    }
+
+    #[test]
+    fn setlist_round_trips_multiple_page_mode() {
+        let mut setlist = sample_setlist();
+        setlist.page_mode = PageMode::Multiple;
+
+        let json = serde_json::to_string(&setlist).expect("serialize multiple page mode");
+        assert!(json.contains("\"page_mode\":\"Multiple\""));
+        assert_eq!(
+            serde_json::from_str::<Setlist>(&json).expect("deserialize multiple page mode"),
+            setlist
+        );
+    }
+
+    #[test]
+    fn legacy_setlist_without_page_mode_defaults_to_single() {
+        let legacy = serde_json::json!({
+            "id": Uuid::new_v4(),
+            "title": "Old Gig",
+            "venue": null,
+            "date": null,
+            "items": [],
+            "logo": {
+                "file_name": null,
+                "width_mm": 40.0,
+                "alignment": "Center"
+            }
+        });
+
+        let setlist: Setlist = serde_json::from_value(legacy).expect("pre-feature setlist parses");
+        assert_eq!(setlist.page_mode, PageMode::Single);
     }
 
     #[test]
@@ -980,6 +1057,7 @@ mod tests {
         assert_eq!(setlist.logo.file_name, None);
         assert_eq!(setlist.logo.width_mm, DEFAULT_LOGO_WIDTH_MM);
         assert_eq!(setlist.sheet_options, SheetOptions::default());
+        assert_eq!(setlist.page_mode, PageMode::Single);
         assert_eq!(setlist.items.len(), 2);
         assert_eq!(setlist.total_duration_secs(), 240 + 600);
         assert_eq!(

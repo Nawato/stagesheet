@@ -144,18 +144,28 @@ change.
 - Validation hardening on save: break length `0..=600`, break label ≤ 24 chars,
   and song/break comments ≤ 140 chars (after trim). Old files still load; their
   next save reports the violation instead of truncating.
-- A4 black-on-white preview with `@page`, repeated table header/footer on print, and
-  `break-inside: avoid` for rows. The `Tuning` column appears only when its toggle
-  is on and at least one song in the setlist has tuning set.
-- Single-A4 cap with automatic type shrink: the sheet is locked to one page and
-  scales down (minimum 50%) to fit, with a live fit indicator in the preview.
-- Printing through the native webview print dialog (Ctrl/Cmd + P).
+- A4 black-on-white preview with `@page`, `break-inside: avoid` for rows, and
+  table header/footer groups marked for repetition. Chromium-based engines are
+  expected to repeat them; WebKitGTK's print path currently does not (recorded
+  per engine in QA).
+  The `Tuning` column appears only when its toggle is on and at least one song in
+  the setlist has tuning set.
+- Single-A4 cap with automatic type shrink: the sheet is locked to one page,
+  the table zooms down inside it (minimum 50%) to fit, and the preview label
+  mirrors the applied fit.
+- Per-setlist Page layout toggle (Single/Multiple). Multiple mode skips the
+  single-page cap and flows onto as many A4 pages as needed; the preview shows
+  dashed page boundaries and an approximate page count, and single mode points
+  at it when the required fit drops below ~70%. Persisted as `page_mode`, with
+  old files defaulting to Single.
+- Printing through the native webview print dialog (Ctrl/Cmd + P); the print
+  output follows the selected page layout.
 
 ### Still missing (per plan)
 
-- Multi-page A4 mode for setlists too long to stay legible on a single page.
 - PNG/PDF export (`html-to-image` + `jspdf`, A4) and the "open after export"
-  print flow.
+  print flow; the Phase 5a spike is done and the Feature 6 spec is reconciled
+  with its findings (`docs/plans/export-spike.md`).
 - Per-page `page N / M` numbering (belongs to the PDF exporter; browsers cannot
   render `counter(page)` in `@page` margin boxes).
 - Backup/restore of library and setlists as a single JSON file.

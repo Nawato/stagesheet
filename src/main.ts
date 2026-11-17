@@ -12,22 +12,30 @@ import {
 } from "./format";
 import { storedLogoUrl } from "./logo";
 import { renderSetlistSheet } from "./sheet";
-import type { BreakItem, LogoAlignment, Setlist, SheetOptions, Song } from "./types";
+import type { BreakItem, LogoAlignment, PageMode, Setlist, SheetOptions, Song } from "./types";
 import {
   DEFAULT_LOGO_WIDTH_MM,
+  DEFAULT_PAGE_MODE,
   DEFAULT_SHEET_OPTIONS,
   LOGO_MAX_WIDTH_MM,
   LOGO_MIN_WIDTH_MM,
   MAX_BREAK_LABEL_CHARS,
   MAX_BREAK_MINS,
   MAX_COMMENT_CHARS,
+  withPageModeDefaults,
   withSheetDefaults,
 } from "./types";
 
-const A4_WIDTH_PX = (210 / 25.4) * 96;
-const A4_HEIGHT_PX = (297 / 25.4) * 96;
+const MM_TO_PX = 96 / 25.4;
+const A4_WIDTH_PX = 210 * MM_TO_PX;
+/** Matches `@page { margin: 13mm 12mm; }` in `print.css`. */
+const SHEET_MARGIN_MM = 13;
+/** Printable height of one page: A4 minus the top and bottom page margins. */
+const A4_CONTENT_HEIGHT_PX = (297 - SHEET_MARGIN_MM * 2) * MM_TO_PX;
 const SHEET_FIT_MIN = 0.5;
 const SHEET_FIT_STEP = 0.05;
+/** Below this auto-fit percentage the printed type is too small for the stand. */
+const LEGIBILITY_MIN_FIT = 0.7;
 
 // ---------------------------------------------------------------------------
 // State
@@ -90,7 +98,13 @@ const grayscaleLogoInput = byId<HTMLInputElement>("logo-grayscale");
 const sheet = byId<HTMLDivElement>("setlist-sheet");
 const sheetFrame = byId<HTMLDivElement>("sheet-frame");
 const sheetScroll = byId<HTMLDivElement>("sheet-scroll");
+const sheetPageMarks = byId<HTMLDivElement>("sheet-page-marks");
 const previewMeta = byId<HTMLParagraphElement>("preview-meta");
+
+/** Editor "Page layout" radios: Single (default) or Multiple. */
+const pageModeRadios = Array.from(
+  document.querySelectorAll<HTMLInputElement>('input[name="page-mode"]'),
+);
 
 /** Editor "Sheet columns" checkboxes, in display order. */
 const sheetOptionInputs: Array<[keyof SheetOptions, HTMLInputElement]> = [
@@ -187,6 +201,15 @@ function bindEvents(): void {
     });
   }
 
+  for (const radio of pageModeRadios) {
+    radio.addEventListener("change", () => {
+      if (!current || !radio.checked || !isPageMode(radio.value)) return;
+      current.page_mode = radio.value;
+      markDirty();
+      renderSheet();
+    });
+  }
+
   window.addEventListener("keydown", (event) => {
     if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "s") {
       event.preventDefault();
@@ -221,6 +244,7 @@ async function init(): Promise<void> {
     setlists = loadedSetlists.map((setlist) => ({
       ...setlist,
       sheet_options: withSheetDefaults(setlist.sheet_options),
+      page_mode: withPageModeDefaults(setlist.page_mode),
     }));
     current = setlists[0] ? cloneSetlist(setlists[0]) : createDraft();
     dirty = setlists.length === 0;
@@ -260,6 +284,7 @@ function createDraft(): Setlist {
       alignment: "Center",
     },
     sheet_options: { ...DEFAULT_SHEET_OPTIONS },
+    page_mode: DEFAULT_PAGE_MODE,
     created_at: now,
     updated_at: now,
   };
@@ -273,6 +298,7 @@ function cloneSetlist(setlist: Setlist): Setlist {
     ),
     logo: { ...setlist.logo },
     sheet_options: withSheetDefaults(setlist.sheet_options),
+    page_mode: withPageModeDefaults(setlist.page_mode),
   };
 }
 
@@ -443,6 +469,7 @@ function renderAll(): void {
   renderMeta();
   renderLogoControls();
   renderSheetOptions();
+  renderPageModeControls();
   renderItems();
   renderLibrary();
   renderSheet();
@@ -503,6 +530,15 @@ function renderSheetOptions(): void {
   const options = withSheetDefaults(current.sheet_options);
   for (const [key, input] of sheetOptionInputs) {
     input.checked = options[key];
+  }
+}
+
+function renderPageModeControls(): void {
+  if (!current) return;
+
+  const mode = withPageModeDefaults(current.page_mode);
+  for (const radio of pageModeRadios) {
+    radio.checked = radio.value === mode;
   }
 }
 
@@ -856,8 +892,14 @@ function renderSummary(): void {
 function renderSheet(): void {
   if (!current) {
     sheet.replaceChildren();
+    sheetPageMarks.replaceChildren();
     return;
   }
+
+  // The class (not inline styles) is the single switch for the multiple-page
+  // escape hatch in both the screen and print stylesheets. It must be applied
+  // before the height measurements below.
+  sheet.classList.toggle("multipage", isMultiPage());
 
   renderSetlistSheet(sheet, current, {
     logoUrl: logoSrc,
@@ -879,45 +921,143 @@ function fitPreview(): void {
 }
 
 /**
- * Shrink the sheet content (via --sheet-fit zoom) until it fits a single A4
- * page. --sheet-fit also drives the print stylesheet, so the paper output
- * matches the preview. Never grows content, only shrinks down to SHEET_FIT_MIN.
+ * Shrink the setlist table (via --sheet-fit zoom) until it fits the 271mm
+ * content area of one A4 page. --sheet-fit also drives the print stylesheet, so
+ * the paper output matches the preview. Never grows content, only shrinks down
+ * to SHEET_FIT_MIN.
+ *
+ * The zoom is applied to `.sheet-table`, not to `#setlist-sheet`: the sheet is a
+ * fixed A4 box, and zooming the box would scale the clipping boundary along
+ * with the content, so no extra rows would ever become visible.
+ *
+ * Multiple-page mode skips the fit: the sheet flows at its natural height and
+ * the page count is estimated from the content instead.
  */
 function fitSheetToPage(): void {
-  sheet.style.setProperty("--sheet-fit", "1");
-  let fit = 1;
+  applySheetFit(1);
 
-  for (let i = 0; i < 12 && fit > SHEET_FIT_MIN; i += 1) {
-    // Reading offsetHeight forces a reflow, so each zoom step is measured.
-    if (sheet.offsetHeight <= A4_HEIGHT_PX + 2) break;
-    fit = Math.max(SHEET_FIT_MIN, Math.round((fit - SHEET_FIT_STEP) * 1000) / 1000);
-    sheet.style.setProperty("--sheet-fit", String(fit));
-  }
-
-  updateFitHint(fit);
-  syncSheetHeight();
-}
-
-function updateFitHint(fit: number): void {
-  if (fit >= 0.999) {
-    previewMeta.textContent = "A4 · 210 × 297 mm · black on white";
+  if (isMultiPage()) {
+    updateFitHint(1, false);
+    syncSheetHeight();
     return;
   }
 
+  const table = sheet.querySelector<HTMLTableElement>(".sheet-table");
+  if (!table) {
+    updateFitHint(1, false);
+    syncSheetHeight();
+    return;
+  }
+
+  // Start from the measured natural height, rounded down to whole percent, then
+  // verify against the painted height. Zoom changes the pre-zoom layout width
+  // (the table keeps 100% width), so the first estimate can be off by a step.
+  const target = A4_CONTENT_HEIGHT_PX;
+  let fit = 1;
+
+  if (table.getBoundingClientRect().height > target + 1) {
+    const required = target / table.getBoundingClientRect().height;
+    fit = Math.min(1, Math.max(SHEET_FIT_MIN, Math.floor(required * 100) / 100));
+    applySheetFit(fit);
+
+    for (let i = 0; i < 12 && fit > SHEET_FIT_MIN; i += 1) {
+      // Reading the rect forces a reflow, so each zoom step is measured.
+      if (table.getBoundingClientRect().height <= target + 1) break;
+      fit = Math.max(
+        SHEET_FIT_MIN,
+        Math.round((fit - SHEET_FIT_STEP) * 1000) / 1000,
+      );
+      applySheetFit(fit);
+    }
+  }
+
+  const overfull = table.getBoundingClientRect().height > target + 1;
+  updateFitHint(fit, overfull);
+  syncSheetHeight();
+}
+
+function applySheetFit(fit: number): void {
+  sheet.style.setProperty("--sheet-fit", String(fit));
+}
+
+function updateFitHint(fit: number, overfull: boolean): void {
+  if (isMultiPage()) {
+    const pages = estimatePageCount();
+    previewMeta.textContent = `A4 · multiple pages · ≈ ${pages} ${
+      pages === 1 ? "page" : "pages"
+    }`;
+    previewMeta.classList.remove("is-hint");
+    return;
+  }
+
+  if (fit >= 0.999 && !overfull) {
+    previewMeta.textContent = "A4 · 210 × 297 mm · black on white";
+    previewMeta.classList.remove("is-hint");
+    return;
+  }
+
+  // The label always mirrors the applied zoom, clamped to the 50% floor.
   const percent = Math.round(fit * 100);
-  const overfull = sheet.offsetHeight > A4_HEIGHT_PX + 2;
-  previewMeta.textContent = overfull
-    ? `A4 · single page · auto-fit ${percent}% — still overfull, remove items`
+
+  if (overfull) {
+    previewMeta.textContent = `A4 · single page · auto-fit ${percent}% — still overfull; try multiple pages`;
+    previewMeta.classList.add("is-hint");
+    return;
+  }
+
+  const illegible = fit < LEGIBILITY_MIN_FIT;
+  previewMeta.textContent = illegible
+    ? `A4 · single page · auto-fit ${percent}% — try multiple pages`
     : `A4 · single page · auto-fit ${percent}%`;
+  previewMeta.classList.toggle("is-hint", illegible);
 }
 
 function syncSheetHeight(): void {
   requestAnimationFrame(() => {
-    const raw = getComputedStyle(sheetScroll).getPropertyValue("--sheet-scale").trim();
-    const parsed = Number.parseFloat(raw);
-    const scale = Number.isFinite(parsed) && parsed > 0 ? parsed : 1;
+    const scale = currentSheetScale();
     sheetFrame.style.height = `${Math.ceil(sheet.offsetHeight * scale)}px`;
+    renderPageMarks(scale);
   });
+}
+
+/** Draws the dashed A4 boundaries in the multiple-page preview. */
+function renderPageMarks(scale: number): void {
+  sheetPageMarks.replaceChildren();
+  if (!isMultiPage()) return;
+
+  const pages = estimatePageCount();
+  if (pages <= 1) return;
+
+  const fragment = document.createDocumentFragment();
+  for (let index = 1; index < pages; index += 1) {
+    const top =
+      (SHEET_MARGIN_MM * MM_TO_PX + index * A4_CONTENT_HEIGHT_PX) * scale;
+    const mark = el("div", "sheet-page-break");
+    mark.style.top = `${Math.round(top * 10) / 10}px`;
+    fragment.append(mark);
+  }
+  sheetPageMarks.replaceChildren(fragment);
+}
+
+/** Natural content height of the sheet, excluding its 13mm vertical padding. */
+function naturalContentHeightPx(): number {
+  const verticalPadding = SHEET_MARGIN_MM * 2 * MM_TO_PX;
+  return Math.max(0, sheet.scrollHeight - verticalPadding);
+}
+
+/** Approximate number of printed A4 pages; the engine paginates slightly differently. */
+function estimatePageCount(): number {
+  return Math.max(1, Math.ceil(naturalContentHeightPx() / A4_CONTENT_HEIGHT_PX));
+}
+
+function currentSheetScale(): number {
+  const raw = getComputedStyle(sheetScroll).getPropertyValue("--sheet-scale").trim();
+  const parsed = Number.parseFloat(raw);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : 1;
+}
+
+function isMultiPage(): boolean {
+  return withPageModeDefaults(current?.page_mode) === "Multiple";
 }
 
 // ---------------------------------------------------------------------------
@@ -1344,6 +1484,10 @@ function clamp(value: number, min: number, max: number): number {
 
 function isLogoAlignment(value: string): value is LogoAlignment {
   return value === "Left" || value === "Center" || value === "Right";
+}
+
+function isPageMode(value: string): value is PageMode {
+  return value === "Single" || value === "Multiple";
 }
 
 interface FieldHandle {

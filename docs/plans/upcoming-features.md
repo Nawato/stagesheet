@@ -6,9 +6,10 @@ same commit. Statuses: **Todo** / **In progress** / **Done**.
 
 Context: `Song` today is `{ title, artist, bpm, key, duration_secs, notes }`
 (`src-tauri/src/models.rs`, `src/types.ts`). Setlist items store Song *copies*
-(deliberate: editing the library never rewrites saved setlists). The sheet is
-hard-capped to a single A4 page with auto-fit shrink (`--sheet-fit`, min 50%),
-implemented in `main.ts` (`fitSheetToPage`) and `print.css`.
+(deliberate: editing the library never rewrites saved setlists). The sheet
+defaults to a single A4 page with auto-fit shrink (`--sheet-fit`, min 50%),
+implemented in `main.ts` (`fitSheetToPage`) and `print.css`; per-setlist
+`page_mode` (Feature 5) opts into multiple pages instead.
 
 Decisions locked in: tuning is a **free-text optional field** (same pattern as
 `key`), not a preset picker or per-instrument map.
@@ -179,7 +180,27 @@ on the page (preview, print, and export all follow).
   - `.cols-minimal` (title + time only): 8 / 72 / 20
 - UI wording: label BPM as **"Tempo (BPM)"** to match band vocabulary.
 
-## Feature 5: Multi-page A4 mode — Todo
+## Feature 5: Multi-page A4 mode — Done
+
+Status: shipped. `Setlist.page_mode` persists per setlist (`Single` default, so
+old files are unchanged), the editor has a Page layout Single/Multiple segmented
+control above the preview (44px targets, marks the setlist dirty), and both the
+preview and `window.print()` follow the mode. Multiple mode renders the sheet at
+its natural height with screen-only dashed A4 boundaries and an `≈ N pages`
+label; single mode keeps the `--sheet-fit` cap and warns when the measured fit
+drops below 70%. PDF export must still add page `N / M` numbering (Feature 6).
+Physical-paper QA (25 songs + 2 breaks on A4, WebKitGTK first) remains on the
+Phase 6 checklist.
+
+**Engine note (verified during implementation):** WebKitGTK's print path
+paginates rows correctly and honours `break-inside: avoid`, but it does **not**
+repeat `<thead>`/`<tfoot>` groups (WebKit bug 17205, still open). A 25-song
+WebKitGTK print-to-PDF run produced **3 A4 pages (=≈N) with intact
+rows, but no repeated header and the footer only on the last page**. The CSS keeps
+`display: table-header-group` / `table-footer-group` for engines that support
+it (Chromium-based WebView2 is expected to repeat them; verify in cross-engine
+QA). Fixing WebKitGTK needs manual per-page pagination or raster compositing
+(Feature 6), not CSS.
 
 Problem: single-page auto-shrink bottoms out at 50% (~6pt body) — still
 overfull means clipped, illegible output. Multi-page is the legibility escape
@@ -189,61 +210,108 @@ hatch.
 
 - Data: `Setlist.page_mode: PageMode` with a field-level `#[serde(default)]`;
   `enum PageMode { #[default] Single, Multiple }` serializes as `"Single"` /
-  `"Multiple"`. TS mirror: `page_mode: "Single" | "Multiple"`.
-- **Single** (default): current behavior untouched — `--sheet-fit` shrink to
-  50%, `max-height: 271mm`, `overflow: hidden` in `print.css`.
-- **Multiple**: `--sheet-fit: 1`, the fit loop is skipped, and print CSS gets
-  an escape hatch via a class kept in sync by the JS:
-  `#setlist-sheet.multipage { max-height: none !important; overflow: visible
-  !important; zoom: 1 !important; }` — the base `!important` rules stay in
-  place for single mode. Repeating `thead`/`tfoot` and `break-inside: avoid`
-  (already implemented) handle pagination.
-- Screen preview: no stacked-frame mockup — show the sheet at 100% zoom in the
-  scroll area with dashed separators every 271 mm of content height and an
-  "≈ N pages" label (N = ceil(contentHeight / 271 mm)). The engine paginates
-  slightly differently, so N is approximate by design.
-- Legibility guard: when single-page auto-fit drops below ~70%, the preview
-  meta suggests switching (`A4 · single page · auto-fit 62% — try multiple
-  pages`).
+  `"Multiple"`. TS mirror: `page_mode: "Single" | "Multiple"` (optional on
+  load) normalized by `withPageModeDefaults()`.
+- **Single** (default): the sheet stays a fixed A4 page (`max-height: 271mm`
+  content cap, `overflow: hidden`) and `--sheet-fit` zooms `.sheet-table` inside
+  it, clamped to 50–100%. The zoom must not live on `#setlist-sheet`: zooming
+  the fixed box scales the clip boundary with the content, so it never reveals
+  more rows. The applied value is measured from the painted table height and
+  written back to `--sheet-fit`, so the preview label always matches the real
+  zoom; at the 50% floor the sheet may still clip and the label says so.
+- **Multiple**: `--sheet-fit: 1`, the fit step is skipped, and both stylesheets
+  get an escape hatch via a class kept in sync by the JS:
+  `#setlist-sheet.multipage { height: auto; max-height: none; overflow:
+  visible; }` (the print copy keeps the `!important`s). The base `!important`
+  rules stay in place for single mode. `height: auto` is required because the
+  screen stylesheet pins the sheet to 297mm; without it the taller table would
+  still clip instead of paginating. `break-inside: avoid` keeps rows intact
+  across pages. The `thead`/`tfoot` repeat rules remain for supporting engines,
+  but WebKitGTK's print path does not repeat them (see the engine note above).
+- Screen preview: no stacked-frame mockup — the sheet renders at 100% zoom
+  (`--sheet-fit: 1`) in the scroll area, with dashed separators every 271 mm of
+  content height and an "≈ N pages" meta label (N = ceil(contentHeight / 271
+  mm)). The separators are a sibling overlay (`#sheet-page-marks`), not part of
+  `#setlist-sheet`, so they never print or reach the exporter. The engine
+  paginates slightly differently, so N is approximate by design.
+- Legibility guard: when the applied single-page auto-fit drops below ~70%, the
+  preview meta suggests switching (`A4 · single page · auto-fit 66% — try
+  multiple pages`). The percentage is the actual applied table zoom (measured
+  from the painted height and clamped to the 50% floor); if the table still
+  overflows at 50%, the label says it is still overfull and points at multiple
+  pages.
 - Both `window.print()` and the PDF export (Feature 6) respect the mode. Page
   `N / M` numbering ships only in the PDF export path (no engine we target
   renders `counter(page)` in `@page` margin boxes).
 - QA: 25 songs + 2 breaks in multi mode on real A4 (WebKitGTK first): rows
-  never split, header/footer repeat on every page, printed page count within
-  ±1 of ≈N.
+  never split and the printed page count is within ±1 of ≈N. Header/footer
+  repetition is engine-dependent and must be recorded, not assumed: it is
+  expected on Chromium-based engines and currently fails on WebKitGTK (bug
+  17205).
 
-## Feature 6: PDF/PNG export + direct print — Todo (blocked by the Phase 5a spike)
+## Feature 6: PDF/PNG export + direct print — Todo (spec reconciled with the Phase 5a spike)
 
-- **Spike first**: `docs/plans/development-plan.md` § Phase 5a. If
-  `foreignObject` rasterization fails in WebKitGTK, the fallback decision is
-  PNG-only export plus the OS "print to PDF" dialog for documents; vector PDF
-  via `typst` post-MVP.
-- **Export PDF** (`html-to-image` + `jspdf`, `format: 'a4', unit: 'mm'`):
-  - Single-page mode: one page at the fitted zoom (target ≥2480 px wide ≈
-    300 dpi), reusing `--sheet-fit` so the file matches the preview.
-  - Multi-page mode: rasterize the full sheet once, slice at 271 mm content
-    height, stamp `page N / M` on each slice. Documented limitation: raster
-    slices cannot repeat the table header per page — the native print engine
-    does that; if repeated headers matter for a PDF, use "Save as PDF" in the
-    OS print dialog. Accepted for MVP.
-  - All export text is bitmap; `window.print()` remains the text-sharp path.
-- **PNG export**: same raster path, single file.
+Phase 5a verdict: **GO (conditional)** — `html-to-image` + `jspdf` produce a
+faithful 300 dpi A4 raster and a sliced multi-page PDF in WebKitGTK 2.54, given
+a small preparation step. Full findings: `docs/plans/export-spike.md`. The spike
+invalidated five assumptions in the earlier spec:
+
+- **Never reuse `--sheet-fit`; capture full height and slice for every export.**
+  The sheet is locked to a fixed A4 box with `overflow: hidden`, so the fit
+  variable cannot describe its natural height, and a forced fit produces a
+  half-width page. Export prep must temporarily apply the `.multipage` layout
+  (`height: auto; max-height: none; overflow: visible; --sheet-fit: 1`), capture
+  the whole sheet at 2480 px wide (300 dpi ≈ A4), then slice at the 271 mm
+  content height and snap slice boundaries to row tops. A short setlist is one
+  slice/page. This applies to single and multiple mode alike.
+- **Logo: data URL only.** Blob URLs fail under the shipped CSP (`connect-src`)
+  and widening the CSP is not acceptable. Add an export-only
+  `storedLogoDataUrl()` (read the same scoped fs bytes, base64) and pass that to
+  the raster; keep blob URLs for the live preview. No fs capability change.
+- **Warm up the raster once per session.** The first `toCanvas` in a fresh
+  WebKitGTK WebView can omit the logo even though the live `<img>` is complete.
+  Run a throwaway small capture first, or verify the logo region and retry once.
+- **`<colgroup>` widths collapse in the clone.** Every cloned `<col>` carries
+  `width: 0px`, shifting/overlapping the data columns (the header row shifts
+  with the body). Export prep must remove the colgroup and either switch
+  `table-layout: auto` or insert a hidden/zero-height first row carrying the
+  measured cell widths (recommended: preserves the designed percentages), then
+  restore the DOM.
+- **Header/footer compositing is an explicit decision.** Raw slices repeat
+  neither: the brand header appears only on page 1 and the footer only on the
+  last page. Either capture header/footer separately and composite them on
+  every page (reducing the per-page content height), or keep raster PDF for
+  one-page/PNG output and use the native print path for paper. Note that
+  WebKitGTK's native print path does **not** repeat `thead`/`tfoot` either
+  (Feature 5 engine note), so compositing is the only way to guarantee repeated
+  headers in a PDF. Decide before building the PDF UI; do not ship slices with
+  missing headers/footers.
+
+Rest of the export plan:
+
+- **Export PDF**: rasterize the full sheet once, slice, stamp `page N / M` on
+  each slice, and use `new jsPDF({ unit: "mm", format: "a4", orientation:
+  "portrait", compress: true })` with one `addImage` per page. Page size must be
+  exactly A4. All export text is bitmap; `window.print()` remains the
+  text-sharp path.
+- **PNG export**: same raster path, single file (the full sheet for long lists).
 - **Direct print**: keep one-click `window.print()` of the sheet (Ctrl/⌘+P
-  button) — no export step needed for paper.
+  button) — multi-page mode already paginates it natively; no export step
+  needed for paper.
 - **Export-then-print flow**: after a PDF export, offer "Open PDF" (via
   `tauri-plugin-opener` in the system viewer, where the OS print dialog lives).
-  Documented constraint: Tauri has no silent-print API — every paper path ends
-  in an OS print dialog; there is no bypass.
-- Buttons: `Print` (immediate system dialog) + `Export PDF` (file, with an
+  Tauri has no silent-print API — every paper path ends in an OS print dialog.
+- **Buttons**: `Print` (immediate system dialog) + `Export PDF` (file, with an
   "open after export" checkbox). No combined magic button until export is
-  proven.
-- Deps: `html-to-image`, `jspdf`, added during the spike. No CSP change
-  expected (`img-src blob: data:` already allowed); verify during the spike.
+  proven. Do not ship the export UI before the prep work above lands.
+- **Deps**: `html-to-image@1.11.13` and `jspdf@4.2.1` are installed by the
+  spike. No CSP change expected; verify no violations during QA.
 
 ## Roadmap backlog (prioritized)
 
-- **P0 — PNG/PDF export + print**: Phase 5a spike, then Features 5 + 6.
-- **P0 — Overflow tooling for the single-A4 cap**: covered by Feature 5
+- **P0 — PNG/PDF export + print**: Feature 6 (Phase 5a spike done, Feature 5
+  done).
+- **P0 — Overflow tooling for the single-A4 cap**: Feature 5 shipped
   (multi-page mode + sub-70% legibility nudge). Remaining slice: a
   split-setlist helper (duplicate setlist, move second half) as an alternative
   to multi-page.
