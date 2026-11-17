@@ -13,8 +13,10 @@ framework).
 
 1. Printed output is **plain black text on white paper**, always A4 portrait
    (`@page { size: A4 }`).
-2. `<div id="setlist-sheet">` is the only printable node. It must never receive a
-   dark-stage theme, tinted background, or colour-dependent styling.
+2. The printable nodes are `<div id="setlist-sheet">` (single-page mode) and
+   its paginated clones in `<div id="sheet-pages">` (multiple-page mode, one
+   A4 frame per page). They must never receive a dark-stage theme, tinted
+   background, or colour-dependent styling.
 3. Setlist duration is computed in Rust (`Setlist::total_duration_secs`, exposed via
    `setlist_duration`) from song durations plus breaks.
 
@@ -23,19 +25,21 @@ framework).
 ```text
 src/
   main.ts            app shell, editor, song library, logo controls
-  sheet.ts           renders #setlist-sheet (table markup, repeats on print)
+  sheet.ts           renders #setlist-sheet (table markup, per-combination widths)
+  pages.ts           paginates the sheet into A4 frames for multiple-page mode
   types.ts           TypeScript mirror of the Rust IPC/JSON models
   api.ts             typed wrappers around the Tauri commands
   backup.ts          versioned one-file library/setlist backup + restore
   logo.ts            reads stored logos from the app-data directory
   exporter.ts        PDF/PNG raster export + save/open flow
   format.ts          duration/date helpers
-  styles/app.css     UI chrome + on-screen A4 sheet
+  dom.ts             tiny element helper
+  styles/app.css     UI chrome + on-screen A4 sheet and page frames
   styles/print.css   @page A4 + black-on-white print rules
 src-tauri/
   src/lib.rs         shared entry point for desktop and mobile
   src/main.rs        desktop binary; calls stagesheet_lib::run()
-  src/models.rs      Song, SetlistItem, LogoConfig, Setlist (+ tests)
+  src/models.rs      Song, SetlistItem, SheetOptions, PageMode, LogoConfig, Setlist (+ tests)
   src/storage.rs     JSON persistence in <app_data_dir>/stagesheet (+ tests)
   src/commands.rs    async #[tauri::command] handlers
   src/error.rs       thiserror AppError (serialized to the frontend)
@@ -207,16 +211,19 @@ change.
   and logo upload with width/alignment controls. Oversized raster logos are
   downscaled on import; SVG logos stay vector.
 - Per-setlist "Sheet columns" toggles for Key, Tuning, Tempo (BPM), Time, and
-  Comment, persisted with the setlist and applied to both preview and print.
-  Title/venue/date and song titles always print; the Time column can be hidden,
-  while break durations always render.
+  Comment, persisted with the setlist and applied to preview, print, and
+  export. Column widths are per-combination presets summing to 100% with the
+  `<colgroup>` as the only width source, so the header stays aligned with the
+  body in every toggle combination. Title/venue/date and song titles always
+  print; the Time column can be hidden, while break durations always render.
 - Validation hardening on save: break length `0..=600`, break label ≤ 24 chars,
   and song/break comments ≤ 140 chars (after trim). Old files still load; their
   next save reports the violation instead of truncating.
-- A4 black-on-white preview with `@page`, `break-inside: avoid` for rows, and
-  table header/footer groups marked for repetition. Chromium-based engines are
-  expected to repeat them; WebKitGTK's print path does not (WebKit bug 17205),
-  which is why multiple mode uses real page frames with cloned headers instead.
+- A4 black-on-white preview with `@page` and `break-inside: avoid` for rows.
+  In multiple-page mode every printed page carries its own cloned header and
+  footer (paginated frames), so repetition no longer depends on the engine's
+  `thead`/`tfoot` support; single-page native print still relies on the
+  engine groups (WebKitGTK does not repeat them — WebKit bug 17205).
   The `Tuning` column appears only when its toggle is on and at least one song in
   the setlist has tuning set.
 - Single-A4 cap with automatic type shrink: the sheet is locked to one page,
@@ -257,10 +264,12 @@ change.
 
 ### Still missing (per plan)
 
-- Physical-paper QA on A4 (page count, header/footer repetition per engine,
-  legibility), plus cross-engine (WebView2/WKWebView) export checks. WebKitGTK
-  does not repeat `thead`/`tfoot` in native print (WebKit bug 17205); the PDF
-  exporter composites them itself.
+- Paginated split-setlist helper (duplicate setlist, move second half) as an
+  alternative to multi-page mode.
+- Physical-paper QA on A4 (page count, header/footer per engine, legibility),
+  plus cross-engine (WebView2/WKWebView) export checks. Single-page native
+  print relies on engine `thead`/`tfoot` repetition (WebKit bug 17205);
+  multi-page mode and the PDF exporter carry their own headers instead.
 - Selectable/vector PDF text (post-MVP via `typst`).
 - Android/iOS project initialization (`tauri android init` / `tauri ios init`) and
   native mobile share.
