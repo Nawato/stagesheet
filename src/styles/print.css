@@ -1,0 +1,110 @@
+/* A4 print rules.
+   Hard rule: printed output is plain black on white, A4 portrait.
+   Only #setlist-sheet is printed; the app chrome and editor are removed. */
+
+@page {
+  size: A4 portrait;
+  margin: 13mm 12mm;
+}
+
+@media print {
+  html,
+  body,
+  .app-shell {
+    height: auto !important;
+    min-height: 0 !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    background: #fff !important;
+  }
+
+  body * {
+    visibility: hidden;
+  }
+
+  #setlist-sheet,
+  #setlist-sheet * {
+    visibility: visible;
+  }
+
+  .app-bar,
+  .status,
+  .library-pane,
+  .editor-pane,
+  .preview-toolbar,
+  .print-hint,
+  noscript {
+    display: none !important;
+  }
+
+  .app-shell,
+  .workspace,
+  .preview-pane,
+  .sheet-scroll,
+  .sheet-frame {
+    display: block !important;
+    position: static !important;
+    width: auto !important;
+    height: auto !important;
+    min-height: 0 !important;
+    max-height: none !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    overflow: visible !important;
+    border: 0 !important;
+    background: #fff !important;
+    box-shadow: none !important;
+    transform: none !important;
+  }
+
+  #setlist-sheet {
+    width: auto !important;
+    min-height: 0 !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    background: #fff !important;
+    color: #000 !important;
+    border: 0 !important;
+    box-shadow: none !important;
+    transform: none !important;
+  }
+
+  /* Never print coloured text or tinted surfaces, even if the screen preview
+     was toggled. Logos are also forced to grayscale. */
+  #setlist-sheet,
+  #setlist-sheet * {
+    color: #000 !important;
+    background-color: transparent !important;
+    box-shadow: none !important;
+  }
+
+  #setlist-sheet .sheet-logo {
+    filter: grayscale(1) !important;
+  }
+
+  .sheet-table {
+    width: 100%;
+  }
+
+  .sheet-brand-row,
+  .song-row,
+  .break-row {
+    break-inside: avoid;
+  }
+
+  .sheet-table thead {
+    display: table-header-group;
+  }
+
+  .sheet-table tfoot {
+    display: table-footer-group;
+  }
+
+  .no-print {
+    display: none !important;
+  }
+
+  /* Browsers cannot evaluate `counter(page)` inside @page margin boxes, so the
+     "page N / M" footer is produced by the PDF export path in a later phase.
+     The thead and tfoot above repeat on every printed page. */
+}

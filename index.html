@@ -1,0 +1,218 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+    <meta name="color-scheme" content="light" />
+    <meta
+      name="description"
+      content="StageSheet builds clean, print-ready A4 setlists for bands and live performers."
+    />
+    <title>StageSheet</title>
+    <script type="module" src="/src/main.ts"></script>
+  </head>
+
+  <body>
+    <div class="app-shell">
+      <header class="app-bar">
+        <div class="brand">
+          <svg class="brand-mark" viewBox="0 0 32 32" aria-hidden="true" focusable="false">
+            <rect
+              x="6"
+              y="3"
+              width="20"
+              height="26"
+              rx="2"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="2"
+            />
+            <path
+              d="M10 10h12M10 15h12M10 20h7"
+              stroke="currentColor"
+              stroke-width="2"
+              stroke-linecap="round"
+            />
+            <circle cx="22" cy="24" r="3" fill="currentColor" />
+          </svg>
+          <div class="brand-text">
+            <h1>StageSheet</h1>
+            <p>Setlists that print clean.</p>
+          </div>
+        </div>
+
+        <div class="app-actions" role="group" aria-label="Setlist actions">
+          <div class="select-field">
+            <label for="setlist-select">Setlist</label>
+            <select id="setlist-select"></select>
+          </div>
+          <button id="new-setlist" class="btn" type="button">New</button>
+          <button id="save-setlist" class="btn btn-primary" type="button">Save</button>
+          <button id="print-setlist" class="btn" type="button">Print</button>
+        </div>
+      </header>
+
+      <p id="status" class="status" role="status" aria-live="polite"></p>
+
+      <main class="workspace">
+        <aside class="pane library-pane" aria-labelledby="library-heading">
+          <div class="pane-heading">
+            <h2 id="library-heading">Song library</h2>
+            <span id="song-count" class="badge">0</span>
+          </div>
+
+          <div class="search-field" role="search">
+            <label class="sr-only" for="song-search">Search songs</label>
+            <input
+              id="song-search"
+              type="search"
+              placeholder="Search title, artist, or key"
+              autocomplete="off"
+            />
+          </div>
+
+          <ul id="song-list" class="song-list"></ul>
+
+          <form id="song-form" class="song-form" novalidate>
+            <h3>Add to library</h3>
+            <div class="field">
+              <label for="new-song-title">Title</label>
+              <input id="new-song-title" required autocomplete="off" />
+            </div>
+            <div class="field-row">
+              <div class="field">
+                <label for="new-song-artist">Artist</label>
+                <input id="new-song-artist" autocomplete="off" />
+              </div>
+              <div class="field field-narrow">
+                <label for="new-song-key">Key</label>
+                <input id="new-song-key" placeholder="Em" maxlength="12" autocomplete="off" />
+              </div>
+            </div>
+            <div class="field-row">
+              <div class="field">
+                <label for="new-song-bpm">BPM</label>
+                <input id="new-song-bpm" type="number" min="1" max="400" inputmode="numeric" />
+              </div>
+              <div class="field">
+                <label for="new-song-duration">Duration</label>
+                <input id="new-song-duration" placeholder="4:30" inputmode="numeric" />
+              </div>
+            </div>
+            <div class="field">
+              <label for="new-song-notes">Notes</label>
+              <input id="new-song-notes" autocomplete="off" />
+            </div>
+            <button class="btn btn-primary" type="submit">Add song</button>
+          </form>
+        </aside>
+
+        <section class="pane editor-pane" aria-labelledby="editor-heading">
+          <div class="pane-heading">
+            <h2 id="editor-heading">Setlist editor</h2>
+            <span id="dirty-indicator" class="badge badge-warn" hidden>Unsaved changes</span>
+          </div>
+
+          <div class="setlist-meta">
+            <div class="field">
+              <label for="setlist-title">Title</label>
+              <input id="setlist-title" placeholder="Release Show" autocomplete="off" />
+            </div>
+            <div class="field-row">
+              <div class="field">
+                <label for="setlist-venue">Venue</label>
+                <input id="setlist-venue" placeholder="Matrix, Bochum" autocomplete="off" />
+              </div>
+              <div class="field field-date">
+                <label for="setlist-date">Date</label>
+                <input id="setlist-date" type="date" />
+              </div>
+            </div>
+          </div>
+
+          <div class="items-heading">
+            <div>
+              <h3>Running order</h3>
+              <p id="setlist-summary" class="setlist-summary"></p>
+            </div>
+            <div class="items-actions">
+              <button id="add-break" class="btn btn-small" type="button">Add break</button>
+              <button id="delete-setlist" class="btn btn-small btn-danger" type="button">
+                Delete
+              </button>
+            </div>
+          </div>
+
+          <ol id="item-list" class="item-list"></ol>
+          <p id="empty-items" class="empty-state">
+            Add songs from the library or insert a break to start the running order.
+          </p>
+
+          <fieldset class="logo-controls">
+            <legend>Logo</legend>
+            <div class="logo-row">
+              <div class="field field-grow">
+                <label for="logo-file">Image (PNG, JPEG, SVG · max 5 MiB)</label>
+                <input id="logo-file" type="file" accept="image/png,image/jpeg,image/svg+xml" />
+              </div>
+              <button id="logo-remove" class="btn btn-small btn-danger" type="button">
+                Remove
+              </button>
+            </div>
+            <div class="logo-row">
+              <div class="field field-grow">
+                <label for="logo-width">
+                  Width <output id="logo-width-value" for="logo-width">40 mm</output>
+                </label>
+                <input id="logo-width" type="range" min="10" max="80" step="1" value="40" />
+              </div>
+              <div class="field">
+                <span class="field-label" id="logo-alignment-label">Alignment</span>
+                <div class="segmented" role="radiogroup" aria-labelledby="logo-alignment-label">
+                  <label>
+                    <input type="radio" name="logo-alignment" value="Left" />
+                    <span>Left</span>
+                  </label>
+                  <label>
+                    <input type="radio" name="logo-alignment" value="Center" checked />
+                    <span>Center</span>
+                  </label>
+                  <label>
+                    <input type="radio" name="logo-alignment" value="Right" />
+                    <span>Right</span>
+                  </label>
+                </div>
+              </div>
+            </div>
+            <label class="check">
+              <input id="logo-grayscale" type="checkbox" checked />
+              Grayscale logo in preview
+            </label>
+          </fieldset>
+        </section>
+
+        <section class="pane preview-pane" aria-labelledby="preview-heading">
+          <div class="preview-toolbar">
+            <div>
+              <h2 id="preview-heading">Print preview</h2>
+              <p>A4 · 210 × 297 mm · black on white</p>
+            </div>
+            <span class="print-hint">Print: Ctrl / ⌘ + P</span>
+          </div>
+
+          <div id="sheet-scroll" class="sheet-scroll">
+            <div id="sheet-frame" class="sheet-frame">
+              <div
+                id="setlist-sheet"
+                class="sheet"
+                aria-label="Printable setlist preview"
+              ></div>
+            </div>
+          </div>
+        </section>
+      </main>
+    </div>
+
+    <noscript>StageSheet needs JavaScript to build and print setlists.</noscript>
+  </body>
+</html>
