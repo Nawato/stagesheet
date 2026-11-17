@@ -372,9 +372,11 @@ a fresh-profile round trip).
   to multi-page.
 - **P1 — Backup/restore**: Done (Feature 7). One versioned JSON envelope for
   the full library + setlists; logos are re-imported manually in v1.
-- **P1 — CI**: GitHub Actions on ubuntu-latest running `npm run build` +
-  `cargo test` with the `webkit2gtk-4.1` packages the README already lists.
-  Cheap regression gate until signing/release automation (P3).
+- **P1 — CI**: Done. `.github/workflows/ci.yml` runs `npm ci` + `npm run build`
+  and `npm run test:rust` on `ubuntu-latest` (Node 20, stable Rust, the
+  webkit2gtk-4.1/gtk3/libsoup3 dev packages from the README) for pushes to
+  `main` and pull requests. No secrets, bundles, signing, or mobile builds;
+  signing/release automation stays P3.
 - **P1 — Library polish**: duplicate-song, sort by artist/key/tuning, tuning
   filter.
 - **P2 — Mobile**: `android`/`ios init` on a provisioned machine, share-sheet

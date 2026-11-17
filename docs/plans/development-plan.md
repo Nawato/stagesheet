@@ -124,7 +124,8 @@ harness were removed when the exporter shipped.
 
 ### Phase 6 — Cross-OS polish + QA/release — Todo
 
-- Minimal frontend test harness (see QA strategy), CI, 44px touch targets.
+- Minimal frontend test harness (see QA strategy) and 44px touch targets. CI
+  (`.github/workflows/ci.yml`) already runs the frontend build and Rust tests.
 - `tauri android init` / `ios init` on provisioned machines; native share.
 - Print QA on real A4 (checklist below), backup/restore, app versioning,
   signing/release automation (tracked in the roadmap, P3).
@@ -134,11 +135,13 @@ harness were removed when the exporter shipped.
 **Rust gate:** `cargo test` in `src-tauri` (list in `SKILL.md`). Note: the
 `tauri` crate needs the `webkit2gtk-4.1` system libraries to compile even for
 pure model/storage tests, so the gate is environment-dependent (README lists
-the packages). If that becomes a recurring blocker, split `models`/`storage`/
-`error` into a dependency-light crate so the core tests compile anywhere;
-deferred until it actually hurts.
+the packages; `.github/workflows/ci.yml` installs them on `ubuntu-latest`). If
+that becomes a recurring blocker, split `models`/`storage`/`error` into a
+dependency-light crate so the core tests compile anywhere; deferred until it
+actually hurts.
 
 **Frontend gate:** `npm run build` (TypeScript strict + Vite production bundle).
+Both gates run in CI on every push to `main` and every pull request.
 
 **Planned minimal harness (Phase 6):** Playwright smoke tests against the
 production frontend in a plain browser. No Tauri IPC is needed because the app
@@ -166,7 +169,7 @@ WebView2/WKWebView when available):**
 | --- | --- |
 | `html-to-image` fidelity in WebKitGTK (SVG foreignObject) | Phase 5a spike verified the raster path with the prep step; cross-engine and physical-paper QA remain in Phase 6; PNG fallback and vector PDF via `typst` stay post-MVP options |
 | Print pagination differs per engine | Repeated thead/tfoot + `break-inside: avoid` already implemented; manual paper QA per engine |
-| `cargo test` needs webkit2gtk system libs locally and in CI | README prerequisite; CI installs the packages (P1); optional dependency-light test crate if blocked |
+| `cargo test` needs webkit2gtk system libs locally and in CI | README prerequisite; `.github/workflows/ci.yml` installs the packages; optional dependency-light test crate if blocked |
 | Temp+rename writes have no `fsync`; a crash can lose the newest write (Windows does remove+rename, widening the window) | Accepted for MVP; backup/restore (P1) gives users an escape hatch; add fsync if data loss is ever reported |
 | `songs.json` degrades past ~1000 songs / slow search | Trigger to migrate to SQLite (P3) |
 | `zoom` in print CSS is WebKit/Blink-only | All Tauri engines are WebKit-family; revisit only if a plain-browser build is ever shipped |
@@ -183,3 +186,6 @@ WebView2/WKWebView when available):**
   now divides the painted table height by the preview scale so the applied zoom
   and overfull warning are window-width independent. Physical-paper QA and
   cross-engine status remain Phase 6.
+- 2026-11-17: P1 CI gate added (`.github/workflows/ci.yml`): `npm ci` +
+  `npm run build` + `npm run test:rust` on `ubuntu-latest` with the Tauri Linux
+  packages, npm/Cargo caching, no secrets, bundles, signing, or mobile builds.

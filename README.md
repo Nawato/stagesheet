@@ -1,5 +1,7 @@
 # StageSheet
 
+[![CI](https://github.com/Nawato/stagesheet/actions/workflows/ci.yml/badge.svg)](https://github.com/Nawato/stagesheet/actions/workflows/ci.yml)
+
 StageSheet is a small, offline-first setlist manager for bands and live performers. It
 builds clean, stage-legible setlists and previews them on A4 paper in plain black on
 white.
@@ -69,6 +71,11 @@ cd src-tauri && cargo test
 # or from the repo root:
 npm run test:rust
 ```
+
+CI (`.github/workflows/ci.yml`) runs `npm ci`, `npm run build`, and
+`npm run test:rust` on `ubuntu-latest` for every push to `main` and every pull
+request. It installs the Linux Tauri packages above; it does not build bundles,
+initialise mobile projects, or sign anything.
 
 ### Mobile targets
 
@@ -219,6 +226,9 @@ change.
   through `tauri-plugin-opener`. Exported text is bitmap by design.
 - Printing through the native webview print dialog (Ctrl/Cmd + P); the print
   output follows the selected page layout and remains the text-sharp paper path.
+- GitHub Actions regression gate (`.github/workflows/ci.yml`): Node 20 frontend
+  build plus `cargo test` on `ubuntu-latest` with the webkit2gtk-4.1 packages,
+  cached npm/Cargo downloads. No secrets, bundles, signing, or mobile builds.
 - One-file backup/restore of the whole song library and every setlist as a
   versioned JSON envelope (`schema_version: 1`), written and read through the
   dialog-scoped fs permission with no new commands or capability widening.
@@ -237,4 +247,4 @@ change.
 - Logo downscaling on import.
 - Android/iOS project initialization (`tauri android init` / `tauri ios init`) and
   native mobile share.
-- CI, signing, and release automation.
+- Signing and release automation (P3); CI covers the build/test gate only.
