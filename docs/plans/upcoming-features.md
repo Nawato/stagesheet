@@ -315,6 +315,53 @@ Out of scope: selectable/vector PDF text (`typst` post-MVP), silent printing
 (no Tauri API; every paper path ends in an OS dialog), and PNG export of
 individually paginated pages (the PNG is the full sheet by design).
 
+## Feature 7: Backup/restore — Done
+
+Status: implemented. The library pane has **Back up** and **Restore** actions
+that read/write one human-readable JSON file through the dialog-scoped fs
+permission. No new Tauri commands and no capability widening: export builds the
+envelope from `list_songs` / `list_setlists`; restore re-saves records through
+`save_song` / `save_setlist` so Rust validation and serde defaults stay
+authoritative.
+
+Envelope (`src/backup.ts`, `BACKUP_SCHEMA_VERSION = 1`):
+
+```json
+{
+  "schema_version": 1,
+  "exported_at": "2026-11-17T18:30:00.000Z",
+  "songs": [ /* Song[] with tuning, comments */ ],
+  "setlists": [ /* Setlist[] with items, sheet_options, page_mode, logo config */ ]
+}
+```
+
+What shipped:
+
+- **Export**: saving a dirty editor first (same rule as Print) keeps the backup
+  consistent; the save dialog defaults to Downloads with a timestamped
+  `stagesheet-backup-YYYYMMDD-HHmm.json` name.
+- **Restore**: reads UTF-8 JSON, requires `schema_version` and array payloads,
+  and normalizes records with the same defaults as serde (`sheet_options` all
+  true, `page_mode` Single, legacy `logo_config` alias, case-insensitive logo
+  alignment). A `schema_version` newer than the build supports is rejected with
+  an "update StageSheet" message; `migrateEnvelope()` is the extension point for
+  older versions. Structurally malformed records are skipped and reported;
+  save-time validation failures are reported per record.
+- **Overwrite warning**: restoring upserts by ID (overwrites the same songs and
+  setlists, deletes nothing else) and confirms before writing. Both caches are
+  reloaded afterwards and the editor stays on the same setlist when it still
+  exists.
+- **Logos stay manual in v1**: the envelope keeps `logo.file_name`, width, and
+  alignment. A same-device restore keeps the logo; on another device the file is
+  missing, the preview shows the placeholder, and the logo is re-imported
+  manually. Base64 embedding is deferred to a later envelope version.
+- **Status line** reports imported and rejected/skipped counts with the file
+  name.
+
+Verification: `npm run build` and `cargo test` (33 tests; no Rust changes).
+Manual QA still needs a real desktop run (save dialog scope, restore counts, and
+a fresh-profile round trip).
+
 ## Roadmap backlog (prioritized)
 
 - **P0 — PNG/PDF export + print**: Feature 6 done. Physical-paper QA and
@@ -323,10 +370,8 @@ individually paginated pages (the PNG is the full sheet by design).
   (multi-page mode + sub-70% legibility nudge). Remaining slice: a
   split-setlist helper (duplicate setlist, move second half) as an alternative
   to multi-page.
-- **P1 — Backup/restore**: export/import the full library + setlists as one
-  JSON file with a versioned envelope (`{ schema_version, songs, setlists }`)
-  so restore can migrate forward; logos are re-imported manually in v1 (or
-  base64-embedded in a later envelope version).
+- **P1 — Backup/restore**: Done (Feature 7). One versioned JSON envelope for
+  the full library + setlists; logos are re-imported manually in v1.
 - **P1 — CI**: GitHub Actions on ubuntu-latest running `npm run build` +
   `cargo test` with the `webkit2gtk-4.1` packages the README already lists.
   Cheap regression gate until signing/release automation (P3).

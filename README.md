@@ -24,6 +24,7 @@ src/
   sheet.ts           renders #setlist-sheet (table markup, repeats on print)
   types.ts           TypeScript mirror of the Rust IPC/JSON models
   api.ts             typed wrappers around the Tauri commands
+  backup.ts          versioned one-file library/setlist backup + restore
   logo.ts            reads stored logos from the app-data directory
   exporter.ts        PDF/PNG raster export + save/open flow
   format.ts          duration/date helpers
@@ -106,6 +107,39 @@ Logos are validated by content (PNG/JPEG magic bytes, SVG root tag), capped at 5
 and stored under a generated UUID name. Absolute paths are never persisted. Image
 downscaling is deferred until the export phase.
 
+## Backup and restore
+
+The library pane has **Back up** and **Restore** actions. Both operate on one
+human-readable JSON file:
+
+```json
+{
+  "schema_version": 1,
+  "exported_at": "2026-11-17T18:30:00.000Z",
+  "songs": [ /* Song[] */ ],
+  "setlists": [ /* Setlist[] */ ]
+}
+```
+
+The envelope includes every current field (tuning, sheet options, page mode,
+labels, comments, and logo width/alignment). Restore is frontend-only: it reads
+the file through the dialog-scoped `fs` permission, validates the envelope, and
+re-saves each record through `save_song` / `save_setlist`, so Rust validation
+and serde defaults remain the authority. Older schema versions are migrated
+before saving; a `schema_version` newer than the build supports is rejected with
+a clear "update StageSheet" message instead of being partially imported.
+
+Restore overwrites existing songs and setlists with the same IDs and does not
+delete anything else. Malformed records are skipped and reported with counts.
+**Logo images are not embedded in v1**: a setlist keeps its `logo.file_name`, so
+restoring on the same device keeps working, but on a new device the image is
+missing and must be re-imported manually for each setlist. A later envelope
+version can embed the bytes.
+
+No new Tauri commands or capabilities were added: writing and reading use
+`dialog.save` / `dialog.open` plus the existing scoped `fs` plugin, with the
+selected file added to the scope for that one operation.
+
 ## Exporting
 
 The preview toolbar writes the current setlist to PDF or PNG at 300 dpi A4,
@@ -185,6 +219,13 @@ change.
   through `tauri-plugin-opener`. Exported text is bitmap by design.
 - Printing through the native webview print dialog (Ctrl/Cmd + P); the print
   output follows the selected page layout and remains the text-sharp paper path.
+- One-file backup/restore of the whole song library and every setlist as a
+  versioned JSON envelope (`schema_version: 1`), written and read through the
+  dialog-scoped fs permission with no new commands or capability widening.
+  Restore validates records, re-saves them through the normal commands, and
+  reports imported/rejected counts; future schema versions are rejected until
+  the app supports them, older ones can migrate forward. Logos are not embedded
+  in v1 and are re-imported manually.
 
 ### Still missing (per plan)
 
@@ -193,7 +234,6 @@ change.
   does not repeat `thead`/`tfoot` in native print (WebKit bug 17205); the PDF
   exporter composites them itself.
 - Selectable/vector PDF text (post-MVP via `typst`).
-- Backup/restore of library and setlists as a single JSON file.
 - Logo downscaling on import.
 - Android/iOS project initialization (`tauri android init` / `tauri ios init`) and
   native mobile share.

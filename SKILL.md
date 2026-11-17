@@ -229,6 +229,42 @@ JS argument keys are camelCase (`setlistId`, `fileName`); model fields are snake
   export" checkbox. There is no silent-print API; direct print stays one-click
   `window.print()`.
 
+## Backup / restore
+
+- `src/backup.ts` writes and reads one versioned JSON envelope:
+
+  ```json
+  {
+    "schema_version": 1,
+    "exported_at": "2026-11-17T18:30:00.000Z",
+    "songs": [ /* Song */ ],
+    "setlists": [ /* Setlist */ ]
+  }
+  ```
+
+- Frontend-only by design: export builds the envelope from `list_songs` /
+  `list_setlists`, restore re-saves each record through `save_song` /
+  `save_setlist`. Rust validation, trim rules, and serde defaults stay the single
+  authority; never add a bulk import command or write storage files directly
+  from the frontend.
+- File access uses `dialog.save` / `dialog.open` plus the existing scoped `fs`
+  plugin. The selected path is added to the fs scope for that operation only.
+  Do not widen `$APPDATA/stagesheet/**`, add fs commands, or change the CSP for
+  backup/restore.
+- Version rules: `schema_version` is mandatory and must be a positive integer.
+  A version newer than `BACKUP_SCHEMA_VERSION` is rejected with an "update
+  StageSheet" message; older versions go through `migrateEnvelope()` before the
+  per-record normalizers. Bump `BACKUP_SCHEMA_VERSION` whenever the serialized
+  `Song` / `Setlist` shape changes in a way that needs migration.
+- Restore semantics: upsert by `id`; records with the same IDs are overwritten,
+  nothing else is deleted. Structurally malformed records are skipped and
+  reported; validation failures from `save_*` are reported per record. The UI
+  confirms before writing and reloads both caches afterwards.
+- Logos are **not embedded in v1**. `logo.file_name`, width, and alignment stay
+  in the envelope, so a same-device restore keeps working; on a new device the
+  file is absent, the preview shows the logo placeholder, and the logo must be
+  re-imported manually. Embedding bytes is a future envelope version.
+
 ## Tests that must stay green
 
 - `cargo test` in `src-tauri`: model round-trips, first-draft JSON migration, reorder

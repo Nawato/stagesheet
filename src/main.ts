@@ -2,6 +2,7 @@ import "./styles/app.css";
 import "./styles/print.css";
 
 import { api } from "./api";
+import { exportBackup, readBackupFile } from "./backup";
 import { byId, el } from "./dom";
 import {
   durationInputValue,
@@ -80,6 +81,9 @@ const newSongTuning = byId<HTMLInputElement>("new-song-tuning");
 const newSongBpm = byId<HTMLInputElement>("new-song-bpm");
 const newSongDuration = byId<HTMLInputElement>("new-song-duration");
 const newSongNotes = byId<HTMLInputElement>("new-song-notes");
+
+const backupExportButton = byId<HTMLButtonElement>("backup-export");
+const backupRestoreButton = byId<HTMLButtonElement>("backup-restore");
 
 const titleInput = byId<HTMLInputElement>("setlist-title");
 const venueInput = byId<HTMLInputElement>("setlist-venue");
@@ -172,6 +176,12 @@ function bindEvents(): void {
     void handleSongSubmit(event);
   });
   addBreakButton.addEventListener("click", addBreak);
+  backupExportButton.addEventListener("click", () => {
+    void backUpLibrary();
+  });
+  backupRestoreButton.addEventListener("click", () => {
+    void restoreLibrary();
+  });
 
   itemList.addEventListener("click", handleItemClick);
   bindDragReorder();
@@ -251,14 +261,7 @@ async function init(): Promise<void> {
       api.listSongs(),
       api.listSetlists(),
     ]);
-    songs = loadedSongs.sort((left, right) => left.title.localeCompare(right.title));
-    setlists = loadedSetlists.map((setlist) => ({
-      ...setlist,
-      sheet_options: withSheetDefaults(setlist.sheet_options),
-      page_mode: withPageModeDefaults(setlist.page_mode),
-    }));
-    current = setlists[0] ? cloneSetlist(setlists[0]) : createDraft();
-    dirty = setlists.length === 0;
+    adoptLoadedState(loadedSongs, loadedSetlists);
   } catch (error) {
     backendAvailable = false;
     current = createDraft();
@@ -311,6 +314,31 @@ function cloneSetlist(setlist: Setlist): Setlist {
     sheet_options: withSheetDefaults(setlist.sheet_options),
     page_mode: withPageModeDefaults(setlist.page_mode),
   };
+}
+
+/**
+ * Replaces the in-memory caches with a fresh backend snapshot and selects the
+ * requested setlist when it still exists (otherwise the most recent one).
+ */
+function adoptLoadedState(
+  loadedSongs: Song[],
+  loadedSetlists: Setlist[],
+  preferredId?: string | null,
+): void {
+  songs = [...loadedSongs].sort((left, right) => left.title.localeCompare(right.title));
+  setlists = loadedSetlists.map((setlist) => ({
+    ...setlist,
+    sheet_options: withSheetDefaults(setlist.sheet_options),
+    page_mode: withPageModeDefaults(setlist.page_mode),
+  }));
+  sortSetlists();
+
+  const preferred = preferredId
+    ? setlists.find((setlist) => setlist.id === preferredId)
+    : undefined;
+  const next = preferred ?? setlists[0];
+  current = next ? cloneSetlist(next) : createDraft();
+  dirty = setlists.length === 0;
 }
 
 async function startNewSetlist(): Promise<void> {
@@ -521,6 +549,178 @@ async function exportCurrent(format: ExportFormat): Promise<void> {
 function baseName(path: string): string {
   const parts = path.split(/[\\/]/);
   return parts[parts.length - 1] || path;
+}
+
+// ---------------------------------------------------------------------------
+// Backup / restore
+// ---------------------------------------------------------------------------
+
+let restoring = false;
+
+/**
+ * Writes the whole library and every setlist to one versioned JSON file. Like
+ * Print, it saves a dirty editor first so the backup matches what the user sees.
+ */
+async function backUpLibrary(): Promise<void> {
+  if (!ensureBackend() || restoring) return;
+
+  if (dirty) {
+    const saved = await saveCurrent();
+    if (!saved) {
+      setStatus("Save or discard the current setlist before backing up.", "error");
+      return;
+    }
+  }
+
+  backupExportButton.disabled = true;
+  backupRestoreButton.disabled = true;
+
+  try {
+    const [backupSongs, backupSetlists] = await Promise.all([
+      api.listSongs(),
+      api.listSetlists(),
+    ]);
+    const outcome = await exportBackup({ songs: backupSongs, setlists: backupSetlists });
+
+    if (outcome.status === "canceled") {
+      setStatus("Backup canceled.");
+      return;
+    }
+
+    setStatus(
+      `Backed up ${countLabel(outcome.songs, "song")} and ${countLabel(outcome.setlists, "setlist")} to ${baseName(outcome.path)}.`,
+      "success",
+      10000,
+    );
+  } catch (error) {
+    setStatus(`Backup failed: ${describeError(error)}`, "error");
+  } finally {
+    backupExportButton.disabled = false;
+    backupRestoreButton.disabled = false;
+  }
+}
+
+/**
+ * Restores a backup by re-saving each record through the normal commands, so
+ * Rust validation stays authoritative. Records with the same IDs are
+ * overwritten; nothing is deleted. Malformed records are skipped and reported.
+ */
+async function restoreLibrary(): Promise<void> {
+  if (!ensureBackend() || restoring) return;
+
+  const picked = await readBackupFile().catch((error: unknown) => {
+    setStatus(`Restore failed: ${describeError(error)}`, "error");
+    return null;
+  });
+  if (!picked) return;
+
+  if (picked.status === "canceled") {
+    setStatus("Restore canceled.");
+    return;
+  }
+
+  const { envelope, skipped } = picked.backup;
+  if (envelope.songs.length + envelope.setlists.length === 0) {
+    const reason = skipped.length > 0 ? ` All records were malformed: ${summarizeRecords(skipped)}.` : "";
+    setStatus(`No restorable records in ${baseName(picked.path)}.${reason}`, "error");
+    return;
+  }
+
+  const skippedNote =
+    skipped.length > 0
+      ? `\n\n${countLabel(skipped.length, "malformed record")} will be skipped: ${summarizeRecords(skipped)}.`
+      : "";
+  const confirmed = window.confirm(
+    `Restore ${countLabel(envelope.songs.length, "song")} and ${countLabel(envelope.setlists.length, "setlist")} from ${baseName(picked.path)}?\n\n` +
+      "Existing records with the same IDs are overwritten; nothing else is deleted. " +
+      "Logo images are not part of the backup — re-import any missing logos afterwards." +
+      skippedNote,
+  );
+  if (!confirmed) {
+    setStatus("Restore canceled.");
+    return;
+  }
+
+  if (dirty && !confirmDiscard()) {
+    setStatus("Restore canceled.");
+    return;
+  }
+
+  restoring = true;
+  backupExportButton.disabled = true;
+  backupRestoreButton.disabled = true;
+
+  let importedSongs = 0;
+  let importedSetlists = 0;
+  const failures: string[] = [];
+
+  try {
+    for (const [index, song] of envelope.songs.entries()) {
+      try {
+        await api.saveSong(song);
+        importedSongs += 1;
+      } catch (error) {
+        failures.push(`song ${index + 1} “${song.title}” (${describeError(error)})`);
+      }
+    }
+
+    for (const [index, setlist] of envelope.setlists.entries()) {
+      try {
+        await api.saveSetlist(setlist);
+        importedSetlists += 1;
+      } catch (error) {
+        failures.push(`setlist ${index + 1} “${setlist.title}” (${describeError(error)})`);
+      }
+    }
+
+    const currentId = current?.id ?? null;
+    const [loadedSongs, loadedSetlists] = await Promise.all([
+      api.listSongs(),
+      api.listSetlists(),
+    ]);
+    pendingLogoRemovals.clear();
+    clearLogoPreview();
+    adoptLoadedState(loadedSongs, loadedSetlists, currentId);
+    renderAll();
+    if (backendAvailable && !dirty) {
+      await loadLogoForCurrent();
+    }
+    fitPreview();
+
+    const summary = `Restored ${countLabel(importedSongs, "song")} and ${countLabel(importedSetlists, "setlist")} from ${baseName(picked.path)}.`;
+    const problems = [
+      failures.length > 0
+        ? `${countLabel(failures.length, "record")} rejected: ${summarizeRecords(failures)}`
+        : null,
+      skipped.length > 0
+        ? `${countLabel(skipped.length, "malformed record")} skipped: ${summarizeRecords(skipped)}`
+        : null,
+    ].filter((part): part is string => Boolean(part));
+
+    if (problems.length === 0) {
+      setStatus(summary, "success", 10000);
+    } else {
+      setStatus(`${summary} ${problems.join(" ")}`, "error");
+    }
+  } catch (error) {
+    setStatus(
+      `Restore failed after ${countLabel(importedSongs + importedSetlists, "record")}: ${describeError(error)}`,
+      "error",
+    );
+  } finally {
+    restoring = false;
+    backupExportButton.disabled = false;
+    backupRestoreButton.disabled = false;
+  }
+}
+
+function countLabel(count: number, singular: string): string {
+  return `${count} ${singular}${count === 1 ? "" : "s"}`;
+}
+
+function summarizeRecords(records: string[], limit = 3): string {
+  const head = records.slice(0, limit).join("; ");
+  return records.length > limit ? `${head}; +${records.length - limit} more` : head;
 }
 
 function confirmDiscard(): boolean {
@@ -1514,7 +1714,11 @@ function markDirty(): void {
   dirtyIndicator.textContent = persisted ? "Unsaved changes" : "Not saved yet";
 }
 
-function setStatus(message: string, kind: "info" | "success" | "error" = "info"): void {
+function setStatus(
+  message: string,
+  kind: "info" | "success" | "error" = "info",
+  timeoutMs = 5000,
+): void {
   statusEl.textContent = message;
   statusEl.dataset.kind = kind;
 
@@ -1526,7 +1730,7 @@ function setStatus(message: string, kind: "info" | "success" | "error" = "info")
   if (kind !== "error") {
     statusTimer = window.setTimeout(() => {
       statusEl.textContent = "";
-    }, 5000);
+    }, timeoutMs);
   }
 }
 
