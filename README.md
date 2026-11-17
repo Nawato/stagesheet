@@ -280,3 +280,7 @@ change.
   native mobile share.
 - Signing (P3), including notarization; unsigned tag-push release automation for
   Windows/Linux/macOS (ARM) already exists via `.github/workflows/release.yml`.
+
+## License
+
+MIT — see [LICENSE](LICENSE).

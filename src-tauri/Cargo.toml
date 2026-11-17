@@ -2,6 +2,7 @@
 name = "stagesheet"
 version = "0.1.0"
 description = "Print-ready A4 setlists for live performers"
+license = "MIT"
 authors = ["Nawato"]
 edition = "2024"
 rust-version = "1.85"
