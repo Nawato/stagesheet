@@ -130,11 +130,11 @@ harness were removed when the exporter shipped.
 - Sheet correctness fixes from real use: Feature 10 done (per-combination
   column widths + header alignment); Feature 11 done (paginated
   preview/print frames). Both outrank new tooling.
-- Library/setlist tooling slice (Features 12–18, Todo): in-place library song
-  editing, setlist duplication as a preset base, break seconds + delete
-  clarity (independent, any order), then the artist chain in order — 14
-  (artist records + logos) → 15 (library artist filter) → 16 (setlist artist
-  + per-artist picker + lock).
+- Library/setlist tooling slice: Features 12–17 are Todo, Feature 18 is Done.
+  In-place library song editing, setlist duplication as a preset base, and
+  break seconds. Features 12–13 and 17 are independent; 14 → 15 → 16 form the
+  artist chain: 14 (artist records + logos) → 15 (library artist filter) → 16
+  (setlist artist + per-artist picker + lock).
 - `tauri android init` / `ios init` on provisioned machines; native share.
 - Print QA on real A4 (checklist below), backup/restore, app versioning,
   signing/release automation (tracked in the roadmap, P3).
@@ -159,10 +159,12 @@ auto-fit loop and fit indicator, item add/remove/reorder, break insertion, and
 assertions that `@page { size: A4 }` exists and `#setlist-sheet` stays
 black-on-white. Plus Vitest units for `format.ts` (`parseDuration`,
 `formatDuration`, `formatRuntime`). Keep the harness small; paper QA stays
-manual by design. Features 12–18 land with the manual QA matrices in their
-specs (edit validation + id stability, duplicate fidelity, break conversion,
-delete flows, artist CRUD + adoption, filter combinations, lock gating +
-backup round trip); harness coverage follows the
+manual by design. Feature 18 has landed with its manual QA (button location
+at full and narrowed widths, confirm for persisted/draft setlists, cancel
+keeps everything, post-delete selection + logo cleanup). Features 12–17 land
+with the manual QA matrices in their specs (edit validation + id stability,
+duplicate fidelity, break conversion, artist CRUD + adoption, filter
+combinations, lock gating + backup round trip); harness coverage follows the
 same pattern once built.
 
 **Print QA checklist (manual, real A4, per engine — WebKitGTK now;

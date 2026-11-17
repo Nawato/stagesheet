@@ -211,7 +211,9 @@ change.
   minutes, comment), up/down + drag reorder, inline BPM/key/tuning editing,
   Comment fields for songs and breaks (max 140 chars) that render on the sheet,
   and logo upload with width/alignment controls. Oversized raster logos are
-  downscaled on import; SVG logos stay vector.
+  downscaled on import; SVG logos stay vector. Delete/Discard sits next to Save
+  in the header actions (away from Add break) and keeps the existing
+  confirmation for saved setlists and unsaved drafts.
 - Per-setlist "Sheet columns" toggles for Key, Tuning, Tempo (BPM), Time, and
   Comment, persisted with the setlist and applied to preview, print, and
   export. Column widths are per-combination presets summing to 100% with the
@@ -266,11 +268,10 @@ change.
 
 ### Still missing (per plan)
 
-- Planned library/setlist tooling (Features 12–18, Todo): in-place library
+- Planned library/setlist tooling (Features 12–17, Todo): in-place library
   song editing, setlist duplication as a preset base, managed artists
   (name + logo) with record-based library filter and per-artist setlist
-  picker + lock, break durations with second precision, and Delete-clarity
-  (Delete moves next to Save, away from Add Break).
+  picker + lock, and break durations with second precision.
 - Paginated split-setlist helper (duplicate setlist, move second half) as an
   alternative to multi-page mode.
 - Physical-paper QA on A4 (page count, header/footer per engine, legibility),

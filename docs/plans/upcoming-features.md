@@ -26,11 +26,12 @@ items and never changes the printed sheet. **Artists become records**
 setlists reference by id, replacing free-text matching everywhere new code is
 written (legacy `artist` text stays as a display fallback until adopted).
 
-## Shipped (Features 1–11) — summary
+## Shipped features — summary
 
 Full specs lived here until the 2026-11 cleanup; the contract facts below are
 all mirrored in `SKILL.md`, which is now the single authority for shipped
-behavior.
+behavior. Feature 18 (setlist Delete-clarity) is Done; its spec remains below
+as reference.
 
 - **Validation hardening (with Feature 2)** — Done. `Setlist::validate()` walks
   every item. Bounds enforced in Rust: break `duration_mins` `0..=600`, break
@@ -436,9 +437,9 @@ mode. No column, frame, print-CSS, or exporter change.
 2. Editor field + sheet/meta rendering.
 3. QA + `SKILL.md` + this file status + commit.
 
-## Feature 18: Delete-clarity (setlist) — Todo
+## Feature 18: Delete-clarity (setlist) — Done
 
-Status: Todo, tiny, independent. From user feedback: **Delete** sitting
+Status: Done, tiny, independent. From user feedback: **Delete** sitting
 directly next to **Add break** reads as "delete the break", and deleting a
 saved setlist must always ask first. The confirm already exists
 (`deleteCurrent`); this feature moves the button where it can't be
@@ -468,7 +469,8 @@ misread instead of adding new behavior.
 
 ### Build order
 
-1. Move + rename (+ Feature 13 button placement follows it).
+1. Move the button (label stays Delete; Feature 13's button placement follows
+   it).
 2. QA + this file status + commit.
 
 ## Roadmap backlog (prioritized)
@@ -482,11 +484,11 @@ misread instead of adding new behavior.
   (multi-page mode + sub-70% legibility nudge). Feature 13 adds setlist
   duplication; the remaining slice is a split-setlist helper (move second half
   to a new setlist) as an alternative to multi-page.
-- **P1 — Library/setlist tooling**: Feature 12 (edit library songs) and
-  Feature 13 (duplicate setlist as preset base) in any order; Feature 18
-  (delete clarity) and Feature 17 (break seconds) likewise independent. Then
-  the artist chain in order: 14 (artist records + logos) → 15 (library artist
-  filter) → 16 (setlist artist + per-artist picker + lock).
+- **P1 — Library/setlist tooling**: Feature 18 (delete clarity) is Done.
+  Feature 12 (edit library songs) and Feature 13 (duplicate setlist as preset
+  base) are independent; Feature 17 (break seconds) is likewise independent.
+  Then the artist chain in order: 14 (artist records + logos) → 15 (library
+  artist filter) → 16 (setlist artist + per-artist picker + lock).
 - **P1 — Backup/restore**: Done (Feature 7). One versioned JSON envelope for
   the full library + setlists; logos are re-imported manually in v1.
   Feature 14 adds the `artists` array without a version bump.
