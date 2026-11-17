@@ -77,6 +77,12 @@ CI (`.github/workflows/ci.yml`) runs `npm ci`, `npm run build`, and
 request. It installs the Linux Tauri packages above; it does not build bundles,
 initialise mobile projects, or sign anything.
 
+Releases (`.github/workflows/release.yml`) run on every `v*` tag push: Windows,
+Linux, and macOS (ARM) bundles are built with `tauri-action@v0` and
+auto-published as a GitHub Release. Keep `package.json`,
+`src-tauri/tauri.conf.json`, and `src-tauri/Cargo.toml` versions in sync, then
+`git tag vX.Y.Z && git push origin vX.Y.Z`. Builds are unsigned.
+
 ### Mobile targets
 
 The backend is already mobile-ready: the shared `lib.rs` + `mobile_entry_point` split is
@@ -269,4 +275,5 @@ change.
 - Selectable/vector PDF text (post-MVP via `typst`).
 - Android/iOS project initialization (`tauri android init` / `tauri ios init`) and
   native mobile share.
-- Signing and release automation (P3); CI covers the build/test gate only.
+- Signing (P3), including notarization; unsigned tag-push release automation for
+  Windows/Linux/macOS (ARM) already exists via `.github/workflows/release.yml`.
