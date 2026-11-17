@@ -116,20 +116,42 @@ All command handlers are async and return `Result<T, AppError>`:
 Argument names are camelCase on the JavaScript side (Tauri's default). Struct fields
 remain snake_case because they are the serialized contract.
 
-## What is implemented in this scaffold
+## Status: implemented vs. missing
+
+Tracked against `/home/nawato/.opencode/plan/stagesheet-upcoming-features.md` and the
+revised plan in `/home/nawato/.opencode/plan/stagesheet-plan.md`.
+
+### Currently implemented
 
 - Tauri v2 desktop app with the `lib.rs` / `main.rs` split needed for mobile targets.
 - Corrected data models including key, logo alignment enum, `NaiveDate`, and
   created/updated timestamps, with migration-friendly serde defaults and aliases.
 - JSON storage + capability scoping + the full command list above.
 - Song library with instant search and one-click add.
-- Setlist editor: title/venue/date, break insertion, up/down + drag reorder, inline
-  BPM/key/notes editing, logo upload with width/alignment controls.
+- Setlist editor: title/venue/date, break insertion (length in minutes + note),
+  up/down + drag reorder, inline BPM/key/notes editing, logo upload with
+  width/alignment controls.
 - A4 black-on-white preview with `@page`, repeated table header/footer on print, and
-  `break-inside: avoid` for rows. Printing uses the native webview print dialog
-  (Ctrl/Cmd + P).
+  `break-inside: avoid` for rows.
+- Single-A4 cap with automatic type shrink: the sheet is locked to one page and
+  scales down (minimum 50%) to fit, with a live fit indicator in the preview.
+- Printing through the native webview print dialog (Ctrl/Cmd + P).
 
-Deferred to later phases: PDF/PNG export (`html-to-image` + `jspdf`), per-page
-`page N / M` numbering (browsers cannot render `counter(page)` in `@page` margin
-boxes; this belongs in the PDF exporter), logo downscaling, native mobile share,
-and print QA on physical A4.
+### Still missing (per plan)
+
+- Song tuning field (free text) and its sheet column.
+- Customizable break block: custom label (Intermission, Encore, ...) on top of the
+  existing duration + note.
+- Unified comment field UX and length bounds for songs and breaks.
+- Toggleable sheet blocks (key, tuning, tempo, duration, comment) persisted per
+  setlist.
+- Multi-page A4 mode for setlists too long to stay legible on a single page.
+- PNG/PDF export (`html-to-image` + `jspdf`, A4) and the "open after export"
+  print flow.
+- Per-page `page N / M` numbering (belongs to the PDF exporter; browsers cannot
+  render `counter(page)` in `@page` margin boxes).
+- Backup/restore of library and setlists as a single JSON file.
+- Logo downscaling on import.
+- Android/iOS project initialization (`tauri android init` / `tauri ios init`) and
+  native mobile share.
+- Print QA on physical A4, plus CI, signing, and release automation.

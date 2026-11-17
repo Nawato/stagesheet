@@ -824,13 +824,18 @@ input[type="file"]::file-selector-button {
 .sheet-frame {
   flex: 0 0 auto;
   width: calc(210mm * var(--sheet-scale));
-  min-height: calc(297mm * var(--sheet-scale));
+  height: calc(297mm * var(--sheet-scale));
+  overflow: hidden;
 }
 
-/* The printable node. Hard rule: white background, black text. */
+/* The printable node. Hard rule: white background, black text.
+   Single-A4 cap: exact A4 height with overflow hidden; long setlists shrink
+   via --sheet-fit (zoom) instead of flowing onto a second page. */
 #setlist-sheet {
   width: 210mm;
-  min-height: 297mm;
+  height: 297mm;
+  max-height: 297mm;
+  overflow: hidden;
   padding: 13mm 12mm;
   overflow-wrap: anywhere;
   background: #fff;
@@ -839,6 +844,7 @@ input[type="file"]::file-selector-button {
   font-family: var(--font-sheet);
   font-size: 12pt;
   line-height: 1.3;
+  zoom: var(--sheet-fit, 1);
   box-shadow:
     0 18px 44px rgb(28 27 25 / 0.18),
     0 2px 6px rgb(28 27 25 / 0.12);

@@ -60,6 +60,9 @@
   #setlist-sheet {
     width: auto !important;
     min-height: 0 !important;
+    max-height: 271mm !important;
+    overflow: hidden !important;
+    zoom: var(--sheet-fit, 1) !important;
     margin: 0 !important;
     padding: 0 !important;
     background: #fff !important;

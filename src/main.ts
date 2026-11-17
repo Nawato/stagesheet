@@ -20,6 +20,9 @@ import {
 } from "./types";
 
 const A4_WIDTH_PX = (210 / 25.4) * 96;
+const A4_HEIGHT_PX = (297 / 25.4) * 96;
+const SHEET_FIT_MIN = 0.5;
+const SHEET_FIT_STEP = 0.05;
 
 // ---------------------------------------------------------------------------
 // State
@@ -81,6 +84,7 @@ const grayscaleLogoInput = byId<HTMLInputElement>("logo-grayscale");
 const sheet = byId<HTMLDivElement>("setlist-sheet");
 const sheetFrame = byId<HTMLDivElement>("sheet-frame");
 const sheetScroll = byId<HTMLDivElement>("sheet-scroll");
+const previewMeta = byId<HTMLParagraphElement>("preview-meta");
 
 // ---------------------------------------------------------------------------
 // Boot
@@ -206,7 +210,7 @@ async function init(): Promise<void> {
     await loadLogoForCurrent();
   }
   fitPreview();
-  document.fonts.ready.then(syncSheetHeight).catch(() => undefined);
+  document.fonts.ready.then(fitSheetToPage).catch(() => undefined);
 }
 
 // ---------------------------------------------------------------------------
@@ -785,10 +789,10 @@ function renderSheet(): void {
   renderSetlistSheet(sheet, current, {
     logoUrl: logoSrc,
     grayscaleLogo: grayscaleLogoInput.checked,
-    onLogoLayout: syncSheetHeight,
+    onLogoLayout: fitSheetToPage,
   });
   renderSummary();
-  syncSheetHeight();
+  fitSheetToPage();
 }
 
 function fitPreview(): void {
@@ -799,6 +803,39 @@ function fitPreview(): void {
   const rounded = Math.round(scale * 1000) / 1000;
   sheetScroll.style.setProperty("--sheet-scale", String(rounded));
   syncSheetHeight();
+}
+
+/**
+ * Shrink the sheet content (via --sheet-fit zoom) until it fits a single A4
+ * page. --sheet-fit also drives the print stylesheet, so the paper output
+ * matches the preview. Never grows content, only shrinks down to SHEET_FIT_MIN.
+ */
+function fitSheetToPage(): void {
+  sheet.style.setProperty("--sheet-fit", "1");
+  let fit = 1;
+
+  for (let i = 0; i < 12 && fit > SHEET_FIT_MIN; i += 1) {
+    // Reading offsetHeight forces a reflow, so each zoom step is measured.
+    if (sheet.offsetHeight <= A4_HEIGHT_PX + 2) break;
+    fit = Math.max(SHEET_FIT_MIN, Math.round((fit - SHEET_FIT_STEP) * 1000) / 1000);
+    sheet.style.setProperty("--sheet-fit", String(fit));
+  }
+
+  updateFitHint(fit);
+  syncSheetHeight();
+}
+
+function updateFitHint(fit: number): void {
+  if (fit >= 0.999) {
+    previewMeta.textContent = "A4 · 210 × 297 mm · black on white";
+    return;
+  }
+
+  const percent = Math.round(fit * 100);
+  const overfull = sheet.offsetHeight > A4_HEIGHT_PX + 2;
+  previewMeta.textContent = overfull
+    ? `A4 · single page · auto-fit ${percent}% — still overfull, remove items`
+    : `A4 · single page · auto-fit ${percent}%`;
 }
 
 function syncSheetHeight(): void {
