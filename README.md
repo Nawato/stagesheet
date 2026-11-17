@@ -37,6 +37,7 @@ src-tauri/
   src/error.rs       thiserror AppError (serialized to the frontend)
   capabilities/default.json
   tauri.conf.json
+docs/plans/          development plan (phases, QA, risks) + feature specs
 SKILL.md             schema and convention notes for coding agents
 ```
 
@@ -118,8 +119,10 @@ remain snake_case because they are the serialized contract.
 
 ## Status: implemented vs. missing
 
-Tracked against `/home/nawato/.opencode/plan/stagesheet-upcoming-features.md` and the
-revised plan in `/home/nawato/.opencode/plan/stagesheet-plan.md`.
+Tracked against the in-repo plans: `docs/plans/development-plan.md` (phases,
+QA strategy, risks) and `docs/plans/upcoming-features.md` (feature specs and
+backlog). Keep them — and this list — in sync in the same commit as each
+change.
 
 ### Currently implemented
 

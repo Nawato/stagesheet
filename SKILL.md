@@ -15,6 +15,9 @@ editing models, storage, IPC, or the printable sheet.
 4. All storage lives under `<app_data_dir>/stagesheet/`; the frontend `fs` capability
    is scoped to `$APPDATA/stagesheet/**`. Do not widen it.
 5. Every Tauri command is `async` and returns `Result<T, AppError>`.
+6. Logos are rendered only via `<img src>` (blob/data URLs). Never inline SVG
+   markup into the DOM: stored SVGs may contain scripts, and `<img>` is the
+   one context where they cannot execute.
 
 ## Data contract (`src-tauri/src/models.rs` and `src/types.ts`)
 
@@ -103,4 +106,6 @@ JS argument keys are camelCase (`setlistId`, `fileName`); model fields are snake
 
 - `cargo test` in `src-tauri`: model round-trips, first-draft JSON migration, reorder
   bounds, duration with breaks, storage CRUD, logo validation/traversal rejection.
+  (The `tauri` crate needs the `webkit2gtk-4.1` system libraries from the README to
+  compile, even for pure model tests.)
 - `npm run build`: TypeScript strict mode + Vite production bundle.
