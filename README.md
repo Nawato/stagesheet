@@ -9,16 +9,12 @@ white.
 Built with **Tauri v2**, **Rust**, **TypeScript**, and **Vite** (vanilla TS, no UI
 framework).
 
-## Hard rules
+## Print guarantee
 
-1. Printed output is **plain black text on white paper**, always A4 portrait
-   (`@page { size: A4 }`).
-2. The printable nodes are `<div id="setlist-sheet">` (single-page mode) and
-   its paginated clones in `<div id="sheet-pages">` (multiple-page mode, one
-   A4 frame per page). They must never receive a dark-stage theme, tinted
-   background, or colour-dependent styling.
-3. Setlist duration is computed in Rust (`Setlist::total_duration_secs`, exposed via
-   `setlist_duration`) from song durations plus breaks.
+StageSheet prints clean, stage-legible setlists: plain black text on white
+paper, always A4 portrait, with durations computed by the Rust backend. The
+full non-negotiable contract (print output, storage scope, IPC shape) lives
+in `SKILL.md`; agent notes live in `AGENTS.md`.
 
 ## Project layout
 
