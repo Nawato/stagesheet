@@ -180,27 +180,28 @@ on the page (preview, print, and export all follow).
   - `.cols-minimal` (title + time only): 8 / 72 / 20
 - UI wording: label BPM as **"Tempo (BPM)"** to match band vocabulary.
 
-## Feature 5: Multi-page A4 mode — Done
+## Feature 5: Multi-page A4 mode — Done (implemented; physical-paper QA pending)
 
-Status: shipped. `Setlist.page_mode` persists per setlist (`Single` default, so
-old files are unchanged), the editor has a Page layout Single/Multiple segmented
-control above the preview (44px targets, marks the setlist dirty), and both the
-preview and `window.print()` follow the mode. Multiple mode renders the sheet at
-its natural height with screen-only dashed A4 boundaries and an `≈ N pages`
-label; single mode keeps the `--sheet-fit` cap and warns when the measured fit
-drops below 70%. PDF export must still add page `N / M` numbering (Feature 6).
-Physical-paper QA (25 songs + 2 breaks on A4, WebKitGTK first) remains on the
-Phase 6 checklist.
+Status: implemented. `Setlist.page_mode` persists per setlist (`Single` default,
+so old files are unchanged), the editor has a Page layout Single/Multiple
+segmented control above the preview (44px targets, marks the setlist dirty), and
+both the preview and `window.print()` follow the mode. Multiple mode renders the
+sheet at its natural height with screen-only dashed A4 boundaries and an
+`≈ N pages` label; single mode keeps the `--sheet-fit` cap and warns when the
+measured fit drops below 70%. The fit loop measures the table height relative to
+the preview's `--sheet-scale` (see the 2026-11 review fix), so the required zoom
+and the overfull warning no longer change with the window width. PDF export adds
+page `N / M` numbering (Feature 6). Physical-paper QA (25 songs + 2 breaks on
+A4, WebKitGTK first) remains on the Phase 6 checklist.
 
-**Engine note (verified during implementation):** WebKitGTK's print path
-paginates rows correctly and honours `break-inside: avoid`, but it does **not**
-repeat `<thead>`/`<tfoot>` groups (WebKit bug 17205, still open). A 25-song
-WebKitGTK print-to-PDF run produced **3 A4 pages (=≈N) with intact
-rows, but no repeated header and the footer only on the last page**. The CSS keeps
-`display: table-header-group` / `table-footer-group` for engines that support
-it (Chromium-based WebView2 is expected to repeat them; verify in cross-engine
-QA). Fixing WebKitGTK needs manual per-page pagination or raster compositing
-(Feature 6), not CSS.
+**Engine note (accepted/deferred):** WebKitGTK's print path does not repeat
+`<thead>`/`<tfoot>` groups (WebKit bug 17205, still open); Chromium-based
+engines are expected to. The CSS keeps `display: table-header-group` /
+`table-footer-group` for engines that support it. Treat repetition and page-count
+results as engine-dependent and record them during the Phase 6 physical-A4 QA –
+do not commit a repro claim without the artifact. PDF export (Feature 6)
+composites captured header/footer crops on every page, so it does not depend on
+engine repetition.
 
 Problem: single-page auto-shrink bottoms out at 50% (~6pt body) — still
 overfull means clipped, illegible output. Multi-page is the legibility escape
@@ -249,68 +250,75 @@ hatch.
   expected on Chromium-based engines and currently fails on WebKitGTK (bug
   17205).
 
-## Feature 6: PDF/PNG export + direct print — Todo (spec reconciled with the Phase 5a spike)
+## Feature 6: PDF/PNG export + direct print — Done
 
-Phase 5a verdict: **GO (conditional)** — `html-to-image` + `jspdf` produce a
-faithful 300 dpi A4 raster and a sliced multi-page PDF in WebKitGTK 2.54, given
-a small preparation step. Full findings: `docs/plans/export-spike.md`. The spike
-invalidated five assumptions in the earlier spec:
+Status: implemented. The Phase 5a verdict was **GO (conditional)** for
+`html-to-image` + `jspdf` in WebKitGTK given the preparation step below; that
+prep ships in `src/exporter.ts`. The temporary spike note and harness were
+removed once the exporter landed.
 
-- **Never reuse `--sheet-fit`; capture full height and slice for every export.**
-  The sheet is locked to a fixed A4 box with `overflow: hidden`, so the fit
-  variable cannot describe its natural height, and a forced fit produces a
-  half-width page. Export prep must temporarily apply the `.multipage` layout
-  (`height: auto; max-height: none; overflow: visible; --sheet-fit: 1`), capture
-  the whole sheet at 2480 px wide (300 dpi ≈ A4), then slice at the 271 mm
-  content height and snap slice boundaries to row tops. A short setlist is one
-  slice/page. This applies to single and multiple mode alike.
-- **Logo: data URL only.** Blob URLs fail under the shipped CSP (`connect-src`)
-  and widening the CSP is not acceptable. Add an export-only
-  `storedLogoDataUrl()` (read the same scoped fs bytes, base64) and pass that to
-  the raster; keep blob URLs for the live preview. No fs capability change.
-- **Warm up the raster once per session.** The first `toCanvas` in a fresh
-  WebKitGTK WebView can omit the logo even though the live `<img>` is complete.
-  Run a throwaway small capture first, or verify the logo region and retry once.
-- **`<colgroup>` widths collapse in the clone.** Every cloned `<col>` carries
-  `width: 0px`, shifting/overlapping the data columns (the header row shifts
-  with the body). Export prep must remove the colgroup and either switch
-  `table-layout: auto` or insert a hidden/zero-height first row carrying the
-  measured cell widths (recommended: preserves the designed percentages), then
-  restore the DOM.
-- **Header/footer compositing is an explicit decision.** Raw slices repeat
-  neither: the brand header appears only on page 1 and the footer only on the
-  last page. Either capture header/footer separately and composite them on
-  every page (reducing the per-page content height), or keep raster PDF for
-  one-page/PNG output and use the native print path for paper. Note that
-  WebKitGTK's native print path does **not** repeat `thead`/`tfoot` either
-  (Feature 5 engine note), so compositing is the only way to guarantee repeated
-  headers in a PDF. Decide before building the PDF UI; do not ship slices with
-  missing headers/footers.
+What shipped:
 
-Rest of the export plan:
+- **Full-height capture, never `--sheet-fit`.** Export prep temporarily applies
+  the `.multipage` layout (`height: auto; max-height: none; overflow: visible;
+  --sheet-fit: 1`), removes the preview transform, captures the whole sheet at
+  2480 px wide (300 dpi A4), then restores the DOM. Single and multiple mode
+  export the same natural-height content; a short setlist becomes one slice.
+- **Column-width workaround.** The clone collapses every `<col>` width to 0 px in
+  WebKitGTK, so prep removes the `<colgroup>` and inserts a hidden zero-height
+  first row carrying the measured cell widths (keeping the designed fixed
+  layout). The colgroup, table style, sheet classes, inline styles, and logo
+  state are restored afterwards.
+- **Export-only data-URL logo.** `storedLogoDataUrl()` in `logo.ts` reads the
+  same scoped fs bytes and base64-encodes them; the live preview keeps its blob
+  URL. No CSP or fs-capability change. Logos are forced to grayscale for the
+  raster regardless of the preview toggle.
+- **Warm-up.** A throwaway small `toCanvas` runs once per session to avoid the
+  WebKitGTK first-capture blank-logo race.
+- **PDF.** `new jsPDF({ unit: "mm", format: "a4", orientation: "portrait",
+  compress: true })`, header + slice + footer images per page plus a vector
+  page number, exactly 210 × 297 mm. Slices cut at A4 height minus the
+  captured header/footer heights and snap to row tops. The header and
+  footer are composited on **every** page (raw slices would repeat neither, and
+  WebKitGTK's native print path does not repeat `thead`/`tfoot` either), and
+  `Page N / M` is stamped into the bottom margin. All sheet text is bitmap;
+  `window.print()` remains the text-sharp path. If the header/footer ever leave
+  less than 30 mm of content, the exporter falls back to raw 271 mm slices
+  rather than dropping rows.
+- **PNG.** The same full-sheet raster as one file. A sheet shorter than A4 is
+  padded to a 2480 × 3508 px (300 dpi A4) PNG; a long sheet stays tall. A sheet
+  whose natural height would exceed WebKit's canvas limit is downscaled
+  proportionally so the whole content exports at a lower effective dpi (normal
+  setlists stay at 300 dpi).
+- **Direct print + export-then-print.** The existing one-click Print button
+  (`window.print()`, Ctrl/⌘ + P) is unchanged; export does not try to print
+  silently. The preview toolbar adds **Export PDF**, **Export PNG**, and an
+  **Open after export** checkbox. After writing, the checkbox opens the file
+  through `tauri-plugin-opener` in the system viewer (where the OS print dialog
+  lives). The capability is scoped to `$HOME/**`, `$TEMP/**`, and the app-data
+  folder; the save dialog itself extends the fs scope to the chosen file. A file
+  saved outside those trees still writes, but the automatic open reports a clear
+  error instead of silently doing nothing.
+- **Current state, not last save.** Export renders the current editor state
+  through the same `sheet.ts` path, so `page_mode` and `sheet_options` are
+  reflected exactly. The save dialog defaults to the Downloads folder with a
+  sanitized `<title>.pdf` / `.png` name.
 
-- **Export PDF**: rasterize the full sheet once, slice, stamp `page N / M` on
-  each slice, and use `new jsPDF({ unit: "mm", format: "a4", orientation:
-  "portrait", compress: true })` with one `addImage` per page. Page size must be
-  exactly A4. All export text is bitmap; `window.print()` remains the
-  text-sharp path.
-- **PNG export**: same raster path, single file (the full sheet for long lists).
-- **Direct print**: keep one-click `window.print()` of the sheet (Ctrl/⌘+P
-  button) — multi-page mode already paginates it natively; no export step
-  needed for paper.
-- **Export-then-print flow**: after a PDF export, offer "Open PDF" (via
-  `tauri-plugin-opener` in the system viewer, where the OS print dialog lives).
-  Tauri has no silent-print API — every paper path ends in an OS print dialog.
-- **Buttons**: `Print` (immediate system dialog) + `Export PDF` (file, with an
-  "open after export" checkbox). No combined magic button until export is
-  proven. Do not ship the export UI before the prep work above lands.
-- **Deps**: `html-to-image@1.11.13` and `jspdf@4.2.1` are installed by the
-  spike. No CSP change expected; verify no violations during QA.
+Verified during implementation in the Phase 5a engine (WebKitGTK 2.54, temporary
+harness, no binaries committed): 2480 px captures, strictly grayscale output,
+zero CSP violations, DOM restore byte-for-byte, PDFs reported by `pdfinfo` as
+595.28 × 841.89 pt (A4) with repeated header/footer and page numbers, and
+roughly 1.5–2 s for a 3-page PDF (≈0.7 s for a PNG). Physical-paper QA and
+cross-engine (WebView2/WKWebView) verification remain on the Phase 6 checklist.
+
+Out of scope: selectable/vector PDF text (`typst` post-MVP), silent printing
+(no Tauri API; every paper path ends in an OS dialog), and PNG export of
+individually paginated pages (the PNG is the full sheet by design).
 
 ## Roadmap backlog (prioritized)
 
-- **P0 — PNG/PDF export + print**: Feature 6 (Phase 5a spike done, Feature 5
-  done).
+- **P0 — PNG/PDF export + print**: Feature 6 done. Physical-paper QA and
+  cross-engine checks remain in Phase 6.
 - **P0 — Overflow tooling for the single-A4 cap**: Feature 5 shipped
   (multi-page mode + sub-70% legibility nudge). Remaining slice: a
   split-setlist helper (duplicate setlist, move second half) as an alternative

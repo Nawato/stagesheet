@@ -128,7 +128,10 @@ Serde notes:
 - Writes: temp file + rename, serialized by a tokio mutex.
 - Logo file names are plain names (no separators, `..`, drive letters, or `:`).
 - Content sniffing decides the stored extension; never trust the client MIME type.
-- Capability: `$APPDATA/stagesheet/**` only; dialog open/save; no shell/network.
+- Capability: `$APPDATA/stagesheet/**` for the frontend `fs` plugin (the dialog
+  save/open integration extends it to the one selected file);
+  `opener:allow-open-path` is scoped to `$HOME/**`, `$TEMP/**`, and the app-data
+  folder; no shell or network permissions.
 
 ## IPC surface
 
@@ -183,9 +186,48 @@ JS argument keys are camelCase (`setlistId`, `fileName`); model fields are snake
   exports) plus an approximate `≈ N pages` label.
 - The single-page fit hint warns below ~70% auto-fit and points at multiple
   pages. It mirrors the applied table zoom measured from the painted table
-  height (the natural content height feeds only the multiple-page N estimate).
+  height relative to `--sheet-scale` (the preview transform must be divided out,
+  or the required fit changes with the window width and the overfull warning
+  never fires). The natural content height feeds only the multiple-page N
+  estimate.
 - `#setlist-sheet` must stay `background: #fff; color: #000` on screen and print.
 - Logos are forced to grayscale in print, regardless of the preview toggle.
+
+## Export (PDF / PNG)
+
+- Export lives in `src/exporter.ts` and is a **300 dpi raster** of the full
+  natural-height sheet (lower effective dpi only when a sheet exceeds WebKit's
+  canvas height limit), never the preview's fitted box. Prep temporarily applies
+  the `.multipage` layout, removes the preview transform, swaps in an
+  export-only data-URL logo, removes `<colgroup>`, inserts a hidden zero-height
+  first row carrying the measured column widths (WebKitGTK reports cloned
+  `<col>` widths as `0px`), and restores the DOM afterwards. Never reuse
+  `--sheet-fit` for export.
+- Blob URLs must not reach the raster: the production `connect-src` blocks their
+  fetch and WebKitGTK was unreliable even when allowed. `storedLogoDataUrl()` in
+  `logo.ts` base64-encodes the same scoped `readFile` bytes; the live preview
+  keeps blob URLs. Never widen the CSP or the fs capability for export.
+- Warm up the raster pipeline once per session with a throwaway `toCanvas`; the
+  first WebKitGTK capture can drop the logo even when the live `<img>` is
+  complete. Export always forces the logo to grayscale, regardless of the
+  preview toggle, and stays strictly black on white.
+- PDF: `jsPDF({ unit: "mm", format: "a4", orientation: "portrait", compress:
+  true })`, header + slice + footer images per page plus a vector page number. Slices cut at A4 height minus the captured
+  header/footer and snap to row tops. The header (brand + column labels) and
+  footer are composited on every page because raw slices repeat neither and
+  WebKitGTK's native print path does not repeat `thead`/`tfoot` (WebKit bug
+  17205). `Page N / M` is stamped in the bottom margin.
+- PNG: the same raster as one file; a short sheet is padded to A4
+  (2480 × 3508 px, 300 dpi), a long sheet stays tall. Sheets whose natural
+  height would exceed WebKit's canvas limit are downscaled proportionally
+  (whole sheet, lower effective dpi) rather than clipped.
+- Export renders the current editor state through the same `sheet.ts` path, so
+  `page_mode` and `sheet_options` apply. Page `N / M` appears only in PDFs. All
+  exported sheet text is bitmap; `window.print()` remains the text-sharp path.
+- Saving uses `dialog.save()` + `fs.writeFile` (the dialog extends the fs scope
+  to the selected file) and optionally `opener.openPath()` for the "Open after
+  export" checkbox. There is no silent-print API; direct print stays one-click
+  `window.print()`.
 
 ## Tests that must stay green
 
@@ -194,3 +236,6 @@ JS argument keys are camelCase (`setlistId`, `fileName`); model fields are snake
   (The `tauri` crate needs the `webkit2gtk-4.1` system libraries from the README to
   compile, even for pure model tests.)
 - `npm run build`: TypeScript strict mode + Vite production bundle.
+- Export fidelity is desktop-engine QA, not a unit test: a long setlist must
+  produce A4 pages with a visible logo, repeated header/footer, row-safe slices,
+  and page numbers; check the CSP console and the PDF with `pdfinfo`.

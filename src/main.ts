@@ -10,6 +10,8 @@ import {
   parseDuration,
   setlistDurationSecs,
 } from "./format";
+import { exportSetlist } from "./exporter";
+import type { ExportFormat } from "./exporter";
 import { storedLogoUrl } from "./logo";
 import { renderSetlistSheet } from "./sheet";
 import type { BreakItem, LogoAlignment, PageMode, Setlist, SheetOptions, Song } from "./types";
@@ -62,6 +64,9 @@ const setlistSelect = byId<HTMLSelectElement>("setlist-select");
 const newSetlistButton = byId<HTMLButtonElement>("new-setlist");
 const saveSetlistButton = byId<HTMLButtonElement>("save-setlist");
 const printButton = byId<HTMLButtonElement>("print-setlist");
+const exportPdfButton = byId<HTMLButtonElement>("export-pdf");
+const exportPngButton = byId<HTMLButtonElement>("export-png");
+const exportOpenAfterInput = byId<HTMLInputElement>("export-open-after");
 const deleteSetlistButton = byId<HTMLButtonElement>("delete-setlist");
 
 const songSearch = byId<HTMLInputElement>("song-search");
@@ -128,6 +133,12 @@ function bindEvents(): void {
   });
   printButton.addEventListener("click", () => {
     void printCurrent();
+  });
+  exportPdfButton.addEventListener("click", () => {
+    void exportCurrent("pdf");
+  });
+  exportPngButton.addEventListener("click", () => {
+    void exportCurrent("png");
   });
   deleteSetlistButton.addEventListener("click", () => {
     void deleteCurrent();
@@ -431,7 +442,7 @@ async function deleteCurrent(): Promise<void> {
 }
 
 async function printCurrent(): Promise<void> {
-  if (!current) return;
+  if (!current || exporting) return;
 
   if (dirty && backendAvailable) {
     const saved = await saveCurrent();
@@ -443,6 +454,73 @@ async function printCurrent(): Promise<void> {
     requestAnimationFrame(() => resolve());
   });
   window.print();
+}
+
+let exporting = false;
+
+/**
+ * Exports the current editor state (not the last saved copy). The exporter
+ * reuses the rendered sheet, so the selected page mode and column options are
+ * exactly what the preview shows. `window.print()` stays the text-sharp path.
+ */
+async function exportCurrent(format: ExportFormat): Promise<void> {
+  if (!current || exporting) return;
+  if (!backendAvailable) {
+    setStatus("Local backend unavailable — export needs the desktop app.", "error");
+    return;
+  }
+
+  // Make sure the preview DOM matches the editor state before rasterizing, then
+  // lock it: export prep mutates the live sheet, and `renderSheet` ignores edits
+  // until the finally block restores and re-renders.
+  renderSheet();
+  exporting = true;
+  printButton.disabled = true;
+  exportPdfButton.disabled = true;
+  exportPngButton.disabled = true;
+  setStatus(`Preparing ${format.toUpperCase()} export…`);
+
+  try {
+    const outcome = await exportSetlist({
+      sheet,
+      setlist: current,
+      format,
+      openAfterExport: exportOpenAfterInput.checked,
+    });
+
+    if (outcome.status === "canceled") {
+      setStatus("Export canceled.");
+      return;
+    }
+
+    const logoNote = outcome.logoWarning
+      ? ` The logo could not be read, so the export has no logo: ${outcome.logoWarning}`
+      : "";
+    const openNote = outcome.opened
+      ? " Opened in the system viewer."
+      : outcome.openError
+        ? ` The file was saved, but it could not be opened: ${outcome.openError}`
+        : "";
+    setStatus(
+      `Exported ${format.toUpperCase()}: ${baseName(outcome.path)}${logoNote}${openNote}`,
+      outcome.openError || outcome.logoWarning ? "error" : "success",
+    );
+  } catch (error) {
+    setStatus(`Export failed: ${describeError(error)}`, "error");
+  } finally {
+    exporting = false;
+    printButton.disabled = false;
+    exportPdfButton.disabled = false;
+    exportPngButton.disabled = false;
+    // Export prep mutates the sheet's inline styles and table markup; a fresh
+    // render restores the preview and re-applies the page-mode fit.
+    renderSheet();
+  }
+}
+
+function baseName(path: string): string {
+  const parts = path.split(/[\\/]/);
+  return parts[parts.length - 1] || path;
 }
 
 function confirmDiscard(): boolean {
@@ -890,6 +968,11 @@ function renderSummary(): void {
 }
 
 function renderSheet(): void {
+  // Export temporarily mutates the live sheet and holds the raster; ignoring
+  // edits here keeps the capture consistent. The export finally block renders
+  // the latest state once the sheet is restored.
+  if (exporting) return;
+
   if (!current) {
     sheet.replaceChildren();
     sheetPageMarks.replaceChildren();
@@ -934,6 +1017,10 @@ function fitPreview(): void {
  * the page count is estimated from the content instead.
  */
 function fitSheetToPage(): void {
+  // Export holds the sheet in its full-height layout; the finally block refits
+  // the preview once the DOM is restored.
+  if (exporting) return;
+
   applySheetFit(1);
 
   if (isMultiPage()) {
@@ -952,17 +1039,24 @@ function fitSheetToPage(): void {
   // Start from the measured natural height, rounded down to whole percent, then
   // verify against the painted height. Zoom changes the pre-zoom layout width
   // (the table keeps 100% width), so the first estimate can be off by a step.
+  //
+  // `#setlist-sheet` is scaled by --sheet-scale in the preview, and the painted
+  // rect includes that ancestor transform. The 271mm target is unscaled, so
+  // divide the measured height by the preview scale; otherwise the required fit
+  // changes with the window width and the overfull hint never fires.
   const target = A4_CONTENT_HEIGHT_PX;
+  const previewScale = currentSheetScale();
+  const tableHeight = (): number => table.getBoundingClientRect().height / previewScale;
   let fit = 1;
 
-  if (table.getBoundingClientRect().height > target + 1) {
-    const required = target / table.getBoundingClientRect().height;
+  if (tableHeight() > target + 1) {
+    const required = target / tableHeight();
     fit = Math.min(1, Math.max(SHEET_FIT_MIN, Math.floor(required * 100) / 100));
     applySheetFit(fit);
 
     for (let i = 0; i < 12 && fit > SHEET_FIT_MIN; i += 1) {
       // Reading the rect forces a reflow, so each zoom step is measured.
-      if (table.getBoundingClientRect().height <= target + 1) break;
+      if (tableHeight() <= target + 1) break;
       fit = Math.max(
         SHEET_FIT_MIN,
         Math.round((fit - SHEET_FIT_STEP) * 1000) / 1000,
@@ -971,7 +1065,7 @@ function fitSheetToPage(): void {
     }
   }
 
-  const overfull = table.getBoundingClientRect().height > target + 1;
+  const overfull = tableHeight() > target + 1;
   updateFitHint(fit, overfull);
   syncSheetHeight();
 }
@@ -1013,7 +1107,9 @@ function updateFitHint(fit: number, overfull: boolean): void {
 }
 
 function syncSheetHeight(): void {
+  if (exporting) return;
   requestAnimationFrame(() => {
+    if (exporting) return;
     const scale = currentSheetScale();
     sheetFrame.style.height = `${Math.ceil(sheet.offsetHeight * scale)}px`;
     renderPageMarks(scale);

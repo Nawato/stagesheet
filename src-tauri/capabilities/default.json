@@ -26,6 +26,14 @@
     {
       "identifier": "fs:allow-remove",
       "allow": [{ "path": "$APPDATA/stagesheet/**" }]
+    },
+    {
+      "identifier": "opener:allow-open-path",
+      "allow": [
+        { "path": "$HOME/**" },
+        { "path": "$TEMP/**" },
+        { "path": "$APPDATA/stagesheet/**" }
+      ]
     }
   ]
 }

@@ -39,7 +39,7 @@ Maintenance rules:
 | Storage | JSON files under `<app_data_dir>/stagesheet/` (songs.json, setlists/, logos/) | **Done** |
 | Plugins | `tauri-plugin-fs`, `tauri-plugin-dialog`, `tauri-plugin-opener` | **Done** |
 | Mobile share | No official Tauri v2 plugin; verify a community crate only when the feature is built | Deferred (P2) |
-| Export | DOM raster (`html-to-image`) + `jspdf` A4; pure-Rust vector PDF (`typst`) post-MVP | **Spike pending** (Phase 5a) |
+| Export | DOM raster (`html-to-image`) + `jspdf` A4; pure-Rust vector PDF (`typst`) post-MVP | **Done** (Phase 5a, Feature 6) |
 
 The data model itself is pinned in `SKILL.md`; this plan intentionally does not
 duplicate the struct definitions.
@@ -77,14 +77,16 @@ duplicate the struct definitions.
 - The app runs degraded without the backend (`backendAvailable = false`), which
   later makes browser-only e2e tests feasible (see QA strategy).
 
-### Phase 5 — A4 print + export — In progress
+### Phase 5 — A4 print + export — Done (physical-paper QA in Phase 6)
 
 Done: A4 black-on-white preview, native print via `window.print()`,
 `thead`/`tfoot` marked for repetition on print (Chromium is expected to repeat
 them; WebKitGTK does not — see Feature 5's engine note), `break-inside: avoid`,
 single-A4 cap with auto-fit table zoom (min 50%, applied and mirrored in the
 fit label), plus per-setlist multiple-page mode (`page_mode`) with preview page
-boundaries and an approximate page count.
+boundaries and an approximate page count. PDF/PNG export ships as a 300 dpi
+raster with full-height capture, sliced A4 pages, repeated header/footer, and
+`Page N / M`; the native print path remains the text-sharp paper route.
 The implemented print CSS uses explicit layout resets (`display: none` on
 chrome, static positioning for the sheet) rather than the original `visibility`
 trick — this is the reference approach; do not regress it.
@@ -104,8 +106,8 @@ Steps:
 3. Verify: fonts render (no fallback faces), the logo inlines (no blank box),
    strict black/white output, no canvas-taint or CSP errors, export completes
    in a couple of seconds, PDF page size is exactly A4.
-4. Record results in `docs/plans/export-spike.md` (delete the file once the
-   spike has landed in the main branch).
+4. Record results in a temporary spike note; delete it and the harness once the
+   exporter has shipped.
 
 Exit criteria: an A4 PDF that opens with correct dimensions and legible text at
 100% zoom, **or** a documented fallback decision (PNG-only export plus the OS
@@ -116,9 +118,9 @@ print path prints live DOM text and stays the text-sharp path for paper.
 
 Result: **GO (conditional)** for `html-to-image` + `jspdf` in WebKitGTK with a
 preparation step (full-height capture + slicing, data-URL logo, warm-up raster,
-colgroup workaround, header/footer decision). Findings and the reconciled
-Feature 6 spec live in `docs/plans/export-spike.md` and
-`docs/plans/upcoming-features.md`.
+colgroup workaround, header/footer decision). Findings were folded into
+`SKILL.md` and the Feature 6 implementation; the spike note and untracked
+harness were removed when the exporter shipped.
 
 ### Phase 6 — Cross-OS polish + QA/release — Todo
 
@@ -162,7 +164,7 @@ WebView2/WKWebView when available):**
 
 | Risk | Mitigation |
 | --- | --- |
-| `html-to-image` fidelity in WebKitGTK (SVG foreignObject) | Phase 5a spike decides before investment; PNG fallback; vector PDF via `typst` post-MVP |
+| `html-to-image` fidelity in WebKitGTK (SVG foreignObject) | Phase 5a spike verified the raster path with the prep step; cross-engine and physical-paper QA remain in Phase 6; PNG fallback and vector PDF via `typst` stay post-MVP options |
 | Print pagination differs per engine | Repeated thead/tfoot + `break-inside: avoid` already implemented; manual paper QA per engine |
 | `cargo test` needs webkit2gtk system libs locally and in CI | README prerequisite; CI installs the packages (P1); optional dependency-light test crate if blocked |
 | Temp+rename writes have no `fsync`; a crash can lose the newest write (Windows does remove+rename, widening the window) | Accepted for MVP; backup/restore (P1) gives users an escape hatch; add fsync if data loss is ever reported |
@@ -175,4 +177,9 @@ WebView2/WKWebView when available):**
   done (commits `ed09df4`, `db7f279`). Planning docs moved into the repo.
 - 2026-11-17: Features 1–5 shipped (tuning, break labels, comments, sheet
   column toggles, multiple-page mode); Phase 5a export spike closed GO
-  (conditional) with the Feature 6 spec updated to its findings.
+  (conditional). Feature 6 shipped the PDF/PNG exporter (full-height raster,
+  data-URL logo, colgroup workaround, repeated header/footer, page numbers,
+  open-after-export) and removed the spike note/harness. The single-page fit loop
+  now divides the painted table height by the preview scale so the applied zoom
+  and overfull warning are window-width independent. Physical-paper QA and
+  cross-engine status remain Phase 6.

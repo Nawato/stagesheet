@@ -773,6 +773,7 @@ input[type="file"]::file-selector-button {
 
 .preview-toolbar {
   display: flex;
+  flex-wrap: wrap;
   align-items: flex-end;
   justify-content: space-between;
   gap: 12px;
@@ -806,6 +807,26 @@ input[type="file"]::file-selector-button {
   border-radius: 999px;
   color: var(--ink-soft);
   font-size: 11px;
+  white-space: nowrap;
+}
+
+.preview-tools {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.preview-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.check-inline {
+  gap: 7px;
+  font-size: 12px;
   white-space: nowrap;
 }
 

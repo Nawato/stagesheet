@@ -211,7 +211,17 @@
               <h2 id="preview-heading">Print preview</h2>
               <p id="preview-meta">A4 · 210 × 297 mm · black on white</p>
             </div>
-            <span class="print-hint">Print: Ctrl / ⌘ + P</span>
+            <div class="preview-tools">
+              <div class="preview-actions" role="group" aria-label="Export setlist">
+                <button id="export-pdf" class="btn btn-small" type="button">Export PDF</button>
+                <button id="export-png" class="btn btn-small" type="button">Export PNG</button>
+              </div>
+              <label class="check check-inline">
+                <input id="export-open-after" type="checkbox" checked />
+                Open after export
+              </label>
+              <span class="print-hint">Print: Ctrl / ⌘ + P</span>
+            </div>
           </div>
 
           <fieldset class="sheet-options page-mode" aria-describedby="page-mode-hint">

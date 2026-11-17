@@ -25,6 +25,7 @@ src/
   types.ts           TypeScript mirror of the Rust IPC/JSON models
   api.ts             typed wrappers around the Tauri commands
   logo.ts            reads stored logos from the app-data directory
+  exporter.ts        PDF/PNG raster export + save/open flow
   format.ts          duration/date helpers
   styles/app.css     UI chrome + on-screen A4 sheet
   styles/print.css   @page A4 + black-on-white print rules
@@ -105,6 +106,17 @@ Logos are validated by content (PNG/JPEG magic bytes, SVG root tag), capped at 5
 and stored under a generated UUID name. Absolute paths are never persisted. Image
 downscaling is deferred until the export phase.
 
+## Exporting
+
+The preview toolbar writes the current setlist to PDF or PNG at 300 dpi A4,
+using the current page layout and sheet options. Export opens a system save
+dialog (defaults to Downloads) and optionally opens the saved file in the system
+viewer. PDFs repeat the captured header/footer on every page and stamp
+`Page N / M`; the PNG is a single full-sheet image. Exported text is bitmap by
+design — the `Print` button remains the direct, text-sharp paper path. Temporary
+files are never kept: the exporter captures the sheet, restores the preview,
+then writes the chosen file.
+
 ## Tauri commands
 
 All command handlers are async and return `Result<T, AppError>`:
@@ -146,8 +158,8 @@ change.
   next save reports the violation instead of truncating.
 - A4 black-on-white preview with `@page`, `break-inside: avoid` for rows, and
   table header/footer groups marked for repetition. Chromium-based engines are
-  expected to repeat them; WebKitGTK's print path currently does not (recorded
-  per engine in QA).
+  expected to repeat them; WebKitGTK's print path currently does not (WebKit bug
+  17205) — record the result per engine during QA.
   The `Tuning` column appears only when its toggle is on and at least one song in
   the setlist has tuning set.
 - Single-A4 cap with automatic type shrink: the sheet is locked to one page,
@@ -157,19 +169,32 @@ change.
   single-page cap and flows onto as many A4 pages as needed; the preview shows
   dashed page boundaries and an approximate page count, and single mode points
   at it when the required fit drops below ~70%. Persisted as `page_mode`, with
-  old files defaulting to Single.
+  old files defaulting to Single. The fit loop measures the table relative to the
+  preview scale, so the applied zoom and overfull warning do not change with the
+  window width.
+- PDF and PNG export at 300 dpi A4 (2480 px wide) through `html-to-image` + `jsPDF`. Export
+  temporarily lifts the sheet to its natural height, uses an export-only data-URL
+  logo, works around WebKitGTK's collapsed `<col>` widths, and restores the
+  preview. PDFs composite the captured header/footer on every page with
+  `Page N / M` stamped (per-page content ~221 mm after header/footer; raw
+  271 mm slices only as fallback), snap to row tops, and PNGs are a single
+  full-sheet file (padded to A4 2480 × 3508 when short). A sheet long enough to
+  exceed WebKit's canvas-height limit is downscaled proportionally (whole sheet,
+  lower effective dpi) instead of clipped. The preview toolbar also has an
+  "Open after export" option that opens the saved file in the system viewer
+  through `tauri-plugin-opener`. Exported text is bitmap by design.
 - Printing through the native webview print dialog (Ctrl/Cmd + P); the print
-  output follows the selected page layout.
+  output follows the selected page layout and remains the text-sharp paper path.
 
 ### Still missing (per plan)
 
-- PNG/PDF export (`html-to-image` + `jspdf`, A4) and the "open after export"
-  print flow; the Phase 5a spike is done and the Feature 6 spec is reconciled
-  with its findings (`docs/plans/export-spike.md`).
-- Per-page `page N / M` numbering (belongs to the PDF exporter; browsers cannot
-  render `counter(page)` in `@page` margin boxes).
+- Physical-paper QA on A4 (page count, header/footer repetition per engine,
+  legibility), plus cross-engine (WebView2/WKWebView) export checks. WebKitGTK
+  does not repeat `thead`/`tfoot` in native print (WebKit bug 17205); the PDF
+  exporter composites them itself.
+- Selectable/vector PDF text (post-MVP via `typst`).
 - Backup/restore of library and setlists as a single JSON file.
 - Logo downscaling on import.
 - Android/iOS project initialization (`tauri android init` / `tauri ios init`) and
   native mobile share.
-- Print QA on physical A4, plus CI, signing, and release automation.
+- CI, signing, and release automation.
