@@ -38,7 +38,7 @@ pub struct Song {
     pub key: Option<String>,       // e.g. "Em"
     pub tuning: Option<String>,    // e.g. "Drop D"; trimmed, ≤ 24 chars
     pub duration_secs: Option<u32>,
-    pub notes: Option<String>,
+    pub notes: Option<String>,     // "Comment" in the UI; ≤ 140 chars
 }
 
 pub enum SetlistItem {
@@ -73,8 +73,8 @@ Serde notes:
 - `Song.tuning` and `Break.label` are trimmed in both directions;
   whitespace-only values serialize as `null` and deserialize as `None`, so
   pre-feature files stay equal to new ones. Comments (`Song.notes`,
-  `Break.note`) are trimmed by the UI and counted after trim, but not rewritten
-  by serde.
+  `Break.note`) are labeled "Comment" in the UI, trimmed there and counted after
+  trim, but not rewritten by serde; both are bounded at 140 chars on save.
 - Validation runs **on save only** (`Setlist::validate`), never during
   deserialization: old files with over-long values still load, and their next
   save fails with a clear message. No silent truncation.
@@ -120,11 +120,12 @@ JS argument keys are camelCase (`setlistId`, `fileName`); model fields are snake
 - `<thead>` carries the logo/title/venue/date header and column labels; it repeats on
   every printed page. `<tfoot>` repeats the footer.
 - Rows use `.song-row` / `.break-row` and must keep `break-inside: avoid`.
-- A break row renders `[label] · [duration] · [comment]` inside one full-width
-  dashed cell: the label defaults to `Break`, is bold/uppercase, and the
-  duration is always shown. The label and comment will be gated by the Feature 4
-  `show_comment` toggle; keep their text lookups in helpers (`breakLabelText`,
-  `breakCommentText` in `sheet.ts`).
+- Song comments render under the title in the song cell; a blank comment emits
+  no element. Break rows render `[label] · [duration] · [comment]` inside one
+  full-width dashed cell: the label defaults to `Break`, is bold/uppercase, and
+  the duration is always shown. The label and comments will be gated by the
+  Feature 4 `show_comment` toggle; keep their text lookups in helpers
+  (`songCommentText`, `breakLabelText`, `breakCommentText` in `sheet.ts`).
 - Typography targets: title 22–26pt bold, meta 11–12pt, song rows 12–14pt, tabular
   figures for numbers/BPM/key.
 - Screen preview is a real A4 box scaled with `--sheet-scale`; print resets the

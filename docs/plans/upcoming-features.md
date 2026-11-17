@@ -114,10 +114,12 @@ needed beyond the serde default for `label`.
 
 ## Feature 3: Comment field on songs + breaks — In progress
 
-Status: both halves already exist (`Song.notes`, `Break.note`) — this feature
-unifies and bounds them. The UI now labels both **"Comment"**, the add form has
-`maxlength=140`, and Rust rejects >140 chars after trim (shipped with Feature
-2). Remaining: the sheet-level Comment toggle, which lives in Feature 4.
+Status: bounds + UX are done. `Song.notes` and `Break.note` stay serialized
+under their original names, are labeled **"Comment"** in the library form and
+both editor panels, carry `maxlength=140`, and are rejected on save when longer
+than 140 chars after trim (shipped with Feature 2). Song comments render under
+the title and break comments inline, with blank values emitting no element. The
+only remainder is the sheet-level **Comment toggle**, which ships with Feature 4.
 
 - Keep serialized names (`notes` / `note`) for JSON back-compat; label both
   **"Comment"** in the library form and editor so users find the same concept

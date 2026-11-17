@@ -1264,13 +1264,22 @@ function ensureBackend(): boolean {
 }
 
 function describeError(error: unknown): string {
-  if (typeof error === "string") return error;
-  if (error instanceof Error) return error.message;
-  try {
-    return JSON.stringify(error);
-  } catch {
-    return String(error);
+  let message: string;
+  if (typeof error === "string") {
+    message = error;
+  } else if (error instanceof Error) {
+    message = error.message;
+  } else {
+    try {
+      message = JSON.stringify(error) ?? String(error);
+    } catch {
+      message = String(error);
+    }
   }
+
+  // `AppError::InvalidInput` serializes as "invalid input: ...". The prefix is
+  // backend jargon; the payload is already written for the status line.
+  return message.replace(/^invalid input:\s*/i, "");
 }
 
 /** UUID v4 with a fallback for webviews without `crypto.randomUUID`. */

@@ -134,8 +134,9 @@ change.
 - Song library with instant search and one-click add, including free-text tuning
   (max 24 chars) in search, the add form, and each song's editor details.
 - Setlist editor: title/venue/date, break insertion (custom label, length in
-  minutes, comment), up/down + drag reorder, inline BPM/key/tuning/comment
-  editing, logo upload with width/alignment controls.
+  minutes, comment), up/down + drag reorder, inline BPM/key/tuning editing,
+  Comment fields for songs and breaks (max 140 chars) that render on the sheet,
+  and logo upload with width/alignment controls.
 - Validation hardening on save: break length `0..=600`, break label ≤ 24 chars,
   and song/break comments ≤ 140 chars (after trim). Old files still load; their
   next save reports the violation instead of truncating.

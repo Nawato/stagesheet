@@ -186,7 +186,8 @@ impl Song {
             // Count the trimmed value so stray padding cannot fail validation.
             if notes.trim().chars().count() > MAX_COMMENT_CHARS {
                 return Err(format!(
-                    "song comment must be at most {MAX_COMMENT_CHARS} characters"
+                    "song \"{}\" comment must be at most {MAX_COMMENT_CHARS} characters (shorten it and save again)",
+                    self.title.trim()
                 ));
             }
         }
@@ -286,7 +287,7 @@ impl SetlistItem {
                 if let Some(note) = note {
                     if note.trim().chars().count() > MAX_COMMENT_CHARS {
                         return Err(format!(
-                            "break comment must be at most {MAX_COMMENT_CHARS} characters"
+                            "break comment must be at most {MAX_COMMENT_CHARS} characters (shorten it and save again)"
                         ));
                     }
                 }
@@ -744,7 +745,12 @@ mod tests {
         assert!(song.validate().is_ok(), "padding must not count");
 
         song.notes = Some("x".repeat(MAX_COMMENT_CHARS + 1));
-        assert!(song.validate().is_err());
+        let error = song.validate().expect_err("one char over the limit fails");
+        assert!(error.contains("Opener"), "error names the song: {error}");
+        assert!(
+            error.contains("shorten it"),
+            "error explains the next step: {error}"
+        );
 
         let mut setlist = Setlist::new("Gig");
         setlist.items.push(SetlistItem::Song(song));
@@ -768,7 +774,13 @@ mod tests {
         if let SetlistItem::Break { note, .. } = &mut break_item {
             *note = Some("x".repeat(MAX_COMMENT_CHARS + 1));
         }
-        assert!(break_item.validate().is_err());
+        let error = break_item
+            .validate()
+            .expect_err("one char over the limit fails");
+        assert!(
+            error.contains("break comment") && error.contains("shorten it"),
+            "break error explains the problem: {error}"
+        );
 
         let mut setlist = Setlist::new("Gig");
         setlist.items.push(break_item);

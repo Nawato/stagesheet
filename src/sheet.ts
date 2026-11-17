@@ -180,9 +180,10 @@ function buildSongRow(song: Song, number: number, hasTuning: boolean): HTMLTable
   if (song.artist?.trim()) {
     songCell.append(el("span", "song-artist", song.artist.trim()));
   }
-  if (song.notes?.trim()) {
-    songCell.append(el("span", "song-notes", song.notes.trim()));
-  }
+  // Feature 4 will gate the song comment behind `show_comment`; keeping the
+  // lookup in a helper means that toggle only changes this call.
+  const commentText = songCommentText(song.notes);
+  if (commentText) songCell.append(el("span", "song-notes", commentText));
   row.append(songCell);
 
   row.append(cell("col-key tabular", song.key?.trim() || "—"));
@@ -216,6 +217,12 @@ function buildBreakRow(
 
   row.append(cellNode);
   return row;
+}
+
+/** Song comment, or `null` when empty (Feature 4 will also gate it). */
+function songCommentText(note: string | null | undefined): string | null {
+  const trimmed = note?.trim();
+  return trimmed ? trimmed : null;
 }
 
 /** Custom label, falling back to the generic `Break` heading. */
