@@ -127,9 +127,9 @@ harness were removed when the exporter shipped.
 
 - Minimal frontend test harness (see QA strategy) and 44px touch targets. CI
   (`.github/workflows/ci.yml`) already runs the frontend build and Rust tests.
-- Sheet correctness fixes from real use (Features 10–11 in
-  `upcoming-features.md`): column-width rebalance + header alignment, and
-  paginated preview/print frames. Both outrank new tooling.
+- Sheet correctness fixes from real use: Feature 10 done (per-combination
+  column widths + header alignment); Feature 11 pending (paginated
+  preview/print frames). Both outrank new tooling.
 - `tauri android init` / `ios init` on provisioned machines; native share.
 - Print QA on real A4 (checklist below), backup/restore, app versioning,
   signing/release automation (tracked in the roadmap, P3).
@@ -176,7 +176,7 @@ WebView2/WKWebView when available):**
 | `cargo test` needs webkit2gtk system libs locally and in CI | README prerequisite; `.github/workflows/ci.yml` installs the packages; optional dependency-light test crate if blocked |
 | Temp+rename writes have no `fsync`; a crash can lose the newest write (Windows does remove+rename, widening the window) | Accepted for MVP; backup/restore (P1) gives users an escape hatch; add fsync if data loss is ever reported |
 | `songs.json` degrades past ~1000 songs / slow search | Trigger to migrate to SQLite (P3) |
-| Count-based column presets drift for some toggle combos | Feature 10: per-combination widths summing to 100% + alignment QA matrix |
+| Count-based column presets drifted for some toggle combos | Fixed by Feature 10: per-combination widths summing to 100% + alignment QA matrix |
 | Tall-sheet + overlay preview reads as cut-off text | Feature 11: paginated A4 frames with repeated header/footer for preview and print |
 | `zoom` in print CSS is WebKit/Blink-only | All Tauri engines are WebKit-family; revisit only if a plain-browser build is ever shipped |
 
@@ -201,3 +201,6 @@ WebView2/WKWebView when available):**
   overlays, no repeated header/footer). Tracked as Features 10 (widths
   rebalance + alignment matrix) and 11 (paginated preview/print frames);
   both P0, above new tooling.
+- 2026-11-17: Feature 10 shipped (per-combination column presets summing to
+  100%, colgroup-only widths, header/body alignment symmetry). Feature 11
+  (paginated preview/print frames) remains Todo.

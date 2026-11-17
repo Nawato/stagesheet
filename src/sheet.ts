@@ -26,6 +26,22 @@ interface SheetVisibility {
   showComment: boolean;
 }
 
+type InfoColumn = "key" | "tuning" | "bpm" | "time";
+
+/** Info columns in canonical order; widths are keyed off the visible subset. */
+const INFO_COLUMNS: ReadonlyArray<{
+  key: InfoColumn;
+  label: string;
+  className: string;
+}> = [
+  { key: "key", label: "Key", className: "col-key" },
+  { key: "tuning", label: "Tuning", className: "col-tuning" },
+  // The editor toggle says "Tempo (BPM)"; the sheet keeps the compact BPM
+  // heading so it stays legible in the narrow numeric column.
+  { key: "bpm", label: "BPM", className: "col-bpm" },
+  { key: "time", label: "Time", className: "col-time" },
+];
+
 export function renderSetlistSheet(
   root: HTMLElement,
   setlist: Setlist,
@@ -49,19 +65,27 @@ export function renderSetlistSheet(
     showComment: sheetOptions.show_comment,
   };
 
+  const infoColumns = INFO_COLUMNS.filter((column) => {
+    switch (column.key) {
+      case "key":
+        return visibility.showKey;
+      case "tuning":
+        return visibility.hasTuning;
+      case "bpm":
+        return visibility.showTempo;
+      case "time":
+        return visibility.showDuration;
+    }
+  });
+
   const columns: Array<[string, string]> = [
     ["#", "col-index"],
     ["Song", "col-song"],
+    ...infoColumns.map((column): [string, string] => [column.label, column.className]),
   ];
-  if (visibility.showKey) columns.push(["Key", "col-key"]);
-  if (visibility.hasTuning) columns.push(["Tuning", "col-tuning"]);
-  // The editor toggle says "Tempo (BPM)"; the sheet keeps the compact BPM
-  // heading so it stays legible in the narrow numeric column.
-  if (visibility.showTempo) columns.push(["BPM", "col-bpm"]);
-  if (visibility.showDuration) columns.push(["Time", "col-time"]);
   const columnCount = columns.length;
 
-  const table = el("table", sheetTableClass(columnCount));
+  const table = el("table", sheetTableClass(infoColumns.map((column) => column.key)));
   const caption = el(
     "caption",
     "sr-only",
@@ -272,15 +296,24 @@ function breakCommentText(note: string | null | undefined): string | null {
 }
 
 /**
- * Width preset for the visible column set. The three named presets come from
- * the Feature 4 spec; `cols-2`/`cols-4` cover toggle combinations that leave
- * fewer columns visible.
+ * Width preset for the visible info-column combination. The presets are
+ * per-combination, not per-count: every visible set sums to 100% in app.css so
+ * fixed table layout does not redistribute slack. `.cols-5` and
+ * `.cols-5-tuning` are the Feature 4 / Feature 1 anchors; the rest are derived
+ * from the same proportions. Keep this mapping in sync with app.css.
  */
-function sheetTableClass(columnCount: number): string {
-  if (columnCount >= 6) return "sheet-table cols-5-tuning";
-  if (columnCount === 5) return "sheet-table cols-5";
-  if (columnCount === 3) return "sheet-table cols-minimal";
-  return `sheet-table cols-${columnCount}`;
+function sheetTableClass(infoColumns: readonly InfoColumn[]): string {
+  if (infoColumns.length === 0) return "sheet-table cols-2";
+  if (infoColumns.length === 1) return `sheet-table cols-3-${infoColumns[0]}`;
+  if (infoColumns.length === 2) return `sheet-table cols-4-${infoColumns.join("-")}`;
+  if (infoColumns.length === 3) {
+    // `.cols-5` is the verified key/bpm/time anchor; its narrow columns are
+    // interchangeable, so it also covers tuning/time and key/tuning/time.
+    return infoColumns.includes("time")
+      ? "sheet-table cols-5"
+      : "sheet-table cols-5-no-time";
+  }
+  return "sheet-table cols-5-tuning";
 }
 
 function cell(className: string, text: string): HTMLTableCellElement {

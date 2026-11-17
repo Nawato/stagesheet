@@ -1096,9 +1096,11 @@ input[type="file"]::file-selector-button {
   text-align: right;
 }
 
-/* Column width presets, selected from the visible set by `sheet.ts`.
-   Percentages are starting values to verify on paper; fixed table layout keeps
-   the song column dominant and rebalances the numeric columns. */
+/* Column width presets, selected from the visible combination by `sheet.ts`.
+   Every preset sums to 100% for its columns, so `table-layout: fixed` never
+   distributes slack and the header row keeps the same grid as the body.
+   `<colgroup>` is the only width source: do not add width rules to `th`.
+   Anchors: `.cols-5` (Feature 4) and `.cols-5-tuning` (Feature 1). */
 
 /* Index + song (every optional column switched off). */
 .sheet-table.cols-2 col.col-index {
@@ -1109,46 +1111,77 @@ input[type="file"]::file-selector-button {
   width: 92%;
 }
 
-/* Index + song + one info column (duration-only is the primary case). */
-.sheet-table.cols-minimal col.col-index {
-  width: 8%;
-}
-
-.sheet-table.cols-minimal col.col-song {
-  width: 72%;
-}
-
-.sheet-table.cols-minimal col.col-key,
-.sheet-table.cols-minimal col.col-tuning,
-.sheet-table.cols-minimal col.col-bpm,
-.sheet-table.cols-minimal col.col-time {
-  width: 20%;
-}
-
-/* Index + song + two info columns. */
-.sheet-table.cols-4 col.col-index {
+/* Index + song + one info column. Key/tuning/bpm are narrow; Time is wider. */
+.sheet-table.cols-3-key col.col-index,
+.sheet-table.cols-3-tuning col.col-index,
+.sheet-table.cols-3-bpm col.col-index,
+.sheet-table.cols-3-time col.col-index {
   width: 7%;
 }
 
-.sheet-table.cols-4 col.col-song {
-  width: 63%;
+.sheet-table.cols-3-key col.col-song,
+.sheet-table.cols-3-tuning col.col-song,
+.sheet-table.cols-3-bpm col.col-song {
+  width: 83%;
 }
 
-.sheet-table.cols-4 col.col-key,
-.sheet-table.cols-4 col.col-tuning {
-  width: 12%;
+.sheet-table.cols-3-time col.col-song {
+  width: 75%;
 }
 
-.sheet-table.cols-4 col.col-bpm {
+.sheet-table.cols-3-key col.col-key,
+.sheet-table.cols-3-tuning col.col-tuning,
+.sheet-table.cols-3-bpm col.col-bpm {
   width: 10%;
 }
 
-.sheet-table.cols-4 col.col-time {
+.sheet-table.cols-3-time col.col-time {
   width: 18%;
 }
 
-/* Feature 4 baseline: index, song, key, bpm, time. Tuning uses the same
-   width as key/bpm when it replaces one of them. */
+/* Index + song + two info columns (the six key/tuning/bpm/time pairs). */
+.sheet-table.cols-4-key-tuning col.col-index,
+.sheet-table.cols-4-key-bpm col.col-index,
+.sheet-table.cols-4-key-time col.col-index,
+.sheet-table.cols-4-tuning-bpm col.col-index,
+.sheet-table.cols-4-tuning-time col.col-index,
+.sheet-table.cols-4-bpm-time col.col-index {
+  width: 7%;
+}
+
+.sheet-table.cols-4-key-tuning col.col-song,
+.sheet-table.cols-4-key-bpm col.col-song,
+.sheet-table.cols-4-tuning-bpm col.col-song {
+  width: 73%;
+}
+
+.sheet-table.cols-4-key-time col.col-song,
+.sheet-table.cols-4-tuning-time col.col-song,
+.sheet-table.cols-4-bpm-time col.col-song {
+  width: 65%;
+}
+
+.sheet-table.cols-4-key-tuning col.col-key,
+.sheet-table.cols-4-key-bpm col.col-key,
+.sheet-table.cols-4-key-time col.col-key,
+.sheet-table.cols-4-key-tuning col.col-tuning,
+.sheet-table.cols-4-tuning-bpm col.col-tuning,
+.sheet-table.cols-4-tuning-time col.col-tuning,
+.sheet-table.cols-4-key-bpm col.col-bpm,
+.sheet-table.cols-4-tuning-bpm col.col-bpm,
+.sheet-table.cols-4-bpm-time col.col-bpm {
+  width: 10%;
+}
+
+.sheet-table.cols-4-key-time col.col-time,
+.sheet-table.cols-4-tuning-time col.col-time,
+.sheet-table.cols-4-bpm-time col.col-time {
+  width: 18%;
+}
+
+/* Feature 4 baseline: index, song, key, bpm, time. Tuning uses the same width
+   as key/bpm when it replaces one of them, so this preset also covers
+   key/tuning/time and tuning/bpm/time. */
 .sheet-table.cols-5 col.col-index {
   width: 7%;
 }
@@ -1165,6 +1198,22 @@ input[type="file"]::file-selector-button {
 
 .sheet-table.cols-5 col.col-time {
   width: 18%;
+}
+
+/* Key + tuning + bpm with Time off: the narrow columns stay fixed and the
+   song column takes the freed 8%, so the total still lands on 100%. */
+.sheet-table.cols-5-no-time col.col-index {
+  width: 7%;
+}
+
+.sheet-table.cols-5-no-time col.col-song {
+  width: 63%;
+}
+
+.sheet-table.cols-5-no-time col.col-key,
+.sheet-table.cols-5-no-time col.col-tuning,
+.sheet-table.cols-5-no-time col.col-bpm {
+  width: 10%;
 }
 
 /* Feature 1 six-column layout (all info columns visible). */
@@ -1197,6 +1246,16 @@ input[type="file"]::file-selector-button {
   border-bottom: 0.4pt solid #bdbdbd;
   font-size: 13pt;
   vertical-align: top;
+}
+
+/* Numeric body values share the header's right edge. Horizontal padding is
+   1.5mm on both sides for th and td; keep the two in sync. */
+.song-row .col-index,
+.song-row .col-key,
+.song-row .col-tuning,
+.song-row .col-bpm,
+.song-row .col-time {
+  text-align: right;
 }
 
 .song-row .col-index {

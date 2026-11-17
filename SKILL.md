@@ -154,10 +154,16 @@ JS argument keys are camelCase (`setlistId`, `fileName`); model fields are snake
   `Tuning` additionally requires at least one song in the setlist to have tuning
   set. The editor labels the tempo toggle **"Tempo (BPM)"**; the sheet keeps the
   compact `BPM` heading.
-- The table carries a width preset for the visible column count: `.cols-5`
-  (baseline 7/55/10/10/18), `.cols-5-tuning` (six columns,
-  6/50/9/10/9/16), `.cols-minimal` (index/song and one info column, 8/72/20),
-  plus `.cols-2` / `.cols-4` fallbacks for toggle combinations in between.
+- The table carries a width preset named for its visible column combination,
+  never the count: `.cols-2` (index/song, 8/92);
+  `.cols-3-key|tuning|bpm` (7/83/10) and `.cols-3-time` (7/75/18);
+  `.cols-4-key-tuning|key-bpm|tuning-bpm` (7/73/10/10),
+  `.cols-4-key-time|tuning-time|bpm-time` (7/65/10/18);
+  `.cols-5` (any three info columns incl. Time, 7/55/10/10/18);
+  `.cols-5-no-time` (key+tuning+bpm, 7/63/10/10/10); and `.cols-5-tuning`
+  (all four info columns, 6/50/9/10/9/16). Every preset sums to 100%. The
+  `<colgroup>` is the only width source — never add `th` width rules — and the
+  numeric header/body cells share right alignment and 1.5 mm horizontal padding.
 - `<thead>` carries the logo/title/venue/date header and column labels; `<tfoot>`
   carries the footer. Both are marked as table header/footer groups
   (`display: table-header-group` / `table-footer-group`). Chromium-based engines

@@ -10,7 +10,7 @@ notes }` (`src-tauri/src/models.rs`, `src/types.ts`). Setlist items store Song
 sheet defaults to a single A4 page with auto-fit shrink (`--sheet-fit`, min
 50%), implemented in `main.ts` (`fitSheetToPage`) and `print.css`; per-setlist
 `page_mode` (Feature 5) opts into multiple pages instead. Column widths come
-from count-based presets in `app.css` (see Feature 10 for the known gaps);
+from per-combination presets in `app.css` (Feature 10; each sums to 100%);
 multi-page preview uses dashed separator overlays (see Feature 11).
 
 Decisions locked in: tuning is a **free-text optional field** (same pattern as
@@ -180,10 +180,10 @@ on the page (preview, print, and export all follow).
   - `.cols-5` (today's baseline): index 7 / song 55 / key 10 / bpm 10 / time 18
   - `.cols-5-tuning` (Feature 1): 6 / 50 / 9 / 10 / 9 / 16
   - `.cols-minimal` (title + time only): 8 / 72 / 20
-- Known issue (see Feature 10): the `.cols-4` and `.cols-minimal` presets do
-  not sum to 100% for every toggle combination (e.g. key+bpm = 92%), so the
-  header/body alignment drifts when some toggles are off. Do not extend the
-  count-based presets; fix per Feature 10 instead.
+- Known issue at the time (resolved by Feature 10): the count-based `.cols-4`
+  and `.cols-minimal` presets did not sum to 100% for every toggle combination
+  (e.g. key+bpm = 92%), so header/body alignment drifted when some toggles were
+  off. Feature 10 replaced them with per-combination presets.
 - UI wording: label BPM as **"Tempo (BPM)"** to match band vocabulary.
 
 ## Feature 5: Multi-page A4 mode — Done (implemented; physical-paper QA pending)
@@ -406,7 +406,18 @@ fidelity. It still trims stored file size, decode memory, and disk use. At the
 
 Verification: `npm run build` and `cargo test` (37 tests).
 
-## Feature 10: Column widths rebalance + header alignment — Todo (P0 fix)
+## Feature 10: Column widths rebalance + header alignment — Done
+
+Status: shipped. `sheet.ts` selects a preset from the visible info-column
+combination instead of the column count: `.cols-2`, `.cols-3-{key,tuning,bpm,
+time}`, `.cols-4-{key-tuning,key-bpm,key-time,tuning-bpm,tuning-time,bpm-time}`,
+`.cols-5` (any three info columns including Time), `.cols-5-no-time` (the three
+narrow columns), and `.cols-5-tuning` (all four). Every preset sums to 100% in
+`app.css`, so fixed table layout no longer redistributes slack. `<colgroup>` is
+the only width source; the numeric body cells now share the header's right
+alignment and 1.5 mm horizontal padding. Print and export follow unchanged:
+both render through the same `sheet.ts` path, and the exporter reads measured
+header widths.
 
 Reported from real use: with some sheet toggles off, the table header no
 longer aligns with the body text. Root cause: widths come from count-based
@@ -435,7 +446,11 @@ slack, so header and body cells drift apart.
 - QA matrix over every toggle combination (2-col, 3-col ×4, 4-col ×6, 5-col,
   6-col): header vs body alignment per combo, at full and narrowed preview
   widths, plus the Phase 6 paper setlists.
-- `npm run build` clean; `cargo test` green (no Rust change expected).
+- `npm run build` clean; `cargo test` green (37 tests, no Rust change).
+
+Verification: a stub-DOM harness rendered every combo and asserted the preset
+class, `<colgroup>` order, and header/body class symmetry; each preset's CSS
+widths were parsed and summed to exactly 100%. Paper QA remains Phase 6.
 
 ## Feature 11: Paginated multi-page preview + print — Todo (P0 fix)
 
@@ -479,8 +494,8 @@ header/footer per page, so preview and export disagree.
 ## Roadmap backlog (prioritized)
 
 - **P0 — Sheet correctness fixes (from real use)**: Feature 10 (column widths
-  rebalance + header alignment) and Feature 11 (paginated preview/print
-  frames). Both outrank new tooling: the sheet is the product.
+  rebalance + header alignment) is done; Feature 11 (paginated preview/print
+  frames) remains. It outranks new tooling: the sheet is the product.
 - **P0 — PNG/PDF export + print**: Feature 6 done. Physical-paper QA and
   cross-engine checks remain in Phase 6.
 - **P0 — Overflow tooling for the single-A4 cap**: Feature 5 shipped
