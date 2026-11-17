@@ -161,11 +161,12 @@ WebView2/WKWebView when available):**
 
 - Short setlist (8 songs) and long setlist (25 songs + 2 breaks at min fit).
 - Logo present/absent × grayscale toggle.
-- Rows never split across pages. Header/footer repetition is engine-dependent:
-  Chromium-based engines are expected to repeat the groups, WebKitGTK currently
-  does not — record the result per engine instead of assuming it.
-- Multiple-page mode (`page_mode`): printed page count matches the ≈N estimate
-  within ±1.
+- Rows never split across pages. In multiple-page mode every printed page
+  carries its own header and footer (paginated frames, Feature 11), so
+  repetition no longer depends on the engine's `thead`/`tfoot` support —
+  record the result per engine to confirm.
+- Multiple-page mode (`page_mode`): printed page count matches the on-screen
+  frame count within ±1.
 
 ## Risks
 

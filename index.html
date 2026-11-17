@@ -309,8 +309,13 @@
                 class="sheet"
                 aria-label="Printable setlist preview"
               ></div>
-              <!-- Screen-only dashed page boundaries (multiple-page mode). -->
-              <div id="sheet-page-marks" class="sheet-page-marks" aria-hidden="true"></div>
+              <!-- One A4 frame per page in multiple-page mode. Screen + print. -->
+              <div
+                id="sheet-pages"
+                class="sheet-pages"
+                role="group"
+                aria-label="Paginated setlist preview"
+              ></div>
             </div>
           </div>
         </section>

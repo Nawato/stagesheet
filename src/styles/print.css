@@ -34,7 +34,6 @@
   .preview-toolbar,
   .print-hint,
   .sheet-options,
-  .sheet-page-marks,
   noscript {
     display: none !important;
   }
@@ -87,10 +86,72 @@
     overflow: visible !important;
   }
 
+  /* Multiple-page mode prints the frame stack, not the tall sheet. Each frame
+     is a real A4 page with its own brand header and footer, so repeated
+     headers no longer depend on engine `thead`/`tfoot` repetition (WebKit bug
+     17205). Single mode keeps printing #setlist-sheet exactly as before. */
+  .sheet-frame.is-framed #setlist-sheet {
+    display: none !important;
+  }
+
+  .sheet-frame.is-framed .sheet-pages {
+    display: block !important;
+    width: auto !important;
+    transform: none !important;
+    gap: 0 !important;
+  }
+
+  /* WebKitGTK's native print path lays the document out at GTK's page-setup
+     scale (~113% with the default paper margins) and ignores `@page` margins,
+     so a 271 mm frame would be roughly one page plus a footer and split. The
+     JS marks Linux WebKit (Tauri's Linux webview); the other engines print the
+     frames 1:1 and never get this class. Page breaks still follow the frames,
+     so the page count stays equal to the frame count either way. */
+  .webkitgtk .sheet-pages {
+    zoom: 0.885;
+  }
+
+  .sheet-page,
+  .sheet-page * {
+    visibility: visible !important;
+  }
+
+  .sheet-page {
+    display: flex !important;
+    flex-direction: column !important;
+    box-sizing: border-box !important;
+    width: auto !important;
+    height: 271mm !important;
+    min-height: 0 !important;
+    max-height: 271mm !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    overflow: hidden !important;
+    border: 0 !important;
+    background: #fff !important;
+    color: #000 !important;
+    box-shadow: none !important;
+    /* Frames are pre-split at measured row boundaries, so they never need to
+       fragment themselves; `break-inside: avoid` only guards the rows. */
+    break-inside: avoid;
+    break-after: page;
+    page-break-after: always;
+  }
+
+  .sheet-page:last-child {
+    break-after: auto;
+    page-break-after: auto;
+  }
+
+  .sheet-page .sheet-logo {
+    filter: grayscale(1) !important;
+  }
+
   /* Never print coloured text or tinted surfaces, even if the screen preview
      was toggled. Logos are also forced to grayscale. */
   #setlist-sheet,
-  #setlist-sheet * {
+  #setlist-sheet *,
+  .sheet-page * {
     color: #000 !important;
     background-color: transparent !important;
     box-shadow: none !important;

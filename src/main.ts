@@ -14,6 +14,7 @@ import {
 import { exportSetlist } from "./exporter";
 import type { ExportFormat } from "./exporter";
 import { storedLogoUrl } from "./logo";
+import { A4_CONTENT_HEIGHT_PX, renderSheetPages } from "./pages";
 import { renderSetlistSheet } from "./sheet";
 import type { BreakItem, LogoAlignment, PageMode, Setlist, SheetOptions, Song } from "./types";
 import {
@@ -31,10 +32,6 @@ import {
 
 const MM_TO_PX = 96 / 25.4;
 const A4_WIDTH_PX = 210 * MM_TO_PX;
-/** Matches `@page { margin: 13mm 12mm; }` in `print.css`. */
-const SHEET_MARGIN_MM = 13;
-/** Printable height of one page: A4 minus the top and bottom page margins. */
-const A4_CONTENT_HEIGHT_PX = (297 - SHEET_MARGIN_MM * 2) * MM_TO_PX;
 const SHEET_FIT_MIN = 0.5;
 const SHEET_FIT_STEP = 0.05;
 /** Below this auto-fit percentage the printed type is too small for the stand. */
@@ -57,6 +54,8 @@ let songSort: SongSortKey = "title";
 let tuningOnly = false;
 /** Logo files to delete only after a setlist save succeeds. */
 const pendingLogoRemovals = new Set<string>();
+/** Frames currently rendered in multiple-page mode (the exact page count). */
+let renderedPageCount = 0;
 
 type SongSortKey = "title" | "artist" | "key" | "tuning";
 
@@ -112,9 +111,9 @@ const alignmentRadios = Array.from(
 const grayscaleLogoInput = byId<HTMLInputElement>("logo-grayscale");
 
 const sheet = byId<HTMLDivElement>("setlist-sheet");
+const sheetPages = byId<HTMLDivElement>("sheet-pages");
 const sheetFrame = byId<HTMLDivElement>("sheet-frame");
 const sheetScroll = byId<HTMLDivElement>("sheet-scroll");
-const sheetPageMarks = byId<HTMLDivElement>("sheet-page-marks");
 const previewMeta = byId<HTMLParagraphElement>("preview-meta");
 
 /** Editor "Page layout" radios: Single (default) or Multiple. */
@@ -267,6 +266,7 @@ function bindEvents(): void {
 }
 
 async function init(): Promise<void> {
+  applyPrintPlatformClass();
   logoWidthInput.min = String(LOGO_MIN_WIDTH_MM);
   logoWidthInput.max = String(LOGO_MAX_WIDTH_MM);
   bindEvents();
@@ -292,7 +292,20 @@ async function init(): Promise<void> {
     await loadLogoForCurrent();
   }
   fitPreview();
-  document.fonts.ready.then(fitSheetToPage).catch(() => undefined);
+  document.fonts.ready.then(handleSheetLayout).catch(() => undefined);
+}
+
+/**
+ * WebKitGTK (Tauri on Linux) prints at GTK's page-setup scale rather than the
+ * CSS pixel scale, which makes a 271 mm frame taller than one sheet. Mark that
+ * engine only; print.css sizes the frame stack down there. Chromium-based
+ * WebView2 and WKWebView print the frames 1:1 and keep the class off.
+ */
+function applyPrintPlatformClass(): void {
+  const ua = navigator.userAgent;
+  const webkitGtk =
+    ua.includes("AppleWebKit") && ua.includes("Linux") && !/Chrome|Chromium|Edg\//.test(ua);
+  document.documentElement.classList.toggle("webkitgtk", webkitGtk);
 }
 
 // ---------------------------------------------------------------------------
@@ -519,6 +532,10 @@ async function exportCurrent(format: ExportFormat): Promise<void> {
   // until the finally block restores and re-renders.
   renderSheet();
   exporting = true;
+  // The exporter captures the tall sheet, which multiple mode normally hides
+  // behind the frame stack. Reveal the source and hide the frames for the
+  // capture; `renderSheet()` restores the framed preview in the finally block.
+  sheetFrame.classList.remove("is-framed");
   printButton.disabled = true;
   exportPdfButton.disabled = true;
   exportPngButton.disabled = true;
@@ -1258,21 +1275,56 @@ function renderSheet(): void {
 
   if (!current) {
     sheet.replaceChildren();
-    sheetPageMarks.replaceChildren();
+    sheetPages.replaceChildren();
+    sheetFrame.classList.remove("is-framed");
+    renderedPageCount = 0;
     return;
   }
 
   // The class (not inline styles) is the single switch for the multiple-page
   // escape hatch in both the screen and print stylesheets. It must be applied
   // before the height measurements below.
-  sheet.classList.toggle("multipage", isMultiPage());
+  const multi = isMultiPage();
+  sheet.classList.toggle("multipage", multi);
+  // In multiple mode the tall sheet stays in the DOM as the export/measurement
+  // source, but the frame stack is what the preview and print show.
+  sheetFrame.classList.toggle("is-framed", multi);
 
   renderSetlistSheet(sheet, current, {
     logoUrl: logoSrc,
     grayscaleLogo: grayscaleLogoInput.checked,
-    onLogoLayout: fitSheetToPage,
+    onLogoLayout: handleSheetLayout,
   });
   renderSummary();
+
+  if (multi) {
+    renderPageFrames();
+  } else {
+    sheetPages.replaceChildren();
+    renderedPageCount = 0;
+    fitSheetToPage();
+  }
+}
+
+/**
+ * Re-paginates the multiple-page frame stack from the tall source sheet and
+ * updates the meta label with the actual frame count.
+ */
+function renderPageFrames(): void {
+  renderedPageCount = renderSheetPages(sheet, sheetPages, {
+    previewScale: currentSheetScale(),
+  });
+  updateFitHint(1, false);
+  syncSheetHeight();
+}
+
+/** Logo/fonts can change the measured header height; re-paginate when framed. */
+function handleSheetLayout(): void {
+  if (exporting) return;
+  if (isMultiPage()) {
+    renderPageFrames();
+    return;
+  }
   fitSheetToPage();
 }
 
@@ -1296,8 +1348,8 @@ function fitPreview(): void {
  * fixed A4 box, and zooming the box would scale the clipping boundary along
  * with the content, so no extra rows would ever become visible.
  *
- * Multiple-page mode skips the fit: the sheet flows at its natural height and
- * the page count is estimated from the content instead.
+ * Multiple-page mode never reaches this function: the callers render page
+ * frames instead and report the actual frame count.
  */
 function fitSheetToPage(): void {
   // Export holds the sheet in its full-height layout; the finally block refits
@@ -1305,12 +1357,6 @@ function fitSheetToPage(): void {
   if (exporting) return;
 
   applySheetFit(1);
-
-  if (isMultiPage()) {
-    updateFitHint(1, false);
-    syncSheetHeight();
-    return;
-  }
 
   const table = sheet.querySelector<HTMLTableElement>(".sheet-table");
   if (!table) {
@@ -1359,8 +1405,8 @@ function applySheetFit(fit: number): void {
 
 function updateFitHint(fit: number, overfull: boolean): void {
   if (isMultiPage()) {
-    const pages = estimatePageCount();
-    previewMeta.textContent = `A4 · multiple pages · ≈ ${pages} ${
+    const pages = Math.max(1, renderedPageCount);
+    previewMeta.textContent = `A4 · multiple pages · ${pages} ${
       pages === 1 ? "page" : "pages"
     }`;
     previewMeta.classList.remove("is-hint");
@@ -1394,39 +1440,12 @@ function syncSheetHeight(): void {
   requestAnimationFrame(() => {
     if (exporting) return;
     const scale = currentSheetScale();
-    sheetFrame.style.height = `${Math.ceil(sheet.offsetHeight * scale)}px`;
-    renderPageMarks(scale);
+    // The frame stack is the visible preview in multiple mode; the tall sheet
+    // is only the measurement/export source. Both are measured unscaled and
+    // then multiplied by the preview scale for the clipping box.
+    const target = isMultiPage() ? sheetPages : sheet;
+    sheetFrame.style.height = `${Math.ceil(target.offsetHeight * scale)}px`;
   });
-}
-
-/** Draws the dashed A4 boundaries in the multiple-page preview. */
-function renderPageMarks(scale: number): void {
-  sheetPageMarks.replaceChildren();
-  if (!isMultiPage()) return;
-
-  const pages = estimatePageCount();
-  if (pages <= 1) return;
-
-  const fragment = document.createDocumentFragment();
-  for (let index = 1; index < pages; index += 1) {
-    const top =
-      (SHEET_MARGIN_MM * MM_TO_PX + index * A4_CONTENT_HEIGHT_PX) * scale;
-    const mark = el("div", "sheet-page-break");
-    mark.style.top = `${Math.round(top * 10) / 10}px`;
-    fragment.append(mark);
-  }
-  sheetPageMarks.replaceChildren(fragment);
-}
-
-/** Natural content height of the sheet, excluding its 13mm vertical padding. */
-function naturalContentHeightPx(): number {
-  const verticalPadding = SHEET_MARGIN_MM * 2 * MM_TO_PX;
-  return Math.max(0, sheet.scrollHeight - verticalPadding);
-}
-
-/** Approximate number of printed A4 pages; the engine paginates slightly differently. */
-function estimatePageCount(): number {
-  return Math.max(1, Math.ceil(naturalContentHeightPx() / A4_CONTENT_HEIGHT_PX));
 }
 
 function currentSheetScale(): number {

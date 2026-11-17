@@ -11,7 +11,7 @@ sheet defaults to a single A4 page with auto-fit shrink (`--sheet-fit`, min
 50%), implemented in `main.ts` (`fitSheetToPage`) and `print.css`; per-setlist
 `page_mode` (Feature 5) opts into multiple pages instead. Column widths come
 from per-combination presets in `app.css` (Feature 10; each sums to 100%);
-multi-page preview uses dashed separator overlays (see Feature 11).
+multi-page preview and print use measured A4 page frames (Feature 11).
 
 Decisions locked in: tuning is a **free-text optional field** (same pattern as
 `key`), not a preset picker or per-instrument map.
@@ -191,10 +191,11 @@ on the page (preview, print, and export all follow).
 Status: implemented. `Setlist.page_mode` persists per setlist (`Single` default,
 so old files are unchanged), the editor has a Page layout Single/Multiple
 segmented control above the preview (44px targets, marks the setlist dirty), and
-both the preview and `window.print()` follow the mode. Multiple mode renders the
-sheet at its natural height with screen-only dashed A4 boundaries and an
-`≈ N pages` label; single mode keeps the `--sheet-fit` cap and warns when the
-measured fit drops below 70%. The fit loop measures the table height relative to
+both the preview and `window.print()` follow the mode. Multiple mode renders
+measured A4 page frames with a repeated brand header and footer (Feature 11;
+originally natural-height dashes) and an exact page count; single mode keeps the
+`--sheet-fit` cap and warns when the measured fit drops below 70%. The fit loop
+measures the table height relative to
 the preview's `--sheet-scale` (see the 2026-11 review fix), so the required zoom
 and the overfull warning no longer change with the window width. PDF export adds
 page `N / M` numbering (Feature 6). Physical-paper QA (25 songs + 2 breaks on
@@ -235,12 +236,11 @@ hatch.
   still clip instead of paginating. `break-inside: avoid` keeps rows intact
   across pages. The `thead`/`tfoot` repeat rules remain for supporting engines,
   but WebKitGTK's print path does not repeat them (see the engine note above).
-- Screen preview: no stacked-frame mockup — the sheet renders at 100% zoom
-  (`--sheet-fit: 1`) in the scroll area, with dashed separators every 271 mm of
-  content height and an "≈ N pages" meta label (N = ceil(contentHeight / 271
-  mm)). The separators are a sibling overlay (`#sheet-page-marks`), not part of
-  `#setlist-sheet`, so they never print or reach the exporter. The engine
-  paginates slightly differently, so N is approximate by design.
+- Screen preview: the sheet renders at 100% zoom (`--sheet-fit: 1`) in the
+  scroll area. Feature 11 replaced the original dashed separator overlay and
+  "≈ N pages" meta label with measured A4 page frames: preview, print, and
+  export all use the same row grouping, and the label reports the actual frame
+  count.
 - Legibility guard: when the applied single-page auto-fit drops below ~70%, the
   preview meta suggests switching (`A4 · single page · auto-fit 66% — try
   multiple pages`). The percentage is the actual applied table zoom (measured
@@ -251,10 +251,9 @@ hatch.
   `N / M` numbering ships only in the PDF export path (no engine we target
   renders `counter(page)` in `@page` margin boxes).
 - QA: 25 songs + 2 breaks in multi mode on real A4 (WebKitGTK first): rows
-  never split and the printed page count is within ±1 of ≈N. Header/footer
-  repetition is engine-dependent and must be recorded, not assumed: it is
-  expected on Chromium-based engines and currently fails on WebKitGTK (bug
-  17205).
+  never split and the printed page count matches the frame count. Header/footer
+  repetition was engine-dependent before Feature 11; it is now real per-frame
+  content.
 
 ## Feature 6: PDF/PNG export + direct print — Done
 
@@ -452,15 +451,32 @@ Verification: a stub-DOM harness rendered every combo and asserted the preset
 class, `<colgroup>` order, and header/body class symmetry; each preset's CSS
 widths were parsed and summed to exactly 100%. Paper QA remains Phase 6.
 
-## Feature 11: Paginated multi-page preview + print — Todo (P0 fix)
+## Feature 11: Paginated multi-page preview + print — Done
 
 Reported from real use: in multi-page mode the preview looks like the sheet
 is cut off mid-text instead of showing multiple pages. Root cause: the preview
-is one tall sheet with dashed sibling-overlay lines (`#sheet-page-marks`)
-every 271 mm of content height. Rows can visually straddle a dashed line on
+was one tall sheet with dashed sibling-overlay lines (`#sheet-page-marks`)
+every 271 mm of content height. Rows could visually straddle a dashed line on
 screen (`break-inside: avoid` only binds in print), and no header/footer
-repeats per visual page — while the export PDF (Feature 6) *does* composite
-header/footer per page, so preview and export disagree.
+repeated per visual page — while the export PDF (Feature 6) *does* composite
+header/footer per page, so preview and export disagreed.
+
+Status: shipped. `src/pages.ts` paginates the rendered rows by measured height
+and builds one A4 `.sheet-page` frame per page in `#sheet-pages`; each frame
+clones the table's `<colgroup>`, brand header (logo, title, venue/date, column
+labels), and footer, and the footer is pinned to the frame bottom. Pages break
+at whole rows only. The tall `#setlist-sheet` stays in the DOM as the
+measurement/export source but is hidden on screen and in print; screen shows
+the frame stack (8 mm gap, scaled with `--sheet-scale`), print shows one frame
+per page. The dashed `#sheet-page-marks` overlay and the `≈ N pages` estimate
+are gone: the meta label reports the actual frame count, and the Single-mode
+<70% nudge and 50% floor are unchanged. Export still captures and composites
+the tall sheet through `exporter.ts`, and the frame split uses the same
+header/footer-adjusted 271 mm capacity, so frame count equals exported PDF page
+count. WebKitGTK's native print scales content by GTK's page setup rather than
+CSS, so Linux WebKit is marked `html.webkitgtk` and `print.css` normalizes just
+the frame stack (`zoom: 0.885`); other engines print the frames 1:1. The
+existing `thead`/`tfoot` repeat rules remain for supporting engines.
 
 ### Spec
 
@@ -491,11 +507,23 @@ header/footer per page, so preview and export disagree.
   rows intact, headers on every page.
 - `npm run build` clean; `cargo test` green.
 
+Verification: the 25-song + 2-break fixture paginates to 3 frames at preview
+scales 1, 0.6, and 0.28 (row order intact, header + footer on every frame,
+each frame within the 271 mm content box). The real exporter (`prepareSheetRaster`
++ `buildPdfBytes`) on the same sheet produced a 3-page PDF whose page groups
+match the frames exactly (1–8 + Intermission, 9–17, 18 + Encore + 19–25), and
+WebKitGTK native print produced those 3 pages with the brand header and footer
+on each. Chromium native print also produced 3 pages with headers/footers. With
+a stored logo configured, every frame's cloned brand header carried the logo
+`<img>` (frame count grew to 4 because the 40 mm logo shortens the body area).
+Physical-paper QA and cross-engine (WebView2/WKWebView) checks remain on the
+Phase 6 checklist.
+
 ## Roadmap backlog (prioritized)
 
 - **P0 — Sheet correctness fixes (from real use)**: Feature 10 (column widths
-  rebalance + header alignment) is done; Feature 11 (paginated preview/print
-  frames) remains. It outranks new tooling: the sheet is the product.
+  rebalance + header alignment) and Feature 11 (paginated preview/print
+  frames) are done. The sheet is the product; new tooling stays behind these.
 - **P0 — PNG/PDF export + print**: Feature 6 done. Physical-paper QA and
   cross-engine checks remain in Phase 6.
 - **P0 — Overflow tooling for the single-A4 cap**: Feature 5 shipped

@@ -215,20 +215,22 @@ change.
   next save reports the violation instead of truncating.
 - A4 black-on-white preview with `@page`, `break-inside: avoid` for rows, and
   table header/footer groups marked for repetition. Chromium-based engines are
-  expected to repeat them; WebKitGTK's print path currently does not (WebKit bug
-  17205) — record the result per engine during QA.
+  expected to repeat them; WebKitGTK's print path does not (WebKit bug 17205),
+  which is why multiple mode uses real page frames with cloned headers instead.
   The `Tuning` column appears only when its toggle is on and at least one song in
   the setlist has tuning set.
 - Single-A4 cap with automatic type shrink: the sheet is locked to one page,
   the table zooms down inside it (minimum 50%) to fit, and the preview label
   mirrors the applied fit.
-- Per-setlist Page layout toggle (Single/Multiple). Multiple mode skips the
-  single-page cap and flows onto as many A4 pages as needed; the preview shows
-  dashed page boundaries and an approximate page count, and single mode points
-  at it when the required fit drops below ~70%. Persisted as `page_mode`, with
-  old files defaulting to Single. The fit loop measures the table relative to the
-  preview scale, so the applied zoom and overfull warning do not change with the
-  window width.
+- Per-setlist Page layout toggle (Single/Multiple). Multiple mode replaces the
+  tall sheet in the preview and in print with measured A4 page frames: rows are
+  grouped by painted height so none straddles a boundary, and every frame carries
+  its own cloned brand header (logo, title, venue/date, column labels) and footer.
+  The label reports the actual frame count, matching the exported PDF's pages.
+  Single mode keeps the one-page fit and points at Multiple when the required fit
+  drops below ~70%. Persisted as `page_mode`, with old files defaulting to Single.
+  The fit loop measures the table relative to the preview scale, so the applied
+  zoom and overfull warning do not change with the window width.
 - PDF and PNG export at 300 dpi A4 (2480 px wide) through `html-to-image` + `jsPDF`. Export
   temporarily lifts the sheet to its natural height, uses an export-only data-URL
   logo, works around WebKitGTK's collapsed `<col>` widths, and restores the

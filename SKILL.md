@@ -7,9 +7,11 @@ editing models, storage, IPC, or the printable sheet.
 
 1. **Print output is black on white on A4.** `@page { size: A4 portrait; margin: 13mm 12mm; }`.
    Never add a dark-stage theme, gradient, or colour-dependent styling to
-   `#setlist-sheet` or anything inside it.
-2. `#setlist-sheet` is the only printed node. UI chrome may be themed; the sheet
-   may not.
+   `#setlist-sheet`, `.sheet-page`, or anything inside them.
+2. `#setlist-sheet` is the printed node in Single mode; in Multiple mode the
+   `#sheet-pages` frame stack is printed instead (the tall sheet stays the
+   export/measurement source and is hidden in print). UI chrome may be themed;
+   neither the sheet nor the frames may.
 3. Duration is computed in Rust, never only in the UI:
    `sum(song.duration_secs or 0) + sum(break.duration_mins * 60)`.
 4. All storage lives under `<app_data_dir>/stagesheet/`; the frontend `fs` capability
@@ -170,7 +172,9 @@ JS argument keys are camelCase (`setlistId`, `fileName`); model fields are snake
   are expected to repeat them on every printed page; WebKitGTK's print path
   currently does not
   repeat them (WebKit bug 17205 — see the engine note under Feature 5 in
-  `docs/plans/upcoming-features.md`).
+  `docs/plans/upcoming-features.md`). Multiple mode does not depend on that
+  repetition: `src/pages.ts` clones the brand header and footer into each
+  `#sheet-pages .sheet-page` frame.
 - Rows use `.song-row` / `.break-row` and must keep `break-inside: avoid`.
 - Song artist always renders under the title; a song comment renders there only
   when `show_comment` is on, and a blank comment emits no element. Break rows
@@ -190,19 +194,33 @@ JS argument keys are camelCase (`setlistId`, `fileName`); model fields are snake
   zoom on the table. `Multiple` skips the fit, sets `--sheet-fit: 1`, and lifts
   the page cap with `height: auto; max-height: none; overflow: visible` in both
   stylesheets. Never toggle per-mode layout inline; the class is the contract.
-- Screen preview is a real A4 box scaled with `--sheet-scale`; print resets the
-  transform and padding (`@page` owns the margins). In multiple mode the sheet
-  grows to its natural height and the preview draws dashed page boundaries in
-  `#sheet-page-marks` (a sibling of `#setlist-sheet`, so it never prints or
-  exports) plus an approximate `≈ N pages` label.
+- **Multiple mode is a frame stack.** The tall `#setlist-sheet` stays in the DOM
+  as the measurement/export source but is hidden on screen and in print; JS
+  (`renderSheetPages` in `src/pages.ts`) measures the rendered rows at
+  `--sheet-scale: 1`, groups whole rows under
+  `271 mm − header − footer`, and renders one `.sheet-page` per page into
+  `#sheet-pages`. Each frame clones the table's `<colgroup>`, brand header
+  (logo `<img>`, title, venue/date, column labels), and footer, so nothing
+  depends on engine `thead`/`tfoot` repetition. The footer is pinned to the
+  bottom of the frame (export composites it at the page bottom too). The label
+  reports the actual frame count, not an estimate. `Single` mode never renders
+  frames.
+- Screen preview is a real A4 box scaled with `--sheet-scale`; in multiple mode
+  the frames are stacked with an 8 mm gap and scaled as one stack. Print resets
+  the transform, hides the tall sheet, and prints one frame per page
+  (`break-after: page`), with `@page` owning the margins. WebKitGTK lays print
+  out at GTK's page-setup scale rather than the CSS scale, so `main.ts` marks
+  that engine (`html.webkitgtk`) and `print.css` normalizes the frame stack with
+  `zoom: 0.885`; other engines print the frames 1:1.
 - The single-page fit hint warns below ~70% auto-fit and points at multiple
   pages. It mirrors the applied table zoom measured from the painted table
   height relative to `--sheet-scale` (the preview transform must be divided out,
   or the required fit changes with the window width and the overfull warning
-  never fires). The natural content height feeds only the multiple-page N
-  estimate.
-- `#setlist-sheet` must stay `background: #fff; color: #000` on screen and print.
-- Logos are forced to grayscale in print, regardless of the preview toggle.
+  never fires). The 70% nudge and 50% floor are Single-mode only.
+- `#setlist-sheet` and `.sheet-page` must stay `background: #fff; color: #000`
+  on screen and print.
+- Logos are forced to grayscale in print, regardless of the preview toggle. The
+  frame header reuses the same `<img src>` logo path; never inline SVG.
 
 ## Export (PDF / PNG)
 
@@ -235,6 +253,11 @@ JS argument keys are camelCase (`setlistId`, `fileName`); model fields are snake
 - Export renders the current editor state through the same `sheet.ts` path, so
   `page_mode` and `sheet_options` apply. Page `N / M` appears only in PDFs. All
   exported sheet text is bitmap; `window.print()` remains the text-sharp path.
+  Multiple mode is still exported from the tall sheet (the frame stack is
+  preview/print only): `src/pages.ts` groups rows under the same
+  header/footer-adjusted 271 mm capacity the PDF compositor uses, so the frame
+  count and the exported page count match. Never feed the framed preview to the
+  exporter.
 - Saving uses `dialog.save()` + `fs.writeFile` (the dialog extends the fs scope
   to the selected file) and optionally `opener.openPath()` for the "Open after
   export" checkbox. There is no silent-print API; direct print stays one-click
