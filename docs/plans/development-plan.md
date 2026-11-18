@@ -135,7 +135,10 @@ harness were removed when the exporter shipped.
   artist records + logos, the in-memory library artist filter, the setlist
   artist + per-artist picker + library lock, and break-second precision
   shipped. Duplication copies the setlist artist and shares the logo file.
-  The only remaining overflow tool is the split-setlist helper.
+  The only remaining overflow tool is the split-setlist helper. Specced next
+  (Todo): Feature 19 (effective logo width control in the setlist editor),
+  Feature 20 (artist-first landing page + per-artist scoping), and Feature
+  21 (print/export toolbar consolidation).
 - `tauri android init` / `ios init` on provisioned machines; native share.
 - Print QA on real A4 (checklist below), backup/restore, app versioning,
   signing/release automation (tracked in the roadmap, P3).
@@ -339,3 +342,19 @@ WebView2/WKWebView when available):**
   skip files still referenced by another setlist. No Rust, IPC, storage,
   backup-schema, sheet/colgroup/frame/print-CSS, raster, CSP, or capability
   change. The split-setlist helper remains the open overflow item.
+- 2026-11-18: New user feedback specced as Features 19–20 (Todo): the
+  setlist editor's width slider will control the currently displayed logo
+  (artist width editable in place via `save_artist`, an uploaded own logo
+  adopting the effective size/alignment, removal falling back to the band
+  logo), and an artist-first mode will gate startup behind artist
+  creation/selection with per-artist song libraries and setlists
+  (`artist_id` mandatory on save with legacy records unfiled until
+  assigned; Feature 15's library select, Feature 16's lock chrome, and the
+  per-setlist editor Artist select are superseded). The split-setlist
+  helper stays open behind both.
+- 2026-11-18: Print/export toolbar feedback specced as Feature 21 (Todo):
+  Print moves beside the export buttons, `Export PDF`/`Export PNG` merge
+  into one Export button with an in-place PDF/PNG menu (keyboard-operable,
+  Escape returns focus), and the `.print-hint` pill becomes a
+  `title` tooltip on the Print button. Print stays one-click
+  `window.print()`; no exporter, raster, or print-output change.

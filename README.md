@@ -19,6 +19,7 @@ in `SKILL.md`; agent notes live in `AGENTS.md`.
 ## Project layout
 
 ```text
+index.html          app shell markup: header, panes, preview toolbar, sheet container
 src/
   main.ts            app shell, editor, song library, artist records, setlist pickers, logo controls
   sheet.ts           renders #setlist-sheet (table markup, per-combination widths)
@@ -43,7 +44,10 @@ src-tauri/
   capabilities/default.json
   tauri.conf.json
 docs/plans/          development plan (phases, QA, risks) + feature specs
+.github/workflows/   ci.yml (build + Rust tests) and release.yml (v* tag bundles)
 SKILL.md             schema and convention notes for coding agents
+AGENTS.md            agent entry point: hard rules, gates, and commit conventions
+LICENSE              MIT
 ```
 
 ## Development
@@ -370,6 +374,17 @@ change.
 
 ### Still missing (per plan)
 
+- Feature 19 — the setlist editor's logo slider controls the currently
+  displayed logo: an artist logo's size is changeable in place, an own logo
+  uploaded on top adopts that effective size, and removing it falls back to
+  the band logo.
+- Feature 20 — artist-first mode: a landing page for artist
+  creation/selection, per-artist song libraries and setlists, and a mandatory
+  artist on save (legacy records stay "unfiled" until assigned).
+- Feature 21 — print/export toolbar consolidation: Print moves beside the
+  export buttons, the two export buttons merge into one with a PDF/PNG
+  choice after clicking, and the Ctrl/⌘+P pill becomes hover information
+  on the Print button.
 - Paginated split-setlist helper (move the second half of a setlist into a new
   one) as an alternative to multi-page mode.
 - Physical-paper QA on A4 (page count, header/footer per engine, legibility),

@@ -26,7 +26,16 @@ filters the library and gates adds, but it never rewrites existing setlist
 items and never changes the printed sheet. **Artists become records**
 (Feature 14): one managed artist list with names and logos that songs and
 setlists reference by id, replacing free-text matching everywhere new code is
-written (legacy `artist` text stays as a display fallback until adopted).
+written (legacy `artist` text stays as a display fallback until adopted). Two
+further decisions are locked at spec time: the setlist editor's width slider
+controls **whichever logo is currently displayed** (Feature 19) — an own logo
+uploaded on top adopts that effective size/alignment, and removing it falls
+back to the artist logo automatically. **The artist becomes the workspace
+scope** (Feature 20): a landing page gates artist creation/selection, songs
+and setlists must belong to exactly one artist on save, and the library and
+setlist lists show only the active artist's records (Feature 15's select,
+Feature 16's lock chrome, and the per-setlist editor Artist select are
+superseded).
 
 ## Shipped features — summary
 
@@ -685,6 +694,282 @@ misread instead of adding new behavior.
    it).
 2. QA + this file status + commit.
 
+## Feature 19: Effective logo width control (setlist slider) — Todo
+
+Status: Todo, small, independent of Feature 20. From user feedback: if the
+artist has a logo, its size must be changeable with the setlist editor's
+width slider; when a setlist puts its own logo image on top, that one should
+come in at the size that was set up before; removing it must switch back to
+the default band logo.
+
+Context: Feature 16 resolves the displayed logo as own → artist →
+placeholder, but the Logo fieldset still edits only `setlist.logo`: the width
+slider never touches `artist.logo.width_mm`, so with the artist logo on the
+sheet the slider does nothing visible, and a newly uploaded own logo lands at
+the setlist's stale width instead of the size the user just had on screen.
+
+### Data model
+
+None. `Artist.logo` is already a mutable `LogoConfig` persisted through
+`save_artist` (Feature 14), and `Setlist.logo` stays the setlist's own
+config. No serde, storage, IPC, or backup change.
+
+### Behavior
+
+- The Logo fieldset's width slider edits **the logo currently displayed**
+  (Feature 16 resolution):
+  - Own logo set → edits `setlist.logo.width_mm`, exactly as today.
+  - No own logo, artist logo exists → edits `artist.logo.width_mm` via
+    `save_artist`. This is the artist's one shared size (one image, one
+    size — changing it here updates every setlist showing that artist's
+    logo, and the status line says so). The setlist itself is not dirtied:
+    the artist record is what changed.
+  - Neither → placeholder; the slider edits `setlist.logo.width_mm`
+    (harmless; it pre-sizes the next own logo).
+- Artist-logo path: the slider commits on `change` (release), allows one
+  in-flight `save_artist` at a time, and reuses the Feature 14 artist-edit
+  guards (refuse while a backup/restore or artist-logo import is in
+  flight, or while an artist draft for that artist is open). A failed
+  artist save reverts the slider to the previous effective value and
+  reports through the status line. The own-logo/placeholder paths keep
+  today's `input`-driven `setlist.logo` updates exactly as they are.
+- **Uploading an own logo adopts the effective size**: `setlist.logo`'s
+  width **and alignment** initialize from the currently displayed logo's
+  config before re-render, so the replacement appears exactly where and how
+  large the artist logo was ("same size as set up before"). Alignment
+  adoption is a locked decision for a seamless swap; the width is the part
+  the feedback requires.
+- Removing the own logo keeps today's guarded `remove_logo` flow; the
+  resolution chain switches the display back to the artist logo
+  automatically and the slider follows to the artist width. Nothing
+  retroactive, no new removal behavior.
+- The Logo fieldset gains a visible showing line so the slider's target is
+  unambiguous: `Setlist logo`, `<name> logo (artist)`, or `No logo yet`.
+  This supersedes Feature 16's Artist-section note (moved here, not
+  duplicated).
+
+### Sheet + print
+
+No structural change: the effective width/alignment flows through the
+existing `resolveSetlistLogo()` plumbing into preview, print, frames, and
+export. No column, frame, print-CSS, or raster change.
+
+### Tests + QA
+
+- `npm run build` clean; `cargo test` green (no Rust change expected).
+- Manual QA: artist-logo setlist — slider changes the sheet and every
+  setlist of that artist reflects it; uploading an own logo adopts the
+  pre-swap size/alignment; removing it returns the artist logo at its size;
+  a failed artist save reverts the slider; placeholder setlists are
+  unchanged; backup/restore round trip unaffected; the showing line matches
+  the resolution in every case.
+
+### Build order
+
+1. Effective-logo binding (slider + upload adoption + showing line +
+   guards).
+2. QA + `SKILL.md` note + this file status + commit.
+
+## Feature 20: Artist-first mode (landing page + per-artist scoping) — Todo
+
+Status: Todo, large, builds on Features 14–16 and supersedes parts of
+15–16. From user feedback: if no artist is present you must create one
+first — a landing page with artist creation and selection. This tightens
+the model: each song library and setlist belongs to exactly one specific
+artist (1 artist → N songs and N setlists; N setlists → M songs), and
+1 song belongs to exactly 1 artist.
+
+### Decisions locked in
+
+- The artist is the **workspace scope**, not a filter: one active artist at
+  a time; the library pane is that artist's library and the setlist list is
+  that artist's setlists.
+- `artist_id` becomes **mandatory on save** for songs and setlists. The
+  wire format stays compatible: `Option<Uuid>` with `#[serde(default)]`
+  remains (old files load), but save validation rejects a missing
+  assignment. No schema bump; "unfiled" is purely the legacy/migration
+  state.
+- **No retroactive rewrites**: legacy records are never auto-assigned
+  silently. Assignment happens through the landing-page offer or explicit
+  filing. Setlist items keep the Feature 16 rule — existing non-artist
+  items are never removed.
+- Superseded by scoping (retire at implementation): the Feature 15 library
+  Artist select, the Feature 16 lock chrome (forced filter + note +
+  `· <A>` summary suffix) and the editor's per-setlist Artist select. The
+  header artist picker becomes the scope switcher. The non-matching item
+  count stays.
+
+### Data model
+
+- Save-only validation: a song or setlist with no `artist_id` fails with a
+  clear message (e.g. `“<title>” has no artist — assign it before
+  saving.`). Loading, listing, and reading backups keep accepting unfiled
+  records (the save-only philosophy).
+- **Unfiled allowance** (locked mechanism; keeps restore and deletion
+  working without a bulk command): `save_song` / `save_setlist` gain an
+  optional `allow_unfiled` argument (JS `allowUnfiled`, default `false`).
+  With the flag, validation skips only the artist check — every other
+  rule still applies. It is used by exactly three paths: backup restore,
+  artist-deletion reference-nulling, and `reorder_items` re-saving an
+  already-stored unfiled setlist. Everything else (editor saves, adds,
+  duplication, backup's dirty-setlist auto-save) requires an artist.
+- Storage, `artists.json`, and the backup envelope are unchanged
+  (`schema_version` stays 1); unfiled records round-trip as-is through
+  the allowance.
+- Artist deletion keeps today's reference-nulling, writing the nulled
+  records through the allowance; its confirm must state the consequence:
+  `Delete “<name>”? N songs and M setlists will become unfiled.`
+  Deleted-artist records land in the Unfiled scope, never in limbo.
+
+### Landing page
+
+- Shown on startup whenever no artist is selected for the session, and
+  reachable later via the header picker. Full-workspace overlay of UI
+  chrome only — never sheet markup or print CSS.
+- No artists yet → **create first**: name plus the same logo
+  upload/width/alignment controls and validation as the Artists section
+  (Feature 14). Creating the first artist enters the workspace scoped to
+  it.
+- Artists exist → **selection list**: logo thumbnails, song + setlist
+  counts, a `New artist` affordance (create artist #2 without entering),
+  and an `Unfiled` entry when unfiled records exist. Keyboard, labels, and
+  44px targets per repo patterns.
+- After entering an artist, if unfiled songs/setlists exist, offer once per
+  entry: `N songs and M setlists have no artist. Assign them to
+  “<name>”?` Confirming assigns through the normal `save_*` loops with
+  per-record status; declining keeps them Unfiled.
+
+### Scoped workspace
+
+- The library shows only the active artist's songs (Feature 14/15 resolved
+  identity); search, Has tuning, and sort remain. The song-count badge
+  switches from total-library to **scoped count** (totals live on the
+  landing page) — locked decision.
+- The add form assigns the active artist automatically (no artist dropdown
+  in an artist scope; the Unfiled scope restores it, see below). The
+  Feature 12 inline editor shows the owning artist read-only; moving a
+  song between artists is out of scope (mis-filed songs: delete + re-add
+  in the right library, consistent with copy semantics).
+- Header artist picker = scope switcher: artist entries plus
+  `Unfiled (N)`; switching re-scopes library, setlist list, badge, and
+  landing-offer state. A dirty editor follows the existing setlist-switch
+  guard (save or confirm discard) before the scope changes. New setlists
+  pre-assign the active artist (Feature 16 behavior, now the only path).
+- Unfiled scope: shows unfiled songs and setlists. The song Add form and
+  the Feature 12 editor's artist dropdown reappear **only here** (target:
+  any artist, so new and existing songs can be filed on save), and each
+  unfiled setlist gets a `File under…` select; filing saves through the
+  normal commands and moves the record into its artist scope. Saving an
+  unfiled setlist from the editor fails with the unfiled message until it
+  is filed. **New setlist is disabled here** (a setlist belongs to an
+  artist; switch to an artist scope to create one).
+- The add gate becomes inherent (the scoped library only offers the
+  artist's songs); keep the Feature 16 refusal as a defensive guard for
+  stale-cache edges. The summary drops the `· <A>` suffix (redundant) and
+  keeps `· N not by <artist>` when > 0 for legacy leftovers.
+- Feature 19's effective-logo slider works unchanged inside the scope (the
+  artist logo is the active artist's).
+
+### Tests + QA
+
+- Rust: unfiled song/setlist save rejected with clear messages; unfiled
+  accepted with `allow_unfiled` (restore, deletion-nulling, stored-unfiled
+  reorder) and still rejected without it; every other validation rule
+  still enforced under the flag; legacy unfiled loads; artist deletion
+  nulls refs (records become unfiled); backup round trip incl. unfiled.
+  Existing save-path fixtures without `artist_id` must gain artist
+  fixtures — expect the widest test churn of the artist chain.
+- `npm run build` clean.
+- Manual QA: fresh install → landing create → scoped workspace; second
+  artist create/switch; dirty-switch guard; unfiled offer accept/decline;
+  filing songs and setlists from the Unfiled scope (Add form + editor
+  dropdown + `File under…`); New setlist disabled in the Unfiled scope;
+  restore of a backup containing unfiled records keeps them unfiled;
+  save-blocked unfiled editing;
+  artist deletion → unfiled counts; Feature 19 slider inside the scope;
+  backup/restore incl. unfiled; regression matrix for 12–18 (especially
+  the 15/16 retirements and Feature 13 duplication in scoped mode).
+
+### Build order
+
+1. Save validation + `allow_unfiled` allowance + unfiled semantics + Rust
+   test fixtures.
+2. Landing page (create/select/counts) + startup flow.
+3. Scope switcher + library/setlist scoping + add/editor changes +
+   badge/summary changes + retire superseded UI.
+4. Unfiled scope + landing offer + artist-deletion confirm wording.
+5. QA + `SKILL.md` + this file status + commit.
+
+## Feature 21: Print/export toolbar consolidation — Todo
+
+Status: Todo, small, independent UI-chrome slice. From user feedback:
+Print belongs beside the export buttons, the two export buttons become
+one with a format choice after clicking, and the always-visible
+"Print: Ctrl / ⌘ + P" pill should become hover information instead of
+spending toolbar space.
+
+Context: the header actions carry New/Save/Delete/Duplicate/**Print**
+(`#print-setlist`), while the preview toolbar carries a
+`.preview-actions` group (`Export PDF` / `Export PNG`), the "Open after
+export" checkbox, and the `.print-hint` pill (hidden in print via
+`print.css`). Print is one click on `window.print()` and must stay that
+way.
+
+### Data model
+
+None. No IPC, storage, exporter, or raster change; both export paths
+keep their format-specific behavior and the existing export-in-flight
+handling.
+
+### UI
+
+- Move **Print** (`#print-setlist`, label unchanged) out of the header
+  actions into `.preview-actions`, first in the group. The header keeps
+  the current-setlist actions (New, Save, Delete, Duplicate) — Feature
+  18's grouping stays intact. One click still calls `window.print()`
+  directly (no menu, no confirm); the webview's own Ctrl/⌘+P path is
+  unchanged.
+- Merge the two export buttons into a single **Export** button. Clicking
+  opens a small in-place menu with exactly two entries, `PDF` and `PNG`;
+  choosing one runs the existing exporter path for that format unchanged
+  (including the `Open after export` checkbox and status reporting).
+  Keyboard: the button opens on Enter/Space, entries are
+  arrow-navigable, Escape closes and returns focus to the button;
+  pointer users click an entry. 44px targets throughout. While a capture
+  runs, the Export button reflects the existing export-state handling
+  (no second concurrent export).
+- The group's `aria-label` becomes `Print and export`.
+- Replace the visible hint with hover information on the Print button:
+  `title="Print (Ctrl / ⌘ + P)"`, shown on hover (a native `title` is not
+  a dependable focus disclosure, so keyboard users are covered by the
+  working Ctrl/⌘+P shortcut itself rather than the tooltip). Decision
+  locked: the `.print-hint` span and its CSS (including the `print.css`
+  exception) are removed — the shortcut is the platform's standard print
+  path, so a tooltip is sufficient discoverability, and the toolbar
+  space is freed.
+
+### Sheet + print
+
+None. Button placement is editor chrome; print output, page modes,
+frames, the exporter, and raster logic are untouched.
+
+### Tests + QA
+
+- `npm run build` clean; `cargo test` green (no Rust change).
+- Manual QA: Print placement at full and narrowed widths; menu opens and
+  closes via keyboard and pointer (Escape and focus return); PDF and PNG
+  exports unchanged incl. `Open after export`; no concurrent second
+  export; Print stays one-click and text-sharp; the header reads as
+  current-setlist actions; the hint occupies no toolbar space and shows
+  on hover (keyboard users rely on the shortcut itself, not the
+  tooltip).
+
+### Build order
+
+1. Move Print + merge export buttons + menu + tooltip swap (CSS cleanup
+   incl. `.print-hint`).
+2. QA + this file status + commit.
+
 ## Roadmap backlog (prioritized)
 
 - **P0 — Sheet correctness fixes (from real use)**: Features 10 (column widths
@@ -702,6 +987,18 @@ misread instead of adding new behavior.
   artist filter), 16 (setlist artist + per-artist picker + lock), 17 (break
   seconds), and 18 (delete clarity) are Done. Setlist duplication copies
   `Setlist.artist_id` and shares the logo file.
+- **P1 — Artist-first mode + logo width control**: Feature 19 (the setlist
+  slider edits the displayed logo; an own logo adopts the effective size;
+  removal falls back to the artist logo) is a small independent slice.
+  Feature 20 (landing page + per-artist scoping with `artist_id` mandatory
+  on save) is the next major slice and supersedes the Feature 15 select,
+  the Feature 16 lock chrome, and the per-setlist editor Artist select.
+  The split-setlist helper stays open behind both.
+- **P1 — Print/export toolbar consolidation**: Feature 21 (Print beside
+  export, one Export button with a PDF/PNG choice after clicking, the
+  Ctrl/⌘+P pill as hover information on the Print button) is a small
+  independent slice; Print stays one-click and no exporter behavior
+  changes.
 - **P1 — Backup/restore**: Done (Feature 7). One versioned JSON envelope for
   the full library + setlists; logos are re-imported manually in v1.
   Feature 14 adds the `artists` array without a version bump.
