@@ -20,7 +20,7 @@ in `SKILL.md`; agent notes live in `AGENTS.md`.
 
 ```text
 src/
-  main.ts            app shell, editor, song library, artist records, logo controls
+  main.ts            app shell, editor, song library, artist records, setlist pickers, logo controls
   sheet.ts           renders #setlist-sheet (table markup, per-combination widths)
   pages.ts           paginates the sheet into A4 frames for multiple-page mode
   types.ts           TypeScript mirror of the Rust IPC/JSON models
@@ -123,7 +123,9 @@ and stored under a generated UUID name. Absolute paths are never persisted. Rast
 logos whose longest edge exceeds 1024 px are decoded and downscaled on import with
 the aspect ratio preserved (PNG stays PNG, JPEG stays JPEG at quality 85); SVGs are
 stored byte-for-byte and stay vector. Setlists and artists share this logo pool.
-Removing a logo skips files still referenced by a setlist or artist record.
+Removing a logo skips files still referenced by a setlist or artist record. A
+setlist shows its own logo when set, otherwise its artist's logo, otherwise the
+placeholder; preview, print, and export all use that same chain.
 
 ## Song library
 
@@ -162,6 +164,26 @@ artist Save until it finishes; and Delete is refused while a library song
 edit/save is in flight and locks library row actions while references are
 cleared.
 
+### Setlist artists and the library lock
+
+The setlist editor has an **Artist** select (`No artist` = unlocked). Assigning
+an artist is a normal setlist edit and is saved with the setlist. The header's
+first dropdown is a view-only **Artist** picker (`All artists` default) that
+filters the setlist select to that artist's saved setlists; **New** starts a
+setlist pre-assigned to the picked artist. The open setlist always stays
+available even when it falls outside the filter, and the picker is never saved
+or included in a backup.
+
+While the current setlist has a live artist A, the library narrows to A (with
+legacy artist text matching A's name by resolved identity) and still combines
+with search, sort, and **Has tuning**. The library Artist select is forced to A
+and disabled with a note explaining why; unlocking restores the previous
+in-memory selection. Adding a song that does not belong to A — including a song
+with no artist — is refused with
+`“<title>” is not by <A> — switch the setlist artist to add it.` Breaks are
+always allowed, existing items are never removed or rewritten, and the running
+order summary shows the artist plus a count of non-matching songs when any.
+
 ## Backup and restore
 
 The library pane has **Back up** and **Restore** actions. Both operate on one
@@ -177,8 +199,9 @@ human-readable JSON file:
 }
 ```
 
-The envelope includes every current field (artist references, tuning, sheet
-options, page mode, labels, comments, and logo width/alignment). Break lengths
+The envelope includes every current field (song and setlist artist references,
+tuning, sheet options, page mode, labels, comments, and logo
+width/alignment). Break lengths
 are written as `duration_secs`; schema-1 backups from older builds may still
 carry `duration_mins` and are converted × 60 on restore. Restore is
 frontend-only: it reads the file through the dialog-scoped `fs` permission,
@@ -269,13 +292,20 @@ change.
   legacy free-text artists remain as a display fallback (and a "Keep text"
   option) until adopted. Artist logos share the `import_logo` pool and removal
   skips files any setlist or artist still references.
-- Setlist editor: title/venue/date, break insertion (custom label, `mm:ss`
-  length, comment), up/down + drag reorder, inline BPM/key/tuning editing,
-  Comment fields for songs and breaks (max 140 chars) that render on the sheet,
-  and logo upload with width/alignment controls. Oversized raster logos are
-  downscaled on import; SVG logos stay vector. Delete/Discard sits next to Save
-  in the header actions (away from Add break) and keeps the existing
-  confirmation for saved setlists and unsaved drafts.
+- Setlist editor: title/venue/date, artist assignment (`No artist` = unlocked),
+  break insertion (custom label, `mm:ss` length, comment), up/down + drag
+  reorder, inline BPM/key/tuning editing, Comment fields for songs and breaks
+  (max 140 chars) that render on the sheet, and logo upload with
+  width/alignment controls. Oversized raster logos are downscaled on import;
+  SVG logos stay vector. The logo chain is setlist own → artist → placeholder
+  in preview, print, and export. Delete/Discard sits next to Save in the header
+  actions (away from Add break) and keeps the existing confirmation for saved
+  setlists and unsaved drafts.
+- Per-artist setlist picker in the header (`All artists` default; **New**
+  pre-assigns the picked artist) and an editor-only library lock: the current
+  setlist's artist forces the library artist filter, narrows adds to matching
+  songs (legacy text resolves by name), and leaves existing non-matching items
+  untouched. The summary names the artist and any non-matching count.
 - Per-setlist "Sheet columns" toggles for Key, Tuning, Tempo (BPM), Time, and
   Comment, persisted with the setlist and applied to preview, print, and
   export. Column widths are per-combination presets summing to 100% with the
@@ -333,11 +363,8 @@ change.
 
 ### Still missing (per plan)
 
-- Remaining artist-chain tooling: Feature 16 (setlist artist, per-artist
-  setlist picker, and toggleable add lock). Its `Setlist.artist_id` field and
-  `resolveSetlistLogo` groundwork shipped with Feature 14, and the in-memory
-  library artist filter (Feature 15) is already in place. Setlist duplication
-  (Feature 13) remains Todo.
+- Setlist duplication as a preset base (Feature 13), including copying the
+  setlist artist. It remains independent and Todo.
 - Paginated split-setlist helper (duplicate setlist, move second half) as an
   alternative to multi-page mode.
 - Physical-paper QA on A4 (page count, header/footer per engine, legibility),

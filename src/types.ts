@@ -165,7 +165,8 @@ export interface Setlist {
   /** Missing in pre-Feature-5 files; use `withPageModeDefaults` when loading. */
   page_mode?: PageMode;
   /**
-   * Artist record reference (declared now, wired into the editor by Feature 16).
+   * The setlist's own artist record reference; `null` means unlocked.
+   * Normalize with `normalizeArtistId` when loading/cloning/restoring.
    * Missing/blank loads as null; dangling ids resolve as unlocked.
    */
   artist_id?: string | null;

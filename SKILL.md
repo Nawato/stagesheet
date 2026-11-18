@@ -78,7 +78,7 @@ pub struct Setlist {
     pub logo: LogoConfig,            // serde alias: logo_config
     pub sheet_options: SheetOptions, // missing in old files -> all true
     pub page_mode: PageMode,         // missing in old files -> Single
-    pub artist_id: Option<uuid::Uuid>, // declared by Feature 14; missing -> None
+    pub artist_id: Option<uuid::Uuid>, // setlist's own artist; missing -> None = unlocked
     pub created_at: chrono::DateTime<chrono::Utc>,
     pub updated_at: chrono::DateTime<chrono::Utc>,
 }
@@ -112,9 +112,14 @@ Serde notes:
   renaming the artist never rewrites songs. Display resolution is frontend-only
   (`resolveArtistName` in `src/artists.ts`): live record name, else `artist`
   text, else blank. Dangling ids are valid and resolve as unresolved.
-- `Setlist.artist_id` is declared by Feature 14 (`#[serde(default)]`, old files
-  load as `None`) but Feature 16 wires it into the editor, header picker, lock,
-  and backup UI. No foreign-key validation; dangling ids resolve as unlocked.
+- `Setlist.artist_id` (`#[serde(default)]`, old files load as `None`) is the
+  setlist's **own artist A**. `None` means unlocked. There is no foreign-key
+  validation and no save-bound error: a dangling id resolves as unlocked in the
+  editor and header picker, and the setlist remains saveable. Assigning or
+  clearing A is a normal setlist edit (dirty + persisted on save). The
+  lock/add-gate it drives is UI-only and adds no printed markup; A can change
+  the sheet only through the logo chain. The planned setlist duplication
+  (Feature 13) copies the field.
 - The artist list is frontend-sorted by name. Counts use resolved identity:
   id-backed songs count for their record, legacy-text songs count for a
   same-named record until adopted, and unmatched text stays uncounted. Search
@@ -124,6 +129,24 @@ Serde notes:
   legacy text (which stays visible under All artists and in search). Its option
   counts and predicate use the same helper; the filter itself is in-memory and
   never persisted or backed up.
+- Feature 16 wires `Setlist.artist_id` through the editor **Artist** select
+  (**No artist** = unlocked), the header **Artist** picker (first dropdown,
+  `All artists` default), and the logo chain. The header picker is view-only:
+  it filters the setlist select by saved `artist_id`, never dirties or persists,
+  and only pre-assigns the artist of a **New** setlist. The current setlist is
+  always kept available in the select even when it falls outside the filter;
+  with zero matches the select shows a "No setlists by …" placeholder.
+- While the current setlist has a live artist A, the library is locked to A:
+  the list is filtered with `resolveArtistForSong()` identity (id-backed songs,
+  plus legacy text whose trimmed, case-insensitive text equals A's name),
+  combined with search, Has tuning, and sort. The Feature 15 Artist select is
+  forced to A and disabled with a visible note; the underlying in-memory
+  `artistFilter` is untouched, so unlocking restores it exactly. Adding a song
+  outside A (including one with no artist) is refused with
+  `“<title>” is not by <A> — switch the setlist artist to add it.` Breaks are
+  always allowed, and drag/reorder of existing items is never gated. Existing
+  non-A items stay; the summary shows `· <A>` plus a count of non-matching songs
+  when any. A dangling setlist artist id is unlocked, never a save error.
 - `Setlist.sheet_options` carries a field-level `#[serde(default)]`; the
   `SheetOptions` struct carries a **container-level** `#[serde(default)]` and a
   manual `Default` with every field `true`. So a missing field, a partial
@@ -161,12 +184,13 @@ Serde notes:
   `PageMode`, `DEFAULT_PAGE_MODE`, and `withPageModeDefaults()` live there too;
   they normalize a missing `page_mode` to `"Single"`.
   `normalizeArtistId()` maps missing/blank song/setlist `artist_id` values to
-  `null` on load, adoption, and restore.
+  `null` on load, adoption, cloning, saving, and restore.
   `Artist` is mirrored in `types.ts`; `src/artists.ts` holds
-  `resolveArtistName()` (display/search/sort), `resolveArtistForSong()` (counts
-  and filter identity), `libraryArtistBucket()`/`matchesLibraryArtistFilter()`
-  (the view-only Feature 15 library filter), and `resolveSetlistLogo()` (own
-  logo → artist logo → placeholder, reused by Feature 16).
+  `resolveArtistName()` (display/search/sort), `resolveArtistForSong()` (counts,
+  filter identity, and the Feature 16 lock/gate identity),
+  `libraryArtistBucket()`/`matchesLibraryArtistFilter()` (the view-only
+  Feature 15 library filter), and `resolveSetlistLogo()` (own logo → artist
+  logo → placeholder, used by preview, print, and export).
   `BreakItem.duration_secs` is the only written break length.
   `withBreakDefaults()`/`normalizeSetlistItems()` convert legacy backup JSON
   (`duration_mins` × 60, preferring `duration_secs`) and are applied on restore
@@ -234,6 +258,12 @@ JS argument keys are camelCase (`setlistId`, `fileName`); model fields are snake
   (all four info columns, 6/50/9/10/9/16). Every preset sums to 100%. The
   `<colgroup>` is the only width source — never add `th` width rules — and the
   numeric header/body cells share right alignment and 1.5 mm horizontal padding.
+- The brand logo resolves as setlist's own `logo` when `file_name` is set,
+  otherwise its artist's `logo` when set, otherwise the setlist placeholder
+  config. `resolveSetlistLogo()` is the single helper for preview, print, and
+  export; the resolved `LogoConfig` supplies the file name, width, and
+  alignment. The editor's Logo controls still edit only the setlist's own logo.
+  No column, frame, print-CSS, or raster change is involved.
 - `<thead>` carries the logo/title/venue/date header and column labels; `<tfoot>`
   carries the footer. Both are marked as table header/footer groups
   (`display: table-header-group` / `table-footer-group`). Chromium-based engines
@@ -305,7 +335,10 @@ JS argument keys are camelCase (`setlistId`, `fileName`); model fields are snake
 - Blob URLs must not reach the raster: the production `connect-src` blocks their
   fetch and WebKitGTK was unreliable even when allowed. `storedLogoDataUrl()` in
   `logo.ts` base64-encodes the same scoped `readFile` bytes; the live preview
-  keeps blob URLs. Never widen the CSP or the fs capability for export.
+  keeps blob URLs. Never widen the CSP or the fs capability for export. The
+  exporter receives the resolved setlist → artist `LogoConfig`, so the export
+  data-URL and printed width match the preview; its raster/grayscale logic is
+  unchanged.
 - Warm up the raster pipeline once per session with a throwaway `toCanvas`; the
   first WebKitGTK capture can drop the logo even when the live `<img>` is
   complete. Export always forces the logo to grayscale, regardless of the
@@ -372,7 +405,10 @@ JS argument keys are camelCase (`setlistId`, `fileName`); model fields are snake
   builds have no key and restore as an empty artist list (`normalizeArtist()`
   mirrors the Rust name trim/logo defaults). `song.artist_id` and
   `setlist.artist_id` normalize from missing/blank to `null`; restore never
-  requires the artist to exist first, so dangling ids stay loadable.
+  requires the artist to exist first, so dangling ids stay loadable. Setlist
+  `artist_id` round-trips as part of `Setlist` (Feature 16) without a schema
+  bump; an older build restoring the file drops the assignment and keeps the
+  rest of the setlist.
 - Restore semantics: upsert by `id`; records with the same IDs are overwritten,
   nothing else is deleted. Structurally malformed records are skipped and
   reported; validation failures from `save_*` are reported per record. The UI

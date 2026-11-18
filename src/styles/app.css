@@ -714,6 +714,29 @@ input[type="file"]::file-selector-button {
   margin-bottom: 18px;
 }
 
+.setlist-artist {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-bottom: 18px;
+}
+
+.setlist-artist-note {
+  margin: 0;
+  color: var(--ink-soft);
+  font-size: 12px;
+}
+
+.library-lock-note {
+  margin: 0 0 10px;
+  padding: 8px 10px;
+  border-left: 3px solid var(--accent);
+  border-radius: 0 8px 8px 0;
+  background: #fbfaf7;
+  color: var(--ink-soft);
+  font-size: 12px;
+}
+
 .items-heading {
   display: flex;
   flex-wrap: wrap;

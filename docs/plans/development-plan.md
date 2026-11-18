@@ -130,12 +130,12 @@ harness were removed when the exporter shipped.
 - Sheet correctness fixes from real use: Feature 10 done (per-combination
   column widths + header alignment); Feature 11 done (paginated
   preview/print frames). Both outrank new tooling.
-- Library/setlist tooling slice: Features 12, 14, 15, 17, and 18 are Done;
-  Feature 13 (setlist duplication as a preset base) and Feature 16 (setlist
-  artist + per-artist picker + lock) remain Todo. In-place library song
-  editing, artist records + logos, the in-memory library artist filter, and
-  break-second precision shipped. Feature 13 is independent; Feature 16 is the
-  remaining artist-chain step after 15.
+- Library/setlist tooling slice: Features 12, 14, 15, 16, 17, and 18 are Done;
+  Feature 13 (setlist duplication as a preset base) remains Todo. In-place
+  library song editing, artist records + logos, the in-memory library artist
+  filter, the setlist artist + per-artist picker + library lock, and
+  break-second precision shipped. Feature 13 is independent and will copy the
+  setlist artist.
 - `tauri android init` / `ios init` on provisioned machines; native share.
 - Print QA on real A4 (checklist below), backup/restore, app versioning,
   signing/release automation (tracked in the roadmap, P3).
@@ -305,3 +305,21 @@ WebView2/WKWebView when available):**
   12's draft retention, hidden-row cancellation, save locking, focus, and row
   layout behavior is unchanged. No Rust, IPC, storage, or contract change.
   Features 13 and 16 remain Todo; 16 follows.
+- 2026-11-18: Feature 16 shipped (setlist artist + per-artist setlist picker +
+  library lock). The editor gained an Artist select (`No artist` = unlocked,
+  dirty + persisted, dangling ids unlocked), and the header gained a view-only
+  Artist picker that filters the setlist select by saved `artist_id`, keeps the
+  open setlist available, shows a zero-match placeholder, and pre-assigns New.
+  A live setlist artist A narrows the library to A through
+  `resolveArtistForSong()` identity (id plus matching legacy text), forces and
+  disables the Feature 15 Artist select with a note, and restores the previous
+  in-memory selection on unlock. Library adds outside A are refused with
+  `“<title>” is not by <A> — switch the setlist artist to add it.`; breaks stay
+  allowed, existing items are untouched, and the summary carries `· A` plus a
+  non-matching count. Preview, print, and export share `resolveSetlistLogo()`
+  (own → artist → placeholder) through the existing logo URL/data-URL and
+  export width plumbing; the Logo controls still edit the setlist's own config.
+  `normalizeArtistId()` covers load/clone/adopt/save/restore, the backup schema
+  stays 1, and the Feature 14 Rust tests already cover with/without the field,
+  legacy loading, and dangling ids. Feature 13 remains Todo and will copy
+  `artist_id`.

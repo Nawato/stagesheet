@@ -3,10 +3,13 @@ import "./styles/print.css";
 
 import { api } from "./api";
 import {
+  findArtistById,
   libraryArtistBucket,
   matchesLibraryArtistFilter,
   NO_ARTIST_FILTER,
+  resolveArtistForSong,
   resolveArtistName,
+  resolveSetlistLogo,
 } from "./artists";
 import { exportBackup, readBackupFile } from "./backup";
 import { byId, el } from "./dom";
@@ -66,6 +69,10 @@ let current: Setlist | null = null;
 let dirty = false;
 let backendAvailable = true;
 let logoSrc: string | null = null;
+/** True while `logoSrc` is a local upload preview rather than a stored logo. */
+let logoPreviewIsLocal = false;
+/** Stored logo file currently shown by `logoSrc`; drives resolution refreshes. */
+let loadedLogoFileName: string | null = null;
 let logoRequestId = 0;
 let statusTimer: number | undefined;
 /** Library view controls. In-memory only: sorting/filtering never dirties a setlist. */
@@ -77,6 +84,12 @@ let tuningOnly = false;
  * other controls: never persisted, never part of the backup envelope.
  */
 let artistFilter: string | null = null;
+/**
+ * Header artist picker: `null` = All artists, otherwise a live artist record id.
+ * View-only: it narrows the setlist select and pre-assigns New, but never dirties
+ * a setlist, is never persisted, and never enters the backup envelope.
+ */
+let setlistArtistFilter: string | null = null;
 /**
  * Inline library editor state. At most one row editor is open at a time;
  * opening another row discards the previous draft, because nothing reaches the
@@ -117,6 +130,8 @@ const LEGACY_ARTIST_VALUE = "__legacy_artist__";
 
 /** Library artist-filter select value for "All artists" (`artistFilter === null`). */
 const ARTIST_FILTER_ALL = "";
+/** Header artist-picker value for "All artists" (`setlistArtistFilter === null`). */
+const SETLIST_ARTIST_FILTER_ALL = "";
 
 type SongSortKey = "title" | "artist" | "key" | "tuning";
 
@@ -216,6 +231,7 @@ let pendingLibraryEditorFocus: LibraryEditorFocusTarget | null = null;
 
 const statusEl = byId<HTMLParagraphElement>("status");
 
+const setlistArtistFilterSelect = byId<HTMLSelectElement>("setlist-artist-filter");
 const setlistSelect = byId<HTMLSelectElement>("setlist-select");
 const newSetlistButton = byId<HTMLButtonElement>("new-setlist");
 const saveSetlistButton = byId<HTMLButtonElement>("save-setlist");
@@ -228,6 +244,7 @@ const deleteSetlistButton = byId<HTMLButtonElement>("delete-setlist");
 const songSearch = byId<HTMLInputElement>("song-search");
 const songSortSelect = byId<HTMLSelectElement>("song-sort");
 const songArtistFilterSelect = byId<HTMLSelectElement>("song-artist-filter");
+const libraryLockNote = byId<HTMLParagraphElement>("library-lock-note");
 const songTuningOnlyInput = byId<HTMLInputElement>("song-tuning-only");
 const songListEl = byId<HTMLUListElement>("song-list");
 const songCountEl = byId<HTMLSpanElement>("song-count");
@@ -263,6 +280,8 @@ const backupRestoreButton = byId<HTMLButtonElement>("backup-restore");
 const titleInput = byId<HTMLInputElement>("setlist-title");
 const venueInput = byId<HTMLInputElement>("setlist-venue");
 const dateInput = byId<HTMLInputElement>("setlist-date");
+const setlistArtistSelect = byId<HTMLSelectElement>("setlist-artist");
+const setlistArtistNote = byId<HTMLParagraphElement>("setlist-artist-note");
 const dirtyIndicator = byId<HTMLSpanElement>("dirty-indicator");
 const setlistSummary = byId<HTMLParagraphElement>("setlist-summary");
 
@@ -322,6 +341,11 @@ function bindEvents(): void {
   deleteSetlistButton.addEventListener("click", () => {
     void deleteCurrent();
   });
+  setlistArtistFilterSelect.addEventListener("change", () => {
+    const value = setlistArtistFilterSelect.value;
+    setlistArtistFilter = artists.some((artist) => artist.id === value) ? value : null;
+    renderSetlistSelect();
+  });
   setlistSelect.addEventListener("change", () => {
     void handleSetlistChange();
   });
@@ -345,6 +369,17 @@ function bindEvents(): void {
     markDirty();
     renderSheet();
   });
+  setlistArtistSelect.addEventListener("change", () => {
+    if (!current) return;
+    const value = setlistArtistSelect.value;
+    current.artist_id = artists.some((artist) => artist.id === value) ? value : null;
+    markDirty();
+    renderSetlistArtistNote();
+    renderSummary();
+    renderLibrary();
+    renderSheet();
+    void refreshLogoIfChanged();
+  });
 
   songSearch.addEventListener("input", renderLibrary);
   songSortSelect.addEventListener("change", () => {
@@ -352,6 +387,12 @@ function bindEvents(): void {
     renderLibrary();
   });
   songArtistFilterSelect.addEventListener("change", () => {
+    // The select is disabled while a setlist artist locks the library; ignore
+    // programmatic changes too so the remembered user filter stays intact.
+    if (currentLockArtist()) {
+      renderLibrary();
+      return;
+    }
     const value = songArtistFilterSelect.value;
     if (value === ARTIST_FILTER_ALL) {
       artistFilter = null;
@@ -621,7 +662,10 @@ function adoptLoadedState(
   const preferred = preferredId
     ? setlists.find((setlist) => setlist.id === preferredId)
     : undefined;
-  const next = preferred ?? setlists[0];
+  const next =
+    preferred ??
+    setlists.find((setlist) => setlistMatchesHeaderArtist(setlist)) ??
+    setlists[0];
   current = next ? cloneSetlist(next) : createDraft();
   dirty = setlists.length === 0;
 }
@@ -651,12 +695,20 @@ async function startNewSetlist(): Promise<void> {
 
   pendingLogoRemovals.clear();
   current = createDraft();
+  // The header picker is view-only, but it pre-assigns the artist of a New
+  // setlist. The assignment is a normal unsaved edit from there on.
+  current.artist_id = selectedSetlistArtistId();
   dirty = true;
   clearLogoPreview();
   logoFileInput.value = "";
   renderAll();
   titleInput.focus();
   titleInput.select();
+  // A New setlist pre-assigned from the header picker may inherit the artist's
+  // logo; load it like any other setlist switch.
+  if (backendAvailable) {
+    void loadLogoForCurrent();
+  }
 }
 
 async function handleSetlistChange(): Promise<void> {
@@ -755,7 +807,7 @@ async function saveCurrent(): Promise<boolean> {
 
   try {
     const saved = await api.saveSetlist(current);
-    current = saved;
+    current = { ...saved, artist_id: normalizeArtistId(saved.artist_id) };
     dirty = false;
     dirtyIndicator.hidden = true;
 
@@ -773,8 +825,11 @@ async function saveCurrent(): Promise<boolean> {
     await cleanupPendingLogoRemovals();
 
     renderMeta();
+    renderSetlistArtistFilter();
     renderSetlistSelect();
+    renderSetlistArtistSection();
     renderSheet();
+    void refreshLogoIfChanged();
 
     // Rust is the authority for the saved duration; the local sum is only a
     // fallback if the follow-up call fails for an unrelated reason.
@@ -820,7 +875,8 @@ async function deleteCurrent(): Promise<void> {
 
   pendingLogoRemovals.clear();
   clearLogoPreview();
-  current = setlists[0] ? cloneSetlist(setlists[0]) : createDraft();
+  const next = setlists.find((setlist) => setlistMatchesHeaderArtist(setlist)) ?? setlists[0];
+  current = next ? cloneSetlist(next) : createDraft();
   dirty = setlists.length === 0;
   renderAll();
   if (backendAvailable && !dirty) {
@@ -875,6 +931,9 @@ async function exportCurrent(format: ExportFormat): Promise<void> {
     const outcome = await exportSetlist({
       sheet,
       setlist: current,
+      // Same resolution chain as the preview; the exporter only needs the
+      // stored file name and printed width.
+      logo: resolveSetlistLogo(current, artists),
       format,
       openAfterExport: exportOpenAfterInput.checked,
     });
@@ -1239,8 +1298,10 @@ function sortSetlists(): void {
 // ---------------------------------------------------------------------------
 
 function renderAll(): void {
+  renderSetlistArtistFilter();
   renderSetlistSelect();
   renderMeta();
+  renderSetlistArtistSection();
   renderLogoControls();
   renderSheetOptions();
   renderPageModeControls();
@@ -1252,12 +1313,71 @@ function renderAll(): void {
   renderSheet();
 }
 
-function renderSetlistSelect(): void {
-  const fragment = document.createDocumentFragment();
-  const options = [...setlists];
+/**
+ * Header artist picker: view-only. Options are live records plus All artists;
+ * a deleted selection falls back to All so no stale label survives a delete.
+ */
+function renderSetlistArtistFilter(): void {
+  if (setlistArtistFilter !== null && !setlistArtistFilterRecord()) {
+    setlistArtistFilter = null;
+  }
 
+  const fragment = document.createDocumentFragment();
+  fragment.append(artistOption(SETLIST_ARTIST_FILTER_ALL, "All artists"));
+  for (const artist of artists) {
+    fragment.append(artistOption(artist.id, artistLabel(artist)));
+  }
+
+  setlistArtistFilterSelect.replaceChildren(fragment);
+  setlistArtistFilterSelect.value = setlistArtistFilter ?? SETLIST_ARTIST_FILTER_ALL;
+}
+
+/** The header picker's live artist record, or null for All artists. */
+function setlistArtistFilterRecord(): Artist | null {
+  return findArtistById(artists, setlistArtistFilter);
+}
+
+/** Artist id for a New setlist, taken from the header picker. */
+function selectedSetlistArtistId(): string | null {
+  return setlistArtistFilterRecord()?.id ?? null;
+}
+
+/** True when a setlist belongs in the header picker's current filter. */
+function setlistMatchesHeaderArtist(setlist: Pick<Setlist, "artist_id">): boolean {
+  const filter = setlistArtistFilterRecord();
+  if (!filter) return true;
+  return normalizeArtistId(setlist.artist_id) === filter.id;
+}
+
+function renderSetlistSelect(): void {
+  if (setlistArtistFilter !== null && !setlistArtistFilterRecord()) {
+    setlistArtistFilter = null;
+  }
+
+  const filter = setlistArtistFilterRecord();
+  const fragment = document.createDocumentFragment();
+  const options = setlists.filter((setlist) => setlistMatchesHeaderArtist(setlist));
+
+  if (filter && options.length === 0) {
+    // Zero matches still leaves the current setlist available below, but the
+    // dropdown communicates that New will assign this artist.
+    const empty = artistOption(
+      "",
+      `No setlists by “${artistLabel(filter)}” yet — New uses this artist`,
+    );
+    empty.disabled = true;
+    fragment.append(empty);
+  }
+
+  // Never yank the open setlist out of the editor when it falls outside the
+  // header filter; it stays selected and selectable. With All artists, keep the
+  // existing "unsaved draft first" ordering.
   if (current && !options.some((setlist) => setlist.id === current?.id)) {
-    options.unshift(current);
+    if (setlistArtistFilter === null) {
+      options.unshift(current);
+    } else {
+      options.push(current);
+    }
   }
 
   for (const setlist of options) {
@@ -1274,6 +1394,49 @@ function renderSetlistSelect(): void {
   if (current) {
     setlistSelect.value = current.id;
   }
+}
+
+/** Editor Artist section: the setlist's own artist assignment (unlocked = none). */
+function renderSetlistArtistSection(): void {
+  if (!current) return;
+
+  const fragment = document.createDocumentFragment();
+  fragment.append(artistOption("", "No artist"));
+  for (const artist of artists) {
+    fragment.append(artistOption(artist.id, artistLabel(artist)));
+  }
+  setlistArtistSelect.replaceChildren(fragment);
+
+  // A dangling id resolves as unlocked; saving it unchanged stays valid.
+  const assigned = findArtistById(artists, normalizeArtistId(current.artist_id));
+  setlistArtistSelect.value = assigned?.id ?? "";
+  renderSetlistArtistNote();
+}
+
+/**
+ * Explains the logo resolution chain when the setlist relies on its artist's
+ * logo. The Logo controls still edit only the setlist's own config.
+ */
+function renderSetlistArtistNote(): void {
+  if (!current) {
+    setlistArtistNote.hidden = true;
+    setlistArtistNote.textContent = "";
+    return;
+  }
+
+  const artist = findArtistById(artists, normalizeArtistId(current.artist_id));
+  if (current.logo.file_name || !artist?.logo.file_name) {
+    setlistArtistNote.hidden = true;
+    setlistArtistNote.textContent = "";
+    return;
+  }
+
+  setlistArtistNote.textContent = `Using the logo from “${artistLabel(artist)}” — the artist logo's width and alignment apply until this setlist has its own logo.`;
+  setlistArtistNote.hidden = false;
+}
+
+function artistLabel(artist: Artist): string {
+  return artist.name.trim() || "Untitled artist";
 }
 
 function renderMeta(): void {
@@ -1294,7 +1457,9 @@ function renderLogoControls(): void {
 
   logoWidthInput.value = String(current.logo.width_mm);
   logoWidthOutput.textContent = `${Math.round(current.logo.width_mm)} mm`;
-  logoRemoveButton.disabled = !current.logo.file_name && !logoSrc;
+  // Only the setlist's own logo can be removed here; an artist logo shown via
+  // the resolution chain is not a setlist logo.
+  logoRemoveButton.disabled = !current.logo.file_name && !logoPreviewIsLocal;
 
   for (const radio of alignmentRadios) {
     radio.checked = radio.value === current.logo.alignment;
@@ -1325,9 +1490,10 @@ function renderLibrary(): void {
   // controls keep their state; only a stale artist id resets to All artists.
   renderLibraryArtistFilter();
 
+  const activeArtistFilter = effectiveLibraryArtistFilter();
   const query = songSearch.value.trim().toLocaleLowerCase();
   const matching = songs
-    .filter((song) => matchesLibraryArtistFilter(song, artists, artistFilter))
+    .filter((song) => matchesLibraryArtistFilter(song, artists, activeArtistFilter))
     .filter((song) => {
       if (!query) return true;
       return [song.title, resolveArtistName(song, artists), song.key, song.tuning]
@@ -1355,7 +1521,9 @@ function renderLibrary(): void {
   );
 
   if (ordered.length === 0) {
-    songListEl.replaceChildren(el("li", "empty-state", libraryEmptyMessage(query)));
+    songListEl.replaceChildren(
+      el("li", "empty-state", libraryEmptyMessage(query, activeArtistFilter)),
+    );
     return;
   }
 
@@ -1367,10 +1535,30 @@ function renderLibrary(): void {
 }
 
 /**
+ * The current setlist's lock artist. Only a live `artist_id` resolves; a
+ * dangling id is unlocked, and Setlist has no legacy text field of its own.
+ */
+function currentLockArtist(): Artist | null {
+  return current ? findArtistById(artists, normalizeArtistId(current.artist_id)) : null;
+}
+
+/**
+ * The library artist bucket actually applied: a setlist lock overrides the
+ * Feature 15 selection without destroying it, so unlocking restores exactly the
+ * user's previous in-memory choice.
+ */
+function effectiveLibraryArtistFilter(): string | null {
+  return currentLockArtist()?.id ?? artistFilter;
+}
+
+/**
  * Fills the library artist filter from the current artist cache. Options list
  * live records with resolved song counts plus No artist. The selected value is
  * kept across re-renders; an id that no longer resolves falls back to All
  * artists so no stale selection survives a delete/restore.
+ *
+ * While the current setlist has an artist, this select is forced to that record
+ * and disabled; the note explains why and the underlying selection is untouched.
  */
 function renderLibraryArtistFilter(): void {
   if (
@@ -1388,7 +1576,7 @@ function renderLibraryArtistFilter(): void {
     fragment.append(
       artistOption(
         artist.id,
-        `${artist.name.trim() || "Untitled artist"} (${counts.get(artist.id) ?? 0})`,
+        `${artistLabel(artist)} (${counts.get(artist.id) ?? 0})`,
       ),
     );
   }
@@ -1400,7 +1588,21 @@ function renderLibraryArtistFilter(): void {
   );
 
   songArtistFilterSelect.replaceChildren(fragment);
-  songArtistFilterSelect.value = artistFilter ?? ARTIST_FILTER_ALL;
+
+  const lock = currentLockArtist();
+  if (lock) {
+    songArtistFilterSelect.value = lock.id;
+    songArtistFilterSelect.disabled = true;
+    songArtistFilterSelect.setAttribute("aria-describedby", "library-lock-note");
+    libraryLockNote.textContent = `Library locked to “${artistLabel(lock)}” by the setlist artist. Set the setlist artist to No artist to filter freely.`;
+    libraryLockNote.hidden = false;
+  } else {
+    songArtistFilterSelect.value = artistFilter ?? ARTIST_FILTER_ALL;
+    songArtistFilterSelect.disabled = false;
+    songArtistFilterSelect.removeAttribute("aria-describedby");
+    libraryLockNote.hidden = true;
+    libraryLockNote.textContent = "";
+  }
 }
 
 /**
@@ -1419,16 +1621,16 @@ function libraryArtistCounts(): Map<string, number> {
   return counts;
 }
 
-function libraryEmptyMessage(query: string): string {
-  if (artistFilter !== null) {
-    const count = libraryArtistCounts().get(artistFilter) ?? 0;
-    if (artistFilter === NO_ARTIST_FILTER) {
+function libraryEmptyMessage(query: string, activeArtistFilter: string | null): string {
+  if (activeArtistFilter !== null) {
+    const count = libraryArtistCounts().get(activeArtistFilter) ?? 0;
+    if (activeArtistFilter === NO_ARTIST_FILTER) {
       return count === 0
         ? "No songs without an artist yet."
         : "No songs without an artist match that search.";
     }
-    const selected = artists.find((artist) => artist.id === artistFilter);
-    const name = selected?.name.trim() || "Untitled artist";
+    const selected = artists.find((artist) => artist.id === activeArtistFilter);
+    const name = selected ? artistLabel(selected) : "Untitled artist";
     return count === 0
       ? `No songs by “${name}” yet.`
       : `No songs by “${name}” match that search.`;
@@ -1927,9 +2129,20 @@ function renderSummary(): void {
   const totalSecs = setlistDurationSecs(current);
   const songCount = current.items.filter((item) => "Song" in item).length;
   const breakCount = current.items.filter((item) => "Break" in item).length;
+  const lock = currentLockArtist();
+  const lockName = lock ? artistLabel(lock) : null;
+  const mismatches = lock
+    ? current.items.filter(
+        (item) =>
+          "Song" in item &&
+          resolveArtistForSong(item.Song, artists)?.id !== lock.id,
+      ).length
+    : 0;
 
   if (current.items.length === 0) {
-    setlistSummary.textContent = "Empty running order";
+    setlistSummary.textContent = lockName
+      ? `Empty running order · ${lockName}`
+      : "Empty running order";
     return;
   }
 
@@ -1937,6 +2150,10 @@ function renderSummary(): void {
     `${songCount} ${songCount === 1 ? "song" : "songs"}`,
     breakCount > 0 ? `${breakCount} ${breakCount === 1 ? "break" : "breaks"}` : null,
     `${formatRuntime(totalSecs)} total`,
+    lockName,
+    mismatches > 0
+      ? `${mismatches} ${mismatches === 1 ? "song" : "songs"} not by ${lockName}`
+      : null,
   ].filter((part): part is string => Boolean(part));
 
   setlistSummary.textContent = parts.join(" · ");
@@ -1965,11 +2182,18 @@ function renderSheet(): void {
   // source, but the frame stack is what the preview and print show.
   sheetFrame.classList.toggle("is-framed", multi);
 
-  renderSetlistSheet(sheet, current, {
-    logoUrl: logoSrc,
-    grayscaleLogo: grayscaleLogoInput.checked,
-    onLogoLayout: handleSheetLayout,
-  });
+  // Resolve the same logo chain everywhere: own logo → artist logo →
+  // placeholder. The sheet only reads `logo` for the header; no print markup
+  // or layout changes.
+  renderSetlistSheet(
+    sheet,
+    { ...current, logo: resolveSetlistLogo(current, artists) },
+    {
+      logoUrl: logoSrc,
+      grayscaleLogo: grayscaleLogoInput.checked,
+      onLogoLayout: handleSheetLayout,
+    },
+  );
   renderSummary();
 
   if (multi) {
@@ -3012,6 +3236,17 @@ function addSongToSetlist(song: Song): void {
   if (blockLibraryActionWhileBusy()) return;
   if (!current) return;
 
+  // The lock gates library adds only (never reorder/existing items). Legacy
+  // text matching uses the same resolved identity as the library filter.
+  const lock = currentLockArtist();
+  if (lock && resolveArtistForSong(song, artists)?.id !== lock.id) {
+    setStatus(
+      `“${song.title}” is not by ${artistLabel(lock)} — switch the setlist artist to add it.`,
+      "error",
+    );
+    return;
+  }
+
   current.items.push({ Song: { ...song } });
   markDirty();
   renderItems();
@@ -3437,7 +3672,15 @@ async function handleArtistSubmit(event: SubmitEvent): Promise<void> {
     resetArtistForm();
     renderArtists();
     renderNewSongArtistOptions();
+    renderSetlistArtistFilter();
+    renderSetlistArtistSection();
     renderLibrary();
+    // A rename can change legacy-text identity and counts; a logo edit changes
+    // this setlist's resolved logo width/alignment even when the file stays the
+    // same, so always re-render the sheet before refreshing the resolved file.
+    renderSummary();
+    renderSheet();
+    void refreshLogoIfChanged();
     setStatus(
       wasEdit
         ? `Updated artist “${saved.name}”. Songs and setlists show the new name without being rewritten.`
@@ -3611,8 +3854,19 @@ async function deleteArtist(artist: Artist): Promise<void> {
       try {
         const saved = await api.saveSetlist({ ...setlist, artist_id: null });
         const index = setlists.findIndex((entry) => entry.id === saved.id);
-        if (index >= 0) setlists[index] = saved;
-        if (current?.id === saved.id) {
+        if (index >= 0) {
+          setlists[index] = {
+            ...saved,
+            artist_id: normalizeArtistId(saved.artist_id),
+          };
+        }
+        // Key off the open draft's own assignment, not the cached record: a
+        // dirty draft may have moved S to another artist (or onto A) since the
+        // cache was saved. Never overwrite an unrelated dirty choice.
+        if (
+          current?.id === saved.id &&
+          normalizeArtistId(current.artist_id) === artist.id
+        ) {
           current.artist_id = null;
           if (!dirty) current = cloneSetlist(saved);
         }
@@ -3637,9 +3891,16 @@ async function deleteArtist(artist: Artist): Promise<void> {
     }
 
     artists = artists.filter((entry) => entry.id !== artist.id);
+    // The clear is keyed off the open draft itself, so it also covers a dirty
+    // persisted draft whose cached record no longer points at A and drafts not
+    // present in `setlists`. An unrelated draft assignment is preserved.
+    if (current && normalizeArtistId(current.artist_id) === artist.id) {
+      current.artist_id = null;
+    }
     clearArtistDraftForDeletedArtist(artist.id, editingThis);
     renderNewSongArtistOptions();
     renderAll();
+    void refreshLogoIfChanged();
 
     if (artist.logo.file_name) {
       // Backend skips the file while a setlist or another artist references it.
@@ -3737,6 +3998,7 @@ async function handleLogoFile(): Promise<void> {
     }
     setlist.logo.file_name = storedName;
     renderLogoControls();
+    renderSetlistArtistNote();
     markDirty();
     renderSheet();
     setStatus("Logo imported.", "success");
@@ -3752,7 +4014,7 @@ function handleLogoRemove(): void {
   if (!current) return;
 
   const fileName = current.logo.file_name;
-  if (!fileName && !logoSrc) return;
+  if (!fileName && !logoPreviewIsLocal) return;
 
   if (fileName) {
     // Defer the delete until Save succeeds. Discarding the edit must leave the
@@ -3764,6 +4026,9 @@ function handleLogoRemove(): void {
   setLogoPreview(null);
   renderLogoControls();
   markDirty();
+  renderSetlistArtistNote();
+  // With no own logo the preview may now fall back to the artist's logo.
+  void refreshLogoIfChanged();
   setStatus(fileName ? "Logo removed — save to apply." : "Logo removed.");
 }
 
@@ -3780,12 +4045,19 @@ async function cleanupPendingLogoRemovals(): Promise<void> {
   }
 }
 
+/** The logo actually shown: setlist own → artist → placeholder config. */
+function resolvedSetlistLogo(): LogoConfig | null {
+  return current ? resolveSetlistLogo(current, artists) : null;
+}
+
 async function loadLogoForCurrent(): Promise<void> {
-  const request = ++logoRequestId;
+  // Clearing also invalidates any in-flight stored-logo request.
   clearLogoPreview();
+  const request = logoRequestId;
+  renderLogoControls();
   renderSheet();
 
-  const fileName = current?.logo.file_name;
+  const fileName = resolvedSetlistLogo()?.file_name ?? null;
   if (!fileName || !backendAvailable) return;
 
   try {
@@ -3795,6 +4067,8 @@ async function loadLogoForCurrent(): Promise<void> {
       return;
     }
     logoSrc = url;
+    logoPreviewIsLocal = false;
+    loadedLogoFileName = fileName;
   } catch (error) {
     if (request === logoRequestId) {
       setStatus(`Could not load logo: ${describeError(error)}`, "error");
@@ -3803,17 +4077,36 @@ async function loadLogoForCurrent(): Promise<void> {
   renderSheet();
 }
 
+/**
+ * Reloads the preview only when the resolved stored file changed, so artist
+ * renames and unrelated renders do not revoke a working blob URL. A local
+ * upload preview always wins until it is saved or cleared.
+ */
+async function refreshLogoIfChanged(): Promise<void> {
+  if (logoPreviewIsLocal) return;
+  const fileName = resolvedSetlistLogo()?.file_name ?? null;
+  if (fileName === loadedLogoFileName) return;
+  await loadLogoForCurrent();
+}
+
 function setLogoPreview(url: string | null): void {
+  // A local upload preview must win over any stored-logo load still in flight.
   clearLogoPreview();
   logoSrc = url;
+  logoPreviewIsLocal = url !== null;
   renderSheet();
 }
 
 function clearLogoPreview(): void {
+  // Invalidate pending loads so they cannot overwrite a newer preview or a
+  // different setlist's logo after this clear.
+  logoRequestId += 1;
   if (logoSrc) {
     URL.revokeObjectURL(logoSrc);
     logoSrc = null;
   }
+  logoPreviewIsLocal = false;
+  loadedLogoFileName = null;
 }
 
 // ---------------------------------------------------------------------------

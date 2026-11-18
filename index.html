@@ -43,6 +43,12 @@
 
         <div class="app-actions" role="group" aria-label="Setlist actions">
           <div class="select-field">
+            <label for="setlist-artist-filter">Artist</label>
+            <select id="setlist-artist-filter">
+              <option value="" selected>All artists</option>
+            </select>
+          </div>
+          <div class="select-field">
             <label for="setlist-select">Setlist</label>
             <select id="setlist-select"></select>
           </div>
@@ -96,6 +102,8 @@
               Has tuning
             </label>
           </div>
+
+          <p id="library-lock-note" class="library-lock-note" role="note" hidden></p>
 
           <ul id="song-list" class="song-list"></ul>
 
@@ -267,6 +275,16 @@
                 <input id="setlist-date" type="date" />
               </div>
             </div>
+          </div>
+
+          <div class="setlist-artist">
+            <div class="field">
+              <label for="setlist-artist">Artist</label>
+              <select id="setlist-artist" aria-describedby="setlist-artist-note">
+                <option value="" selected>No artist</option>
+              </select>
+            </div>
+            <p id="setlist-artist-note" class="setlist-artist-note" role="note" hidden></p>
           </div>
 
           <div class="items-heading">

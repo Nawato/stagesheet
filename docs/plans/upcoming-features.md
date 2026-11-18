@@ -33,8 +33,9 @@ written (legacy `artist` text stays as a display fallback until adopted).
 Full specs lived here until the 2026-11 cleanup; the contract facts below are
 all mirrored in `SKILL.md`, which is now the single authority for shipped
 behavior. Features 12 (edit library songs), 14 (artist records with logos),
-15 (filter library by artist), 17 (break seconds), and 18 (setlist
-Delete-clarity) are Done; their specs remain below as reference.
+15 (filter library by artist), 16 (setlist artist + lock), 17 (break seconds),
+and 18 (setlist Delete-clarity) are Done; their specs remain below as
+reference.
 
 - **Validation hardening (with Feature 2)** — Done. `Setlist::validate()` walks
   every item. Bounds enforced in Rust: break `duration_secs` `0..=36000` (the
@@ -93,15 +94,22 @@ Delete-clarity) are Done; their specs remain below as reference.
   WebKitGTK frames are normalized with `zoom: 0.885` in print.
 - **Feature 14: Artist records with logos** — Done. `artists.json` +
   `list_artists` / `save_artist` / `delete_artist`; shared logo pool;
-  `Song.artist_id` with name snapshot fallback; declared `Setlist.artist_id`
-  for Feature 16; library Artists section and song dropdowns; additive
-  schema-1 backup `artists` array. Renames never rewrite songs/setlists.
+  `Song.artist_id` with name snapshot fallback; `Setlist.artist_id` (wired by
+  Feature 16); library Artists section and song dropdowns; additive schema-1
+  backup `artists` array. Renames never rewrite songs/setlists.
 - **Feature 15: Filter library by artist** — Done. View-only **Artist** select
   (`All artists` default) with resolved song counts plus **No artist**;
   combines with search, Has tuning, and sort. In-memory only: never dirties a
   setlist, persists, or enters a backup. Counts and the predicate share
   `libraryArtistBucket()`, so legacy text groups under its record and
   unmatched text stays under All artists.
+- **Feature 16: Setlist artist + per-artist picker + lock** — Done. Editor
+  **Artist** select (`No artist` = unlocked), header **Artist** picker
+  (`All artists`, filters the setlist select, pre-assigns New), and a UI-only
+  lock that narrows/forces the library artist filter and refuses non-A library
+  adds with the exact gate message. Existing items stay; the summary carries
+  `· A` plus a non-matching count. Preview/print/export resolve the logo via
+  setlist → artist → placeholder. Backup schema stays 1.
 
 ## Feature 12: Edit library songs — Done
 
@@ -276,8 +284,8 @@ This replaces free-text matching everywhere new code is written; legacy
 `Artist { id, name, logo }` lives in `artists.json` and shares the setlist logo
 pool (`import_logo`, downscale, and the reference-aware `remove_logo`).
 `Song.artist_id` stores the record reference while `artist` keeps the current
-name snapshot/legacy text; `Setlist.artist_id` is declared for Feature 16 but
-not wired into the editor, header picker, or lock yet. The library pane gained
+name snapshot/legacy text; `Setlist.artist_id` was declared here and wired into
+the editor, header picker, lock, and logo chain by Feature 16. The library pane gained
 an Artists section (logo thumbnails, resolved counts, one shared create/edit
 form with name + logo/width/alignment, confirmed delete), and both song forms
 use artist dropdowns with a "Keep text" option for unassigned legacy songs.
@@ -435,13 +443,48 @@ and never enters the backup envelope.
   resolution helper).
 2. QA + this file status + commit.
 
-## Feature 16: Setlist artist + per-artist setlist picker (lock) — Todo
+## Feature 16: Setlist artist + per-artist setlist picker (lock) — Done
 
-Status: Todo, builds on Features 14–15. From user feedback: songs belong to
+Status: Done, builds on Features 14–15. From user feedback: songs belong to
 the same artist the setlist belongs to, and picking an artist in the first
 dropdown shows that artist's setlists in the second dropdown. The lock is the
 toggleable enforcement of that assignment: while locked, only matching songs
 can be added.
+
+### Shipped notes
+
+The editor gained an **Artist** section between the setlist meta and the running
+order (`No artist` = unlocked). Assigning or clearing it marks the setlist dirty
+and persists through `save_setlist`; dangling ids resolve unlocked and remain
+saveable. The header gained a view-only **Artist** picker left of the setlist
+select: `All artists` by default, filtering the second dropdown by saved
+`artist_id`, keeping the open setlist available when it falls outside the
+filter, and showing a "No setlists by …" placeholder at zero matches. **New**
+pre-assigns the picker's artist (dirty, unsaved as usual); the picker itself is
+never persisted, never dirties, and never enters a backup. Both pickers and
+labels rebuild after artist create/rename/delete, setlist save/delete/load, and
+restore.
+
+With a live setlist artist A, the library list narrows to A using
+`resolveArtistForSong()` (id-backed songs plus trimmed, case-insensitive legacy
+text matching A's name), combined with search, Has tuning, and sort. The
+Feature 15 select is forced to A and disabled with a visible note; the
+underlying in-memory selection is untouched and returns exactly on unlock.
+Library adds outside A (including songs with no artist) are refused with
+`“<title>” is not by <A> — switch the setlist artist to add it.`; breaks stay
+allowed and drag/reorder is never gated. Existing non-A items remain, and the
+summary appends `· <A>` plus a non-matching song count when > 0. Library edits
+still follow Feature 12/15 filter reconciliation.
+
+Preview, print, and export now use `resolveSetlistLogo()`: setlist own logo →
+artist logo → placeholder. The resolved file name/width/alignment flows through
+the existing live `logoUrl` and export-only data-URL path; the Logo controls
+still edit only the setlist's own config, and there is no new printed markup,
+column/frame/print-CSS change, or raster change. The preview refreshes when the
+setlist artist or the artist's logo changes. `normalizeArtistId()` covers load,
+clone, adoption, save, and restore; backups carry the field without a schema
+bump. Rust already covered with/without `artist_id`, legacy missing-field
+loading, and dangling-id validation from Feature 14.
 
 ### Data model
 
@@ -470,9 +513,9 @@ can be added.
   artist. Switching back to All restores the full list; the current setlist
   stays selected even if it falls outside the filter (never yank the editor
   out from under the user).
-- While the current setlist has an artist A (case-insensitive id match;
-  legacy-text songs match when their trimmed text equals A's name, so old
-  libraries gate sensibly before adoption):
+- While the current setlist has a live artist A by id (legacy-text songs match
+  when their trimmed text equals A's name, so old libraries gate sensibly
+  before adoption):
   - The library list narrows to A, combined with search, Has-tuning filter,
     and sort. The Feature 15 select is forced to A and disabled with a note;
     unlocking restores the previous in-memory selection.
@@ -487,7 +530,8 @@ can be added.
 
 Explicitly none: the artist assignment is editor chrome plus logo
 resolution, never extra printed markup. No sheet, `<colgroup>`, frame,
-print-CSS, or exporter change; existing paper QA stands.
+print-CSS, raster, or layout change; the exporter only gains the resolved
+`LogoConfig` input. Existing paper QA stands.
 
 ### Tests + QA
 
@@ -499,8 +543,12 @@ print-CSS, or exporter change; existing paper QA stands.
   gate per case (match, mismatch, blank-artist song, legacy-text song,
   break allowed); search + tuning filter still narrow within the lock;
   Feature 15 select disabled/restored; summary suffix + mismatch count;
-  duplicate carries the artist; backup/restore preserves it; dirty/save
-  flows treat artist edits like any edit.
+  backup/restore preserves it; dirty/save flows treat artist edits like any
+  edit. Artist delete with a dirty setlist draft: cached S assigned A but the
+  draft changed to B keeps B; cached S assigned B but the draft changed to A
+  clears A and unlocks. Both must refresh the editor select, header picker,
+  lock, summary, and logo fallback. Feature 13's future duplicate will copy
+  the value.
 
 ### Build order
 
@@ -628,10 +676,10 @@ misread instead of adding new behavior.
   duplication; the remaining slice is a split-setlist helper (move second half
   to a new setlist) as an alternative to multi-page.
 - **P1 — Library/setlist tooling**: Features 12 (edit library songs), 14
-  (artist records + logos), 15 (library artist filter), 17 (break seconds),
-  and 18 (delete clarity) are Done. Feature 13 (duplicate setlist as preset
-  base) remains independent and Todo. Feature 16 (setlist artist + per-artist
-  picker + lock) is the remaining artist-chain step and follows 15.
+  (artist records + logos), 15 (library artist filter), 16 (setlist artist +
+  per-artist picker + lock), 17 (break seconds), and 18 (delete clarity) are
+  Done. Feature 13 (duplicate setlist as preset base) remains independent and
+  Todo; it will copy `Setlist.artist_id`.
 - **P1 — Backup/restore**: Done (Feature 7). One versioned JSON envelope for
   the full library + setlists; logos are re-imported manually in v1.
   Feature 14 adds the `artists` array without a version bump.

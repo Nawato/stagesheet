@@ -23,7 +23,7 @@ import { openPath } from "@tauri-apps/plugin-opener";
 import { downloadDir, join } from "@tauri-apps/api/path";
 
 import { storedLogoDataUrl } from "./logo";
-import type { Setlist } from "./types";
+import type { LogoConfig, Setlist } from "./types";
 
 const A4_WIDTH_MM = 210;
 const A4_HEIGHT_MM = 297;
@@ -58,6 +58,11 @@ export type ExportOutcome =
 export interface ExportRequest {
   sheet: HTMLElement;
   setlist: Setlist;
+  /**
+   * Resolved logo (setlist own → artist → placeholder). Defaults to the
+   * setlist's own config for callers that do not resolve the chain.
+   */
+  logo?: LogoConfig;
   format: ExportFormat;
   openAfterExport: boolean;
 }
@@ -100,11 +105,12 @@ export async function exportSetlist(request: ExportRequest): Promise<ExportOutco
   const path = await promptForPath(fileName, request.format);
   if (!path) return { status: "canceled" };
 
+  const logo = request.logo ?? request.setlist.logo;
   let logoDataUrl: string | null = null;
   let logoWarning: string | undefined;
-  if (request.setlist.logo.file_name) {
+  if (logo.file_name) {
     try {
-      logoDataUrl = await storedLogoDataUrl(request.setlist.logo.file_name);
+      logoDataUrl = await storedLogoDataUrl(logo.file_name);
     } catch (error) {
       // A missing/unreadable stored logo must not abort the export: the preview
       // already degrades to a placeholder, so export without the logo and
@@ -115,7 +121,7 @@ export async function exportSetlist(request: ExportRequest): Promise<ExportOutco
 
   const prepared = await prepareSheetRaster(request.sheet, {
     dataUrl: logoDataUrl,
-    widthMm: request.setlist.logo.width_mm,
+    widthMm: logo.width_mm,
   });
   let bytes: Uint8Array;
   try {
