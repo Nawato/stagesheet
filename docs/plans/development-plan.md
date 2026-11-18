@@ -137,7 +137,11 @@ harness were removed when the exporter shipped.
   per-artist scoping (mandatory artist on save, legacy records unfiled until
   assigned), break-second precision, and the effective logo width control
   shipped. Duplication copies the setlist artist and shares the logo file. The
-  only remaining overflow tool is the split-setlist helper.
+  only remaining overflow tool is the split-setlist helper. Specced next
+  (Todo): Feature 22 (Duplicate beside New before Save), Feature 23
+  (artist management on the landing screen, out of the library pane),
+  Feature 24 (Backup & Restore on the landing screen), Feature 25 (v0.3.0
+  review hardening), and Feature 26 (UI polish + language pass).
 - `tauri android init` / `ios init` on provisioned machines; native share.
 - Print QA on real A4 (checklist below), backup/restore, app versioning,
   signing/release automation (tracked in the roadmap, P3).
@@ -394,3 +398,13 @@ WebView2/WKWebView when available):**
   CSS removed); the summary drops `· A` but keeps the non-matching count.
   Session scope state is in-memory only. Only the split-setlist helper remains
   open behind it.
+- 2026-11-18: v0.3.0 perspective reviews (UI expert, UX expert, normal user,
+  frontend developer, backend developer) folded into the plan as Features
+  22–26 (Todo): Duplicate moves beside New before Save; artist management
+  leaves the library pane for the landing screen; Backup & Restore gain a
+  landing-screen section (incl. restore-before-scope); a hardening slice
+  (export/scope locks, alignment binding, dangling-id resolver, unfiled
+  guidance, backend small items); and a polish/language slice (menu anchor,
+  spacing, header grouping, landing polish, Duration labels, guidance
+  lines). Undo, S/M/L logo sizing, vector PDF, mobile, and SQLite stay
+  open. v0.3.0 (Features 19–21) tagged and pushed.

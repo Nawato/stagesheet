@@ -1048,6 +1048,246 @@ frames, the exporter, and raster logic are untouched.
    incl. `.print-hint`).
 2. QA + this file status + commit.
 
+## Feature 22: Header action order (Duplicate beside New) — Todo
+
+Status: Todo, tiny, independent UI chrome. From user feedback: the
+**Duplicate** button belongs beside **New**, before **Save** —
+creation-adjacent, not next to **Delete**.
+
+Context: the header currently reads scope selects, New / Save / Delete /
+Duplicate (Feature 13 placed Duplicate beside Delete; Feature 18 put
+Delete next to Save). New order: scope selects, **New, Duplicate, Save,
+Delete**.
+
+### Spec
+
+- Move `#duplicate-setlist` between `#new-setlist` and `#save-setlist`.
+  No label, behavior, or flow change: the same dirty-save-first,
+  confirm-free duplication. 44px targets and the existing wrap behavior
+  are untouched; no CSS change expected beyond what the move needs.
+- Feature 18's grouping (Delete next to Save) stays intact.
+
+### Tests + QA
+
+- `npm run build` clean; `cargo test` green (no Rust change).
+- Manual QA: button order at full and narrowed widths; duplication flow
+  unchanged (dirty save-first, copy title, clean selection).
+
+### Build order
+
+1. Move the button.
+2. QA + this file status + commit.
+
+## Feature 23: Artist management moves to the landing screen — Todo
+
+Status: Todo, medium, builds on Feature 20. From user feedback: remove
+the artists from the main window below the song library. With
+artist-first scoping, managing artists inside the song workspace is
+redundant and crowds the song workflow.
+
+Context: the library pane carries an **Artists** section (list with
+thumbnails/counts + the New/edit form with logo controls) below the song
+list; the landing screen already creates and selects artists and is
+reachable anytime via **Choose artist…**.
+
+### Data model
+
+None. No serde, storage, IPC, or backup change. Artist records,
+validation, logo pool, and deletion-nulling are untouched.
+
+### UI
+
+- Remove the `.artists-section` (heading, count badge, list, and form)
+  from the library pane, including its CSS and handlers. The library
+  pane keeps songs, the scoped badge, the add form, search/sort/tuning
+  (backup moves separately in Feature 24).
+- The landing screen gains full management per artist row: **Edit**
+  (reuses the same name/logo/width/alignment form and validation as the
+  removed section, inline on the landing card) and **Delete** (same
+  confirm with the unfiled consequence, same guards: refuse while a
+  library write, backup/restore, or logo import is in flight).
+- Deleting the **active** artist keeps the existing follow-records rule
+  unchanged (Unfiled scope when unfiled records remain, landing re-select
+  when nothing is unfiled) — the management surface moves, the behavior
+  does not — with a status naming the fallback.
+- The Feature 14/20 artist-form guards move with the form (landing-draft
+  blocking of backup/restore stays coherent — the form and the landing
+  `inert` scope now coincide).
+
+### Tests + QA
+
+- `npm run build` clean; `cargo test` green (no Rust change expected).
+- Manual QA: create/edit/delete artists from landing; rename propagates
+  without touching songs; delete-active-artist fallback; guards hold;
+  no orphaned ids, handlers, or CSS; library pane layout at full and
+  narrowed widths; keyboard/focus through the landing management form.
+
+### Build order
+
+1. Landing management (row Edit/Delete + form move) + remove the pane
+   section.
+2. QA + `SKILL.md` note (where artist UI lives) + this file status +
+   commit.
+
+## Feature 24: Backup & Restore on the landing screen — Todo
+
+Status: Todo, medium, builds on Features 20 and 23. From user feedback:
+backup/restore should be a separate button set in the artist
+selection/creation screen — and it fixes the v0.3.0 UX finding that a
+fresh-device restore currently needs a throwaway artist first.
+
+Context: the backup fieldset lives in the library pane, which is
+`inert` while the landing overlay gates the workspace.
+
+### Data model
+
+None. No envelope, schema, IPC, or storage change; the same handlers,
+guards, and per-record reporting move with the buttons.
+
+### UI
+
+- Add a **Backup** section to the landing card with separate
+  **Back up** and **Restore** buttons (same labels, same guards —
+  including the landing-draft guard — and the same re-check after the
+  file is picked).
+- Remove the `.backup-controls` fieldset from the library pane
+  (markup, hint copy, CSS, handlers).
+- Restore works before entering any scope: after a restore the artist
+  list, counts, and Unfiled entry refresh from the restored data, and
+  the user then enters a scope. Status reporting is unchanged.
+- The setlist editor's dirty auto-save before backup stays as-is; an
+  unfiled dirty draft still aborts (its message is improved by Feature
+  25, which ships after this one).
+
+### Tests + QA
+
+- `npm run build` clean; `cargo test` green (no Rust change).
+- Manual QA: fresh profile → Restore first (no dummy artist), then
+  enter a scope; Back up from landing; guards (drafts, in-flight
+  writes/imports); restored counts/Unfiled entry correct; no orphaned
+  ids/handlers/CSS.
+
+### Build order
+
+1. Landing Backup section + remove the pane fieldset.
+2. QA + this file status + commit.
+
+## Feature 25: v0.3.0 review hardening (safety + correctness) — Todo
+
+Status: Todo, medium batch, from the five v0.3.0 perspective reviews
+(UI, UX, normal user, frontend, backend). Each item is small; they ship
+as one hardening slice because they share the same guard/message code.
+
+### Scope (all must-fix; nothing optional here)
+
+- **Export capture lock** (frontend BLOCKING): `exporting` currently
+  disables Print/Export but leaves the editor live while `current` is
+  passed by reference into the capture — lock item editing, meta
+  inputs, and scope switching for the capture, or snapshot
+  `current.items` first; restore afterwards.
+- **Backup/restore vs scope switch** (frontend BLOCKING): `switchScope`
+  / `enterScope` have no `backingUp`/`restoring` guard while pickers,
+  meta inputs, and item actions stay enabled — refuse (or wait out) a
+  scope switch mid-snapshot/write so a restore cannot overwrite a
+  reselection.
+- **Alignment binds the displayed logo** (UX): the width slider follows
+  the effective logo (Feature 19) but the alignment radios always write
+  `setlist.logo` — bind alignment to the same effective-logo case
+  (artist path commits via `save_artist`; the showing line names width
+  **and** alignment target), so the two controls can never disagree.
+- **Dangling-id resolver as a contract change** (UX): today a dangling
+  song id falls back to legacy-text matching while setlists land Unfiled.
+  Change the contract so a dangling `artist_id` resolves as unfiled (no
+  text fallback) for songs **and** setlists alike; the assign offer then
+  lists only true `None` records with accurate copy; update `SKILL.md`
+  and this spec's shipped notes to the new rule.
+- **Unfiled failure guidance** (UX + normal user): when backup / print /
+  duplicate auto-save fails on the artist check, the status names the
+  filing next step (open the Unfiled scope / use `File under…` /
+  discard-then-switch) instead of surfacing the raw backend message.
+- **New-disabled explanation** (UX + normal user): the disabled New in
+  the Unfiled scope gets an adjacent hint plus an empty-state CTA
+  ("switch to an artist scope to create"), not tooltip-only; announce
+  on attempted activation.
+- **Backend**: trim song/setlist titles in commands like artists;
+  document `allow_unfiled` as UX-convention trust (any IPC caller can
+  pass it; the backend narrows *what* is skipped, not *who*); add the
+  missing stored-unfiled reorder test; revoke/prune blob-URL caches on
+  artist delete/logo replace (artist thumbs + landing previews).
+- **Small correctness**: `parseDuration` rejects empty colon parts
+  like the break parser; blank song-duplicate title falls back to
+  `Untitled song` (mirrors setlists); artist option labels trim;
+  `beforeunload` covers open song/artist/landing drafts; `#setlist-sheet`
+  gets `role="region"` (or the label goes); landing Ctrl/Cmd+S routes
+  to artist create.
+
+### Out of scope
+
+No new screens, no model changes, no envelope change. Larger asks stay
+open (undo system, see Feature 26).
+
+### Tests + QA
+
+- `npm run build` clean; `cargo test` green (incl. the new reorder +
+  trim tests).
+- Manual QA per item: capture while editing; scope switch mid-backup;
+  alignment on an artist logo; dangling-id fixtures; each unfiled
+  dead-end message; disabled-New hint/announcement; draft-close guard.
+
+### Build order
+
+1. Locks (export, backup/scope) + alignment binding + resolver.
+2. Messages (unfiled guidance, New hint) + backend small items.
+3. QA + `SKILL.md` + this file status + commit.
+
+## Feature 26: UI polish + language pass — Todo
+
+Status: Todo, small batch, from the v0.3.0 UI and normal-user reviews.
+Visual consistency and wording only; no behavior change beyond the
+labels named here. Builds on Feature 22 (assumes the
+New/Duplicate/Save/Delete header order).
+
+### Scope
+
+- Export menu right-anchored (`right: 0`) in the right-aligned toolbar.
+- Icon-button rows (running-order, library, artist/landing rows) get
+  ≥ 8px visual separation.
+- Header grouping: scope selects visually separated from the
+  New/Duplicate/Save/Delete group (grouping/divider + stronger danger
+  affordance for Delete); the four buttons wrap as their own group at
+  narrow widths instead of orphaning.
+- Landing card vertically centered (keep top-pin only for overflow);
+  display type for the landing title; one label token in the landing
+  form.
+- Logo showing line adjacent to the width/alignment controls.
+- `.logo-row` wraps at editor-pane widths, not just ≤ 520px.
+- Language: **Time → Duration** label consistency (toggle, column
+  heading; internal `cols-*-time` class names unchanged); a one-line
+  Print-vs-Export guidance note in the preview toolbar ("Print is the
+  sharpest paper copy; Export saves a PDF/PNG file"); a one-sentence
+  Unfiled glossary in the Unfiled empty state ("Unfiled means no artist
+  yet — file these or pick an artist scope above.").
+
+### Out of scope (stay open)
+
+Undo for Delete/Restore (needs a design of its own), Small/Medium/Large
+logo sizing instead of mm, selectable/vector PDF text, mobile, SQLite.
+
+### Tests + QA
+
+- `npm run build` clean; `cargo test` green (no Rust change expected).
+- Manual QA: toolbar/menu placement at full and narrowed widths;
+  header grouping/wrap; landing first-run impression; label
+  consistency across form, toggles, sheet, and empty states.
+
+### Build order
+
+1. Menu anchor + spacing + header grouping/wrap + landing + logo rows.
+2. Language labels + guidance/glossary lines + `SKILL.md`/status
+   contract sync (Time → Duration wording everywhere it is pinned,
+   internal `cols-*-time` class names unchanged).
+3. QA + this file status + commit.
+
 ## Roadmap backlog (prioritized)
 
 - **P0 — Sheet correctness fixes (from real use)**: Features 10 (column widths
@@ -1065,17 +1305,17 @@ frames, the exporter, and raster logic are untouched.
   artist filter), 16 (setlist artist + per-artist picker + lock), 17 (break
   seconds), and 18 (delete clarity) are Done. Setlist duplication copies
   `Setlist.artist_id` and shares the logo file.
-- **P1 — Artist-first mode + logo width control**: Feature 19 (the setlist
-  slider edits the displayed logo; an own logo adopts the effective size;
-  removal falls back to the artist logo) is a small independent slice.
-  Feature 20 (landing page + per-artist scoping with `artist_id` mandatory
-  on save) is the next major slice and supersedes the Feature 15 select,
-  the Feature 16 lock chrome, and the per-setlist editor Artist select.
-  The split-setlist helper stays open behind both.
-- **P1 — Print/export toolbar consolidation**: Feature 21 done (Print beside
-  export, one Export button with a PDF/PNG menu, the Ctrl/⌘+P pill as hover
-  information on the Print button). Print stays one-click and no exporter
-  behavior changed.
+- **P1 — Artist-first mode + logo width control**: Features 19 (effective
+  logo width control), 20 (landing page + per-artist scoping with
+  `artist_id` mandatory on save), and 21 (print/export toolbar
+  consolidation) are Done.
+- **P1 — v0.3.1 slice**: Feature 22 (Duplicate beside New before Save),
+  Feature 23 (artist management moves to the landing screen, out of the
+  library pane), Feature 24 (Backup & Restore on the landing screen,
+  incl. restore-before-scope), Feature 25 (v0.3.0 review hardening:
+  export/scope locks, alignment binding, dangling-id resolver, unfiled
+  guidance, backend small items), and Feature 26 (UI polish + language
+  pass). The split-setlist helper stays open behind these.
 - **P1 — Backup/restore**: Done (Feature 7). One versioned JSON envelope for
   the full library + setlists; logos are re-imported manually in v1.
   Feature 14 adds the `artists` array without a version bump.

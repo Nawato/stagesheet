@@ -127,6 +127,15 @@ commit as each change.
 
 ## Still missing (per plan)
 
+- Feature 22 — Duplicate moves beside New, before Save in the header.
+- Feature 23 — artist management (create/edit/delete) moves to the
+  landing screen; the Artists section leaves the library pane.
+- Feature 24 — Backup & Restore move to the landing screen, so a restore
+  works before entering any artist scope.
+- Feature 25 — v0.3.0 review hardening: export/scope locks, alignment
+  binding, dangling-id resolver, unfiled guidance, backend small items.
+- Feature 26 — UI polish + language pass (menu anchor, spacing, header
+  grouping, landing polish, Duration labels, guidance lines).
 - Paginated split-setlist helper (move the second half of a setlist into a new
   one) as an alternative to multi-page mode.
 - Physical-paper QA on A4 (page count, header/footer per engine, legibility),
