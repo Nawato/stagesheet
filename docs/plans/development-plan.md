@@ -138,8 +138,8 @@ harness were removed when the exporter shipped.
   effective logo width control shipped. Duplication copies the setlist artist
   and shares the logo file. The only remaining overflow tool is the
   split-setlist helper. Specced next (Todo): Feature 20 (artist-first landing
-  page + per-artist scoping) and Feature 21 (print/export toolbar
-  consolidation).
+  page + per-artist scoping). Feature 21 (print/export toolbar
+  consolidation) is Done.
 - `tauri android init` / `ios init` on provisioned machines; native share.
 - Print QA on real A4 (checklist below), backup/restore, app versioning,
   signing/release automation (tracked in the roadmap, P3).
@@ -370,3 +370,11 @@ WebView2/WKWebView when available):**
   the Artist-section note is retired. No Rust, IPC, storage, backup-schema,
   sheet/colgroup/frame/print-CSS, raster, CSP, or capability change.
   Features 20–21 remain Todo.
+- 2026-11-18: Feature 21 shipped (print/export toolbar consolidation). Print
+  moved from the header into the preview toolbar first; Export PDF/Export PNG
+  merged into one Export button with an in-place PDF/PNG menu (keyboard:
+  Enter/Space opens, arrows navigate, Escape returns focus; the button and
+  its entries lock while a capture runs). The Ctrl/⌘+P pill is gone; the
+  Print button carries it as a hover tooltip. No Rust, IPC, storage,
+  backup-schema, sheet/colgroup/frame/print-CSS, raster, CSP, or capability
+  change. Feature 20 remains Todo.

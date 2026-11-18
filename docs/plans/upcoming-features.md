@@ -43,8 +43,9 @@ Full specs lived here until the 2026-11 cleanup; the contract facts below are
 all mirrored in `SKILL.md`, which is now the single authority for shipped
 behavior. Features 12 (edit library songs), 13 (duplicate setlist as preset
 base), 14 (artist records with logos), 15 (filter library by artist), 16
-(setlist artist + lock), 17 (break seconds), 18 (setlist Delete-clarity), and
-19 (effective logo width control) are Done; their specs remain below as reference.
+(setlist artist + lock), 17 (break seconds), 18 (setlist Delete-clarity), 19
+(effective logo width control), and 21 (print/export toolbar consolidation)
+are Done; their specs remain below as reference.
 
 - **Validation hardening (with Feature 2)** — Done. `Setlist::validate()` walks
   every item. Bounds enforced in Rust: break `duration_secs` `0..=36000` (the
@@ -916,13 +917,34 @@ artist (1 artist → N songs and N setlists; N setlists → M songs), and
 4. Unfiled scope + landing offer + artist-deletion confirm wording.
 5. QA + `SKILL.md` + this file status + commit.
 
-## Feature 21: Print/export toolbar consolidation — Todo
+## Feature 21: Print/export toolbar consolidation — Done
 
-Status: Todo, small, independent UI-chrome slice. From user feedback:
+Status: Done, small, independent UI-chrome slice. From user feedback:
 Print belongs beside the export buttons, the two export buttons become
 one with a format choice after clicking, and the always-visible
 "Print: Ctrl / ⌘ + P" pill should become hover information instead of
 spending toolbar space.
+
+### Shipped notes
+
+**Print** (`#print-setlist`, label unchanged) moved from the header
+actions into `.preview-actions` first; the header keeps New/Save/Delete/
+Duplicate. One click still calls `window.print()` directly through the
+existing `printCurrent` path (dirty auto-save first, webview Ctrl/Cmd+P
+untouched). **Export PDF**/**Export PNG** merged into one **Export**
+(`#export-setlist`) button opening an in-place `menu` with `PDF`/`PNG`
+`menuitem` entries; choosing runs the existing `exportCurrent('pdf'/'png')`
+path unchanged (open-after-export checkbox as sibling, status, in-flight
+handling). The Export button is disabled with its menu items while a capture
+runs, so no second concurrent export. Keyboard: Enter/Space toggles the
+menu, arrows/Home/End move between entries, Escape closes and returns
+focus to the button; pointer click selects and outside pointer/focus-out
+closes. 44px targets, native buttons, visible focus. The group's
+`aria-label` is `Print and export`; the menu carries `Export format` with
+per-entry Export-as labels. The `.print-hint` span and its CSS (including
+the `print.css` exception) are removed; the Print button carries
+`title="Print (Ctrl / ⌘ + P)"`. No sheet/print/export/raster/no capability/
+CSP/storage/IPC/Rust change.
 
 Context: the header actions carry New/Save/Delete/Duplicate/**Print**
 (`#print-setlist`), while the preview toolbar carries a
@@ -1010,11 +1032,10 @@ frames, the exporter, and raster logic are untouched.
   on save) is the next major slice and supersedes the Feature 15 select,
   the Feature 16 lock chrome, and the per-setlist editor Artist select.
   The split-setlist helper stays open behind both.
-- **P1 — Print/export toolbar consolidation**: Feature 21 (Print beside
-  export, one Export button with a PDF/PNG choice after clicking, the
-  Ctrl/⌘+P pill as hover information on the Print button) is a small
-  independent slice; Print stays one-click and no exporter behavior
-  changes.
+- **P1 — Print/export toolbar consolidation**: Feature 21 done (Print beside
+  export, one Export button with a PDF/PNG menu, the Ctrl/⌘+P pill as hover
+  information on the Print button). Print stays one-click and no exporter
+  behavior changed.
 - **P1 — Backup/restore**: Done (Feature 7). One versioned JSON envelope for
   the full library + setlists; logos are re-imported manually in v1.
   Feature 14 adds the `artists` array without a version bump.

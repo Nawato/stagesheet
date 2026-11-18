@@ -56,7 +56,6 @@
           <button id="save-setlist" class="btn btn-primary" type="button">Save</button>
           <button id="delete-setlist" class="btn btn-danger" type="button">Delete</button>
           <button id="duplicate-setlist" class="btn" type="button">Duplicate</button>
-          <button id="print-setlist" class="btn" type="button">Print</button>
         </div>
       </header>
 
@@ -354,15 +353,58 @@
               <p id="preview-meta">A4 · 210 × 297 mm · black on white</p>
             </div>
             <div class="preview-tools">
-              <div class="preview-actions" role="group" aria-label="Export setlist">
-                <button id="export-pdf" class="btn btn-small" type="button">Export PDF</button>
-                <button id="export-png" class="btn btn-small" type="button">Export PNG</button>
+              <div class="preview-actions" role="group" aria-label="Print and export">
+                <button
+                  id="print-setlist"
+                  class="btn btn-small"
+                  type="button"
+                  title="Print (Ctrl / ⌘ + P)"
+                >
+                  Print
+                </button>
+                <div class="export-wrap">
+                  <button
+                    id="export-setlist"
+                    class="btn btn-small"
+                    type="button"
+                    aria-haspopup="menu"
+                    aria-expanded="false"
+                    aria-controls="export-menu"
+                  >
+                    Export
+                  </button>
+                  <div
+                    id="export-menu"
+                    class="export-menu"
+                    role="menu"
+                    aria-label="Export format"
+                    hidden
+                  >
+                    <button
+                      type="button"
+                      class="export-menu-item"
+                      role="menuitem"
+                      data-export-format="pdf"
+                      aria-label="Export as PDF"
+                    >
+                      PDF
+                    </button>
+                    <button
+                      type="button"
+                      class="export-menu-item"
+                      role="menuitem"
+                      data-export-format="png"
+                      aria-label="Export as PNG"
+                    >
+                      PNG
+                    </button>
+                  </div>
+                </div>
               </div>
               <label class="check check-inline">
                 <input id="export-open-after" type="checkbox" checked />
                 Open after export
               </label>
-              <span class="print-hint">Print: Ctrl / ⌘ + P</span>
             </div>
           </div>
 

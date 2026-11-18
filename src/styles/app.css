@@ -1057,15 +1057,6 @@ input[type="file"]::file-selector-button {
   font-weight: 650;
 }
 
-.print-hint {
-  padding: 5px 10px;
-  border: 1px solid var(--line);
-  border-radius: 999px;
-  color: var(--ink-soft);
-  font-size: 11px;
-  white-space: nowrap;
-}
-
 .preview-tools {
   display: flex;
   flex-wrap: wrap;
@@ -1077,7 +1068,58 @@ input[type="file"]::file-selector-button {
 .preview-actions {
   display: flex;
   flex-wrap: wrap;
+  align-items: center;
   gap: 6px;
+}
+
+.export-wrap {
+  position: relative;
+  display: inline-flex;
+}
+
+.export-menu {
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 0;
+  z-index: 30;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 160px;
+  padding: 4px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--paper);
+  box-shadow: 0 12px 28px rgb(28 27 25 / 0.16);
+}
+
+.export-menu[hidden] {
+  display: none;
+}
+
+.export-menu-item {
+  display: inline-flex;
+  align-items: center;
+  min-height: var(--tap);
+  padding: 0 14px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--ink);
+  font-size: 13px;
+  font-weight: 650;
+  text-align: left;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.export-menu-item:hover {
+  background: #f6f4ef;
+}
+
+.export-menu-item:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
 }
 
 .check-inline {

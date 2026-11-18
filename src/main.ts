@@ -238,8 +238,11 @@ const setlistSelect = byId<HTMLSelectElement>("setlist-select");
 const newSetlistButton = byId<HTMLButtonElement>("new-setlist");
 const saveSetlistButton = byId<HTMLButtonElement>("save-setlist");
 const printButton = byId<HTMLButtonElement>("print-setlist");
-const exportPdfButton = byId<HTMLButtonElement>("export-pdf");
-const exportPngButton = byId<HTMLButtonElement>("export-png");
+const exportButton = byId<HTMLButtonElement>("export-setlist");
+const exportMenu = byId<HTMLDivElement>("export-menu");
+const exportMenuItems = Array.from(
+  exportMenu.querySelectorAll<HTMLButtonElement>("button[data-export-format]"),
+);
 const exportOpenAfterInput = byId<HTMLInputElement>("export-open-after");
 const deleteSetlistButton = byId<HTMLButtonElement>("delete-setlist");
 const duplicateSetlistButton = byId<HTMLButtonElement>("duplicate-setlist");
@@ -336,11 +339,64 @@ function bindEvents(): void {
   printButton.addEventListener("click", () => {
     void printCurrent();
   });
-  exportPdfButton.addEventListener("click", () => {
-    void exportCurrent("pdf");
+  exportButton.addEventListener("click", () => {
+    if (exportMenu.hidden) {
+      openExportMenu();
+    } else {
+      closeExportMenu();
+    }
   });
-  exportPngButton.addEventListener("click", () => {
-    void exportCurrent("png");
+  exportButton.addEventListener("keydown", (event) => {
+    if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+      event.preventDefault();
+      openExportMenu(event.key === "ArrowUp" ? "last" : "first");
+    } else if (event.key === "Escape" && !exportMenu.hidden) {
+      event.preventDefault();
+      closeExportMenu();
+    }
+  });
+  exportMenu.addEventListener("keydown", (event) => {
+    if (event.key === "Escape") {
+      event.preventDefault();
+      closeExportMenu(true);
+    } else if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+      event.preventDefault();
+      focusExportMenuItem(event.key === "ArrowUp" ? -1 : 1);
+    } else if (event.key === "Home") {
+      event.preventDefault();
+      focusExportMenuItem("first");
+    } else if (event.key === "End") {
+      event.preventDefault();
+      focusExportMenuItem("last");
+    } else if (event.key === "Tab") {
+      closeExportMenu();
+    }
+  });
+  for (const item of exportMenuItems) {
+    item.addEventListener("click", () => {
+      const format = item.dataset.exportFormat;
+      if (format !== "pdf" && format !== "png") return;
+      closeExportMenu();
+      void exportCurrent(format);
+    });
+  }
+  document.addEventListener("pointerdown", (event) => {
+    if (exportMenu.hidden) return;
+    if (!(event.target instanceof Node)) return;
+    if (!exportMenu.parentElement?.contains(event.target)) {
+      closeExportMenu();
+    }
+  });
+  exportMenu.parentElement?.addEventListener("focusout", (event) => {
+    if (exportMenu.hidden) return;
+    const next = event.relatedTarget;
+    if (!(next instanceof Node)) {
+      closeExportMenu();
+      return;
+    }
+    if (!exportMenu.parentElement?.contains(next)) {
+      closeExportMenu();
+    }
   });
   deleteSetlistButton.addEventListener("click", () => {
     void deleteCurrent();
@@ -988,6 +1044,53 @@ function duplicateSetlistTitle(title: string): string {
   return candidate;
 }
 
+function isExportMenuOpen(): boolean {
+  return !exportMenu.hidden;
+}
+
+function openExportMenu(focus: "first" | "last" = "first"): void {
+  if (exporting) return;
+  exportMenu.hidden = false;
+  exportButton.setAttribute("aria-expanded", "true");
+  focusExportMenuItem(focus);
+}
+
+function closeExportMenu(returnFocus = false): void {
+  if (exportMenu.hidden) {
+    exportButton.setAttribute("aria-expanded", "false");
+    if (returnFocus) exportButton.focus();
+    return;
+  }
+  exportMenu.hidden = true;
+  exportButton.setAttribute("aria-expanded", "false");
+  if (returnFocus) exportButton.focus();
+}
+
+function focusExportMenuItem(target: "first" | "last" | number): void {
+  const enabled = exportMenuItems.filter((item) => !item.disabled);
+  if (enabled.length === 0) return;
+  if (target === "first") {
+    enabled[0].focus();
+    return;
+  }
+  if (target === "last") {
+    enabled[enabled.length - 1].focus();
+    return;
+  }
+  const active = document.activeElement;
+  const index = enabled.indexOf(active as HTMLButtonElement);
+  const next = enabled[(index + target + enabled.length) % enabled.length];
+  (next ?? enabled[0]).focus();
+}
+
+function syncExportControls(disabled: boolean): void {
+  printButton.disabled = disabled;
+  exportButton.disabled = disabled;
+  for (const item of exportMenuItems) {
+    item.disabled = disabled;
+  }
+}
+
 async function printCurrent(): Promise<void> {
   if (!current || exporting) return;
 
@@ -1022,13 +1125,12 @@ async function exportCurrent(format: ExportFormat): Promise<void> {
   // until the finally block restores and re-renders.
   renderSheet();
   exporting = true;
+  if (isExportMenuOpen()) closeExportMenu();
   // The exporter captures the tall sheet, which multiple mode normally hides
   // behind the frame stack. Reveal the source and hide the frames for the
   // capture; `renderSheet()` restores the framed preview in the finally block.
   sheetFrame.classList.remove("is-framed");
-  printButton.disabled = true;
-  exportPdfButton.disabled = true;
-  exportPngButton.disabled = true;
+  syncExportControls(true);
   setStatus(`Preparing ${format.toUpperCase()} export…`);
 
   try {
@@ -1063,9 +1165,7 @@ async function exportCurrent(format: ExportFormat): Promise<void> {
     setStatus(`Export failed: ${describeError(error)}`, "error");
   } finally {
     exporting = false;
-    printButton.disabled = false;
-    exportPdfButton.disabled = false;
-    exportPngButton.disabled = false;
+    syncExportControls(false);
     // Export prep mutates the sheet's inline styles and table markup; a fresh
     // render restores the preview and re-applies the page-mode fit.
     renderSheet();

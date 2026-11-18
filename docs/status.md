@@ -96,9 +96,12 @@ commit as each change.
   271 mm slices only as fallback), snap to row tops, and PNGs are a single
   full-sheet file (padded to A4 2480 × 3508 when short). A sheet long enough to
   exceed WebKit's canvas-height limit is downscaled proportionally (whole sheet,
-  lower effective dpi) instead of clipped. The preview toolbar also has an
-  "Open after export" option that opens the saved file in the system viewer
-  through `tauri-plugin-opener`. Exported text is bitmap by design.
+  lower effective dpi) instead of clipped. The preview toolbar puts **Print**
+  first beside a single **Export** button with an in-place PDF/PNG menu
+  (keyboard-operable, Escape returns focus), plus an "Open after export"
+  option that opens the saved file in the system viewer through
+  `tauri-plugin-opener`. The Print button carries the Ctrl/⌘+P shortcut as a
+  hover tooltip. Exported text is bitmap by design.
 - Printing through the native webview print dialog (Ctrl/Cmd + P); the print
   output follows the selected page layout and remains the text-sharp paper path.
 - GitHub Actions regression gate (`.github/workflows/ci.yml`): Node 20 frontend
@@ -117,10 +120,6 @@ commit as each change.
 - Feature 20 — artist-first mode: a landing page for artist
   creation/selection, per-artist song libraries and setlists, and a mandatory
   artist on save (legacy records stay "unfiled" until assigned).
-- Feature 21 — print/export toolbar consolidation: Print moves beside the
-  export buttons, the two export buttons merge into one with a PDF/PNG
-  choice after clicking, and the Ctrl/⌘+P pill becomes hover information
-  on the Print button.
 - Paginated split-setlist helper (move the second half of a setlist into a new
   one) as an alternative to multi-page mode.
 - Physical-paper QA on A4 (page count, header/footer per engine, legibility),

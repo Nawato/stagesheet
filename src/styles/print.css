@@ -32,7 +32,6 @@
   .library-pane,
   .editor-pane,
   .preview-toolbar,
-  .print-hint,
   .sheet-options,
   noscript {
     display: none !important;
