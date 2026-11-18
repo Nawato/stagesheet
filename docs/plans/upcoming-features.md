@@ -1078,17 +1078,47 @@ Delete**.
 1. Move the button.
 2. QA + this file status + commit.
 
-## Feature 23: Artist management moves to the landing screen — Todo
+## Feature 23: Artist management moves to the landing screen — Done
 
-Status: Todo, medium, builds on Feature 20. From user feedback: remove
+Status: Done, medium, builds on Feature 20. From user feedback: remove
 the artists from the main window below the song library. With
 artist-first scoping, managing artists inside the song workspace is
 redundant and crowds the song workflow.
 
-Context: the library pane carries an **Artists** section (list with
+Context: the library pane carried an **Artists** section (list with
 thumbnails/counts + the New/edit form with logo controls) below the song
-list; the landing screen already creates and selects artists and is
+list; the landing screen already created and selected artists and is
 reachable anytime via **Choose artist…**.
+
+### Shipped notes
+
+The `.artists-section` (heading, count badge, list, and form) is gone from
+the library pane, including its CSS and handlers. The library pane keeps
+songs, the scoped badge, the add form, search/sort/tuning, and the backup
+fieldset (Feature 24 moves that separately). Each landing row gained
+**Edit** and **Delete** icon buttons (44px, labels, `aria-expanded` on Edit)
+beside the workspace entry button. Edit renders the same
+name/logo/width/alignment form and validation inline under the row on the
+landing card (new `artist-edit-*` ids; the shared `artistFormState` draft
+survives card rebuilds, Escape cancels without closing a reopened landing
+page, focus returns to the row's Edit button). Delete keeps the same
+confirm with the unfiled consequence and the same guards — a library song
+write/draft, backup/restore, and either logo import (edit-form or landing
+create) refuse with a titled status — plus the colocation guards (an
+in-flight landing create/logo import blocks edit/delete/save, and vice versa;
+starting an edit while the New-artist form holds a typed name or staged logo
+is refused with a titled status, and a typed-but-unsubmitted create name
+survives management re-renders via a stashed draft).
+Deleting the active artist keeps the follow-records rule unchanged
+(Unfiled scope when unfiled records remain, landing re-select when nothing
+is unfiled) with a status that names the fallback. The Feature 14/20
+artist-form guards moved with the form: the backup/restore draft guard now
+names the landing screen (reopen via Choose artist… to resolve it), and
+the effective-logo width commit still refuses while that artist's edit
+draft is open. The retired `libraryArtistCounts()` / `libraryArtistBucket()`
+/ `NO_ARTIST_FILTER` helpers were removed with their only callers. No
+model, storage, IPC, or backup change; `SKILL.md` notes where the artist
+UI lives.
 
 ### Data model
 
@@ -1309,9 +1339,9 @@ logo sizing instead of mm, selectable/vector PDF text, mobile, SQLite.
   logo width control), 20 (landing page + per-artist scoping with
   `artist_id` mandatory on save), and 21 (print/export toolbar
   consolidation) are Done.
-- **P1 — v0.3.1 slice**: Feature 22 (Duplicate beside New before Save),
-  Feature 23 (artist management moves to the landing screen, out of the
-  library pane), Feature 24 (Backup & Restore on the landing screen,
+- **P1 — v0.3.1 slice**: Feature 22 (Duplicate beside New before Save, Todo),
+  Feature 23 (artist management on the landing screen, out of the
+  library pane — Done), Feature 24 (Backup & Restore on the landing screen,
   incl. restore-before-scope), Feature 25 (v0.3.0 review hardening:
   export/scope locks, alignment binding, dangling-id resolver, unfiled
   guidance, backend small items), and Feature 26 (UI polish + language

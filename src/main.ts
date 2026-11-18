@@ -4,7 +4,6 @@ import "./styles/print.css";
 import { api } from "./api";
 import {
   findArtistById,
-  libraryArtistBucket,
   resolveArtistForSong,
   resolveArtistName,
   resolveSetlistLogo,
@@ -98,6 +97,12 @@ const landingTransientLogos = new Set<string>();
 let landingBusy = false;
 /** True while a landing logo upload/import is in flight. */
 let landingLogoBusy = false;
+/**
+ * Typed-but-unsubmitted name from the landing create form, stashed before
+ * every card rebuild so management renders (edit start/cancel, delete, save)
+ * never drop it. Restored by `buildLandingCreateForm`.
+ */
+let landingCreateNameDraft = "";
 /** Shows the New-artist form on a landing page that already lists artists. */
 let landingShowCreate = false;
 /**
@@ -272,22 +277,6 @@ const newSongBpm = byId<HTMLInputElement>("new-song-bpm");
 const newSongDuration = byId<HTMLInputElement>("new-song-duration");
 const newSongNotes = byId<HTMLInputElement>("new-song-notes");
 const addSongButton = songForm.querySelector<HTMLButtonElement>('button[type="submit"]');
-
-const artistCountEl = byId<HTMLSpanElement>("artist-count");
-const artistListEl = byId<HTMLUListElement>("artist-list");
-const artistForm = byId<HTMLFormElement>("artist-form");
-const artistFormTitle = byId<HTMLHeadingElement>("artist-form-title");
-const artistNameInput = byId<HTMLInputElement>("artist-name");
-const artistLogoPreviewEl = byId<HTMLDivElement>("artist-logo-preview");
-const artistLogoFileInput = byId<HTMLInputElement>("artist-logo-file");
-const artistLogoRemoveButton = byId<HTMLButtonElement>("artist-logo-remove");
-const artistLogoWidthInput = byId<HTMLInputElement>("artist-logo-width");
-const artistLogoWidthOutput = byId<HTMLOutputElement>("artist-logo-width-value");
-const artistAlignmentRadios = Array.from(
-  document.querySelectorAll<HTMLInputElement>('input[name="artist-logo-alignment"]'),
-);
-const artistFormCancelButton = byId<HTMLButtonElement>("artist-form-cancel");
-const artistFormSubmitButton = byId<HTMLButtonElement>("artist-form-submit");
 
 const backupExportButton = byId<HTMLButtonElement>("backup-export");
 const backupRestoreButton = byId<HTMLButtonElement>("backup-restore");
@@ -484,48 +473,19 @@ function bindEvents(): void {
   songForm.addEventListener("submit", (event) => {
     void handleSongSubmit(event);
   });
-  artistForm.addEventListener("submit", (event) => {
-    void handleArtistSubmit(event);
-  });
-  artistForm.addEventListener("keydown", (event) => {
-    if (event.key === "Escape") {
-      event.preventDefault();
-      cancelArtistEdit();
-    }
-  });
   landingOverlay.addEventListener("keydown", (event) => {
     if (event.key === "Escape" && activeArtistId !== null) {
       event.preventDefault();
+      // An open edit draft cancels first (focus returns to its Edit button)
+      // instead of closing the landing page from under it.
+      const editingId = artistFormState.mode === "edit" ? artistFormState.artistId : null;
+      if (editingId !== null && !artistBusy) {
+        cancelArtistEdit(editingId);
+        return;
+      }
       closeLanding();
     }
   });
-  artistNameInput.addEventListener("input", () => {
-    artistFormState.name = artistNameInput.value;
-    if (artistNameInput.classList.contains("is-invalid")) {
-      markFieldInvalid(artistNameInput, false);
-    }
-  });
-  artistFormCancelButton.addEventListener("click", () => {
-    cancelArtistEdit();
-  });
-  artistLogoFileInput.addEventListener("change", () => {
-    void handleArtistLogoFile();
-  });
-  artistLogoRemoveButton.addEventListener("click", handleArtistLogoRemove);
-  artistLogoWidthInput.addEventListener("input", () => {
-    artistFormState.logo.width_mm = clamp(
-      Number(artistLogoWidthInput.value),
-      LOGO_MIN_WIDTH_MM,
-      LOGO_MAX_WIDTH_MM,
-    );
-    artistLogoWidthOutput.textContent = `${Math.round(artistFormState.logo.width_mm)} mm`;
-  });
-  for (const radio of artistAlignmentRadios) {
-    radio.addEventListener("change", () => {
-      if (!radio.checked || !isLogoAlignment(radio.value)) return;
-      artistFormState.logo.alignment = radio.value;
-    });
-  }
   addBreakButton.addEventListener("click", addBreak);
   backupExportButton.addEventListener("click", () => {
     void backUpLibrary();
@@ -610,8 +570,9 @@ function bindEvents(): void {
           songForm.requestSubmit();
           return;
         }
-        if (artistForm.contains(event.target)) {
-          artistForm.requestSubmit();
+        const artistEditForm = event.target.closest<HTMLFormElement>("form.artist-form");
+        if (artistEditForm) {
+          artistEditForm.requestSubmit();
           return;
         }
       }
@@ -636,10 +597,7 @@ async function init(): Promise<void> {
   applyPrintPlatformClass();
   logoWidthInput.min = String(LOGO_MIN_WIDTH_MM);
   logoWidthInput.max = String(LOGO_MAX_WIDTH_MM);
-  artistLogoWidthInput.min = String(LOGO_MIN_WIDTH_MM);
-  artistLogoWidthInput.max = String(LOGO_MAX_WIDTH_MM);
   bindEvents();
-  renderArtistForm();
 
   try {
     const [loadedSongs, loadedArtists, loadedSetlists] = await Promise.all([
@@ -778,7 +736,6 @@ function adoptArtists(loadedArtists: Artist[]): void {
   discardArtistDraftLogos(artistFormState);
   invalidateArtistLogoPreview();
   artistFormState = createArtistFormState();
-  renderArtistForm();
 
   artists = loadedArtists
     .map((artist) => ({
@@ -1226,7 +1183,7 @@ function libraryWriteGuard(action: string): string | null {
   return `Save or cancel the ${kind} for “${libraryEditorLabel(editor)}” before ${action}.`;
 }
 
-/** True while the shared artist form holds anything worth saving. */
+/** True while the landing artist-edit form holds anything worth saving. */
 function artistFormHasDraft(): boolean {
   const state = artistFormState;
   if (state.mode === "edit") return true;
@@ -1239,11 +1196,12 @@ function artistFormHasDraft(): boolean {
 }
 
 /**
- * Backup/restore refuse artist-form drafts too: the form is not persisted until
- * Save, so a snapshot must not silently omit a typed name or changed logo.
- * A pristine empty New-artist form is not a draft. The landing create form
- * gets the same treatment: a typed name or staged logo blocks the snapshot
- * while its request or logo import is in flight.
+ * Backup/restore refuse the landing artist-edit draft too: the form is not
+ * persisted until Save, so a snapshot must not silently omit a typed name or
+ * changed logo. Reopening the landing screen (Choose artist…) shows the draft
+ * again. The landing create form gets the same treatment: a typed name or
+ * staged logo blocks the snapshot while its request or logo import is in
+ * flight.
  */
 function libraryDraftGuard(action: "backing up" | "restoring"): string | null {
   if (artistBusy || landingBusy) {
@@ -1259,12 +1217,12 @@ function libraryDraftGuard(action: "backing up" | "restoring"): string | null {
   if (artistFormHasDraft()) {
     const label = artistFormState.name.trim();
     if (artistFormState.mode === "edit") {
-      return `Artist draft open — save or cancel the edit for “${label || "this artist"}” before ${action}.`;
+      return `Landing artist draft open — save or cancel the edit for “${label || "this artist"}” before ${action}.`;
     }
     if (label) {
-      return `Artist draft open — save or cancel “${label}” before ${action}.`;
+      return `Landing artist draft open — save or cancel “${label}” before ${action}.`;
     }
-    return `Artist draft open — save or cancel the new artist before ${action}.`;
+    return `Landing artist draft open — save or cancel the new artist before ${action}.`;
   }
 
   const landingBlock = landingDraftGuard(action);
@@ -1334,8 +1292,7 @@ async function backUpLibrary(): Promise<void> {
     backupExportButton.disabled = true;
     backupRestoreButton.disabled = true;
     syncAddSongControls();
-    renderArtists();
-    renderArtistForm();
+    renderLanding();
     // Disable row actions for the whole snapshot read/write; handlers also
     // guard so keyboard/programmatic paths cannot mutate the library.
     renderLibrary();
@@ -1376,8 +1333,7 @@ async function backUpLibrary(): Promise<void> {
     backupExportButton.disabled = false;
     backupRestoreButton.disabled = false;
     syncAddSongControls();
-    renderArtists();
-    renderArtistForm();
+    renderLanding();
     renderLibrary();
   }
 }
@@ -1451,8 +1407,7 @@ async function restoreLibrary(): Promise<void> {
     backupExportButton.disabled = true;
     backupRestoreButton.disabled = true;
     syncAddSongControls();
-    renderArtists();
-    renderArtistForm();
+    renderLanding();
     // Row controls are guarded in their handlers; this render applies the visual
     // disabled state without touching any draft (none can be open here).
     renderLibrary();
@@ -1526,8 +1481,7 @@ async function restoreLibrary(): Promise<void> {
     backupExportButton.disabled = false;
     backupRestoreButton.disabled = false;
     syncAddSongControls();
-    renderArtists();
-    renderArtistForm();
+    renderLanding();
     renderLibrary();
   }
 }
@@ -1570,8 +1524,6 @@ function renderAll(): void {
   renderSheetOptions();
   renderPageModeControls();
   renderItems();
-  renderArtists();
-  renderArtistForm();
   renderNewSongArtistOptions();
   renderLibrary();
   renderLanding();
@@ -1982,22 +1934,6 @@ function renderLibrary(): void {
     fragment.append(buildLibraryRow(song));
   }
   songListEl.replaceChildren(fragment);
-}
-
-/**
- * Song counts per artist bucket: live record ids plus `NO_ARTIST_FILTER`.
- * Counts share `libraryArtistBucket()`, so the Artists-section and landing
- * labels always match the rows a scope shows. Unmatched legacy text has no
- * bucket.
- */
-function libraryArtistCounts(): Map<string, number> {
-  const counts = new Map<string, number>();
-  for (const song of songs) {
-    const bucket = libraryArtistBucket(song, artists);
-    if (bucket === null) continue;
-    counts.set(bucket, (counts.get(bucket) ?? 0) + 1);
-  }
-  return counts;
 }
 
 function libraryEmptyMessage(query: string): string {
@@ -2965,7 +2901,7 @@ async function handleSongSubmit(event: SubmitEvent): Promise<void> {
     sortSongsByTitle();
     songForm.reset();
     renderNewSongArtistOptions();
-    renderArtists();
+    renderLanding();
     renderLibrary();
     // A song filed to an artist from the Unfiled scope leaves this scope on
     // save; name the destination so the row's disappearance is expected.
@@ -3587,7 +3523,7 @@ async function saveEditedLibrarySong(
 
     const closedEditor = libraryEditor === state;
     if (closedEditor) libraryEditor = null;
-    renderArtists();
+    renderLanding();
     renderLibrary();
     setStatus(
       `Updated “${saved.title}” in the library. Setlists keep their own copies.`,
@@ -3625,7 +3561,7 @@ async function duplicateLibrarySong(song: Song): Promise<void> {
     const saved = await api.saveSong(copy);
     songs.push(saved);
     sortSongsByTitle();
-    renderArtists();
+    renderLanding();
     renderLibrary();
     setStatus(`Duplicated “${song.title}” as “${saved.title}”.`, "success");
   } catch (error) {
@@ -3690,7 +3626,7 @@ async function deleteLibrarySong(song: Song): Promise<void> {
       libraryEditor = null;
       pendingLibraryEditorFocus = null;
     }
-    renderArtists();
+    renderLanding();
     renderLibrary();
     setStatus(`Removed “${song.title}” from the library.`);
   } catch (error) {
@@ -3756,79 +3692,6 @@ function artistOption(value: string, label: string): HTMLOptionElement {
   return option;
 }
 
-/** Artists section: logo thumbnails, resolved song counts, and row actions. */
-function renderArtists(): void {
-  artistCountEl.textContent = String(artists.length);
-  artistCountEl.setAttribute(
-    "aria-label",
-    `${artists.length} ${artists.length === 1 ? "artist" : "artists"} in the library`,
-  );
-
-  if (artists.length === 0) {
-    artistListEl.replaceChildren(
-      el("li", "empty-state", "No artists yet. Add the first one below."),
-    );
-    return;
-  }
-
-  // Counts use resolved identity through the shared bucket helper, so the
-  // Artists section, the landing page, and the Unfiled entry always agree.
-  // Id-backed songs count for their record and legacy text counts for a
-  // same-named record until it is adopted.
-  const counts = libraryArtistCounts();
-
-  const locked = artistBusy || restoring || backingUp;
-  const fragment = document.createDocumentFragment();
-  for (const artist of artists) {
-    fragment.append(buildArtistRow(artist, counts.get(artist.id) ?? 0, locked));
-  }
-  artistListEl.replaceChildren(fragment);
-}
-
-function buildArtistRow(artist: Artist, songCount: number, locked: boolean): HTMLLIElement {
-  const row = el("li", "artist-item");
-  if (artistFormState.mode === "edit" && artistFormState.artistId === artist.id) {
-    row.classList.add("is-editing");
-  }
-
-  row.append(buildArtistThumb(artist));
-
-  const info = el("div", "artist-info");
-  info.append(el("span", "artist-name", artist.name || "Untitled artist"));
-  info.append(
-    el(
-      "span",
-      "artist-meta",
-      `${songCount} ${songCount === 1 ? "song" : "songs"}${
-        artist.logo.file_name ? "" : " · no logo"
-      }`,
-    ),
-  );
-
-  const actions = el("div", "artist-actions");
-  const editButton = el("button", "icon-button");
-  editButton.type = "button";
-  editButton.title = `Edit ${artist.name}`;
-  editButton.setAttribute("aria-label", `Edit artist ${artist.name}`);
-  editButton.setAttribute("aria-expanded", String(row.classList.contains("is-editing")));
-  editButton.append(editIcon());
-  editButton.addEventListener("click", () => startArtistEdit(artist.id));
-
-  const deleteButton = el("button", "icon-button", "✕");
-  deleteButton.type = "button";
-  deleteButton.title = `Delete ${artist.name}`;
-  deleteButton.setAttribute("aria-label", `Delete artist ${artist.name}`);
-  deleteButton.addEventListener("click", () => {
-    void deleteArtist(artist);
-  });
-
-  editButton.disabled = locked;
-  deleteButton.disabled = locked;
-  actions.append(editButton, deleteButton);
-  row.append(info, actions);
-  return row;
-}
-
 /** Logo thumbnail. Rendered only through `<img src>` (never inline SVG). */
 function buildArtistThumb(artist: Artist): HTMLSpanElement {
   const thumb = el("span", "artist-thumb");
@@ -3866,14 +3729,31 @@ function buildArtistThumb(artist: Artist): HTMLSpanElement {
   return thumb;
 }
 
-/** Enters inline edit mode with the artist's name and current logo settings. */
+/**
+ * Enters inline edit mode on the landing card with the artist's name and
+ * current logo settings. The draft lives in `artistFormState` while the card
+ * rebuilds around it; entering a scope or closing the landing page keeps the
+ * draft (backup/restore name the landing screen until it is resolved).
+ */
 function startArtistEdit(artistId: string): void {
-  if (artistBusy || artistDeleting) {
+  if (artistBusy || artistDeleting || landingBusy) {
     setStatus("Wait for the current artist request to finish before editing an artist.", "info");
     return;
   }
-  if (artistLogoBusy) {
+  if (artistLogoBusy || landingLogoBusy) {
     setStatus("Wait for the artist logo import to finish before editing an artist.", "info");
+    return;
+  }
+  // A typed-but-unsubmitted create draft would be rebuilt away under the edit
+  // form: refuse with a titled status until it is created or cleared.
+  const createName = landingTypedName();
+  if (createName || landingLogoFile || landingTransientLogos.size > 0) {
+    setStatus(
+      createName
+        ? `Landing artist draft open — create “${createName}” or clear the New artist form before editing an artist.`
+        : "Landing artist draft open — create the new artist or clear the form before editing an artist.",
+      "error",
+    );
     return;
   }
   if (restoring || backingUp) return;
@@ -3882,8 +3762,9 @@ function startArtistEdit(artistId: string): void {
   if (!artist) return;
 
   if (artistFormState.mode === "edit" && artistFormState.artistId === artistId) {
-    artistNameInput.focus();
-    artistNameInput.select();
+    const existing = landingCard.querySelector<HTMLInputElement>("#artist-edit-name");
+    existing?.focus();
+    existing?.select();
     return;
   }
 
@@ -3896,70 +3777,77 @@ function startArtistEdit(artistId: string): void {
     originalLogo: artist.logo.file_name,
     transientLogos: new Set(),
   };
-  renderArtistForm();
-  renderArtists();
+  renderLanding();
   void showArtistStoredLogo(artist.logo.file_name);
-  artistNameInput.focus();
-  artistNameInput.select();
+  const nameInput = landingCard.querySelector<HTMLInputElement>("#artist-edit-name");
+  nameInput?.focus();
+  nameInput?.select();
 }
 
-/** Cancels the current artist draft (new or edit) and resets the form. */
-function cancelArtistEdit(): void {
+/**
+ * Cancels the landing artist-edit draft and returns focus to that artist's
+ * Edit button, so keyboard users stay in the management list.
+ */
+function cancelArtistEdit(artistId: string): void {
   if (artistBusy) return;
 
   discardArtistDraftLogos(artistFormState);
   resetArtistForm();
-  renderArtists();
-  artistNameInput.focus();
+  renderLanding();
+  focusLandingArtistEdit(artistId);
+}
+
+/** Returns focus to one artist's Edit button on the landing card. */
+function focusLandingArtistEdit(artistId: string): void {
+  const row = landingCard.querySelector<HTMLLIElement>(`li[data-artist-id="${artistId}"]`);
+  row?.querySelector<HTMLButtonElement>("[data-landing-edit]")?.focus();
 }
 
 /** Clears the form without deleting any logo file. */
 function resetArtistForm(): void {
   invalidateArtistLogoPreview();
   artistFormState = createArtistFormState();
-  renderArtistForm();
 }
 
-/** Synchronizes the shared artist form with `artistFormState`. */
-function renderArtistForm(): void {
-  const state = artistFormState;
-  artistFormTitle.textContent = state.mode === "edit" ? "Edit artist" : "New artist";
-
-  if (artistNameInput.value !== state.name) {
-    artistNameInput.value = state.name;
-  }
-  artistLogoWidthInput.value = String(state.logo.width_mm);
-  artistLogoWidthOutput.textContent = `${Math.round(state.logo.width_mm)} mm`;
-  for (const radio of artistAlignmentRadios) {
-    radio.checked = radio.value === state.logo.alignment;
-  }
-  artistFormSubmitButton.textContent =
-    state.mode === "edit" ? "Save artist" : "Add artist";
-  artistForm.setAttribute("aria-busy", String(artistBusy));
-  syncArtistFormControls();
-  renderArtistLogoPreview();
+/** The live landing artist-edit form, if one is currently rendered. */
+function landingArtistEditForm(): HTMLFormElement | null {
+  return landingCard.querySelector<HTMLFormElement>('form[data-artist-edit]');
 }
 
-function syncArtistFormControls(): void {
-  const locked = artistBusy || restoring || backingUp;
-  for (const control of artistForm.querySelectorAll<HTMLInputElement>("input")) {
+function syncLandingArtistFormControls(): void {
+  const form = landingArtistEditForm();
+  if (!form) return;
+  const locked = artistBusy || landingBusy || restoring || backingUp;
+  for (const control of form.querySelectorAll<HTMLInputElement>("input")) {
     control.disabled = locked;
   }
-  artistFormSubmitButton.disabled = locked || artistLogoBusy;
-  artistFormCancelButton.disabled = locked;
-  artistLogoRemoveButton.disabled = locked || !artistFormState.logo.file_name;
+  const submit = form.querySelector<HTMLButtonElement>('button[type="submit"]');
+  if (submit) submit.disabled = locked || artistLogoBusy;
+  const cancel = form.querySelector<HTMLButtonElement>('[data-artist-edit-cancel]');
+  if (cancel) cancel.disabled = locked;
+  const remove = form.querySelector<HTMLButtonElement>('[data-artist-edit-remove-logo]');
+  if (remove) remove.disabled = locked || !artistFormState.logo.file_name;
+  form.setAttribute("aria-busy", String(artistBusy));
 }
 
-function renderArtistLogoPreview(): void {
-  artistLogoPreviewEl.replaceChildren();
+/** Refreshes the live edit-form logo preview from `artistFormState`. */
+function refreshLandingArtistLogoPreview(): void {
+  const preview = landingCard.querySelector<HTMLDivElement>("#artist-edit-logo-preview");
+  if (!preview) return;
+  paintArtistLogoPreview(preview);
+}
+
+/** Paints the artist-edit logo preview into an (attached or detached) node. */
+function paintArtistLogoPreview(preview: HTMLDivElement): void {
+  preview.replaceChildren();
 
   if (!artistFormState.logo.file_name) {
-    artistLogoPreviewEl.append(el("span", "artist-logo-preview-empty", "No logo"));
+    preview.append(el("span", "artist-logo-preview-empty", "No logo"));
     return;
   }
 
   if (!artistLogoSrc) {
-    artistLogoPreviewEl.append(
+    preview.append(
       el(
         "span",
         "artist-logo-preview-empty",
@@ -3972,7 +3860,7 @@ function renderArtistLogoPreview(): void {
   const image = el("img", "artist-logo-preview-img");
   image.src = artistLogoSrc;
   image.alt = "";
-  artistLogoPreviewEl.append(image);
+  preview.append(image);
 }
 
 /** Revokes the artist form preview URL and cancels any pending stored load. */
@@ -3989,14 +3877,14 @@ function invalidateArtistLogoPreview(): void {
 function showArtistLogoPreview(url: string): void {
   invalidateArtistLogoPreview();
   artistLogoSrc = url;
-  renderArtistLogoPreview();
+  refreshLandingArtistLogoPreview();
 }
 
 /** Loads a stored logo into the form preview, ignoring stale requests. */
 async function showArtistStoredLogo(fileName: string | null): Promise<void> {
   invalidateArtistLogoPreview();
   if (!fileName) {
-    renderArtistLogoPreview();
+    refreshLandingArtistLogoPreview();
     return;
   }
 
@@ -4008,11 +3896,11 @@ async function showArtistStoredLogo(fileName: string | null): Promise<void> {
       return;
     }
     artistLogoSrc = url;
-    renderArtistLogoPreview();
+    refreshLandingArtistLogoPreview();
   } catch (error) {
     if (request === artistLogoRequestId) {
       artistLogoPreviewFailed = true;
-      renderArtistLogoPreview();
+      refreshLandingArtistLogoPreview();
       setStatus(`Could not load artist logo: ${describeError(error)}`, "error");
     }
   }
@@ -4043,30 +3931,38 @@ async function handleArtistSubmit(event: SubmitEvent): Promise<void> {
     setStatus("Wait for the artist logo import to finish before saving.", "info");
     return;
   }
+  if (landingBusy || landingLogoBusy) {
+    setStatus("Wait for the landing artist create to finish before saving.", "info");
+    return;
+  }
   if (blockLibraryActionWhileBusy()) return;
   if (!ensureBackend()) return;
 
-  const name = artistNameInput.value.trim();
+  const nameInput = landingCard.querySelector<HTMLInputElement>("#artist-edit-name");
+  if (!nameInput) return;
+  const name = nameInput.value.trim();
   if (!name) {
-    markFieldInvalid(artistNameInput, true);
+    markFieldInvalid(nameInput, true);
     setStatus("Artist name is required.", "error");
-    artistNameInput.focus();
+    nameInput.focus();
     return;
   }
-  markFieldInvalid(artistNameInput, false);
+  markFieldInvalid(nameInput, false);
 
   const state = artistFormState;
-  const wasEdit = state.mode === "edit";
+  if (state.mode !== "edit" || !state.artistId) return;
   const artist: Artist = {
-    id: wasEdit && state.artistId ? state.artistId : newId(),
+    id: state.artistId,
     name,
     logo: { ...state.logo },
   };
 
   artistBusy = true;
   libraryWritesInFlight += 1;
-  renderArtists();
-  renderArtistForm();
+  // Lock the landing management buttons and the edit form without rebuilding
+  // the card, so the failure path below keeps the user's focus in place.
+  syncLandingManagementButtons();
+  syncLandingArtistFormControls();
   setStatus(`Saving artist “${name}”…`);
 
   try {
@@ -4082,7 +3978,7 @@ async function handleArtistSubmit(event: SubmitEvent): Promise<void> {
     // The record is persisted; now the replaced/imported files can go. The
     // backend still skips any file a setlist or another artist references.
     const cleanup = new Set(state.transientLogos);
-    if (wasEdit && state.originalLogo && state.originalLogo !== saved.logo.file_name) {
+    if (state.originalLogo && state.originalLogo !== saved.logo.file_name) {
       cleanup.add(state.originalLogo);
     }
     for (const fileName of cleanup) {
@@ -4091,7 +3987,6 @@ async function handleArtistSubmit(event: SubmitEvent): Promise<void> {
     }
 
     resetArtistForm();
-    renderArtists();
     renderNewSongArtistOptions();
     renderScopePicker();
     renderFileUnder();
@@ -4102,11 +3997,11 @@ async function handleArtistSubmit(event: SubmitEvent): Promise<void> {
     // same, so always re-render the sheet before refreshing the resolved file.
     renderSummary();
     renderSheet();
+    renderLanding();
     void refreshLogoIfChanged();
+    focusLandingArtistEdit(saved.id);
     setStatus(
-      wasEdit
-        ? `Updated artist “${saved.name}”. Songs and setlists show the new name without being rewritten.`
-        : `Added artist “${saved.name}”.`,
+      `Updated artist “${saved.name}”. Songs and setlists show the new name without being rewritten.`,
       "success",
     );
   } catch (error) {
@@ -4114,18 +4009,27 @@ async function handleArtistSubmit(event: SubmitEvent): Promise<void> {
   } finally {
     artistBusy = false;
     libraryWritesInFlight -= 1;
-    renderArtists();
-    renderArtistForm();
+    syncLandingManagementButtons();
+    syncLandingArtistFormControls();
   }
 }
 
 async function handleArtistLogoFile(): Promise<void> {
-  const file = artistLogoFileInput.files?.[0];
-  artistLogoFileInput.value = "";
+  const form = landingArtistEditForm();
+  const fileInput = form?.querySelector<HTMLInputElement>("#artist-edit-logo-file");
+  const file = fileInput?.files?.[0];
+  if (fileInput) fileInput.value = "";
   if (!file) return;
   if (artistBusy || artistLogoBusy || artistDeleting || restoring || backingUp) {
     setStatus(
       "Wait for the current artist or logo request to finish before choosing another logo.",
+      "info",
+    );
+    return;
+  }
+  if (landingBusy || landingLogoBusy) {
+    setStatus(
+      "Wait for the landing artist create to finish before choosing another logo.",
       "info",
     );
     return;
@@ -4145,7 +4049,7 @@ async function handleArtistLogoFile(): Promise<void> {
   const state = artistFormState;
   const previousFileName = state.logo.file_name;
   artistLogoBusy = true;
-  syncArtistFormControls();
+  syncLandingArtistFormControls();
   setStatus(`Importing artist logo “${file.name}”…`);
 
   try {
@@ -4181,12 +4085,14 @@ async function handleArtistLogoFile(): Promise<void> {
         state.transientLogos.add(previousFileName);
       }
       state.logo.file_name = storedName;
-      renderArtistForm();
+      syncLandingArtistFormControls();
+      refreshLandingArtistLogoPreview();
       setStatus("Artist logo imported.", "success");
     } catch (error) {
       // Keep the persisted/previous logo after a failed replacement.
       invalidateArtistLogoPreview();
-      renderArtistForm();
+      syncLandingArtistFormControls();
+      refreshLandingArtistLogoPreview();
       if (state.logo.file_name) {
         void showArtistStoredLogo(state.logo.file_name);
       }
@@ -4194,7 +4100,7 @@ async function handleArtistLogoFile(): Promise<void> {
     }
   } finally {
     artistLogoBusy = false;
-    syncArtistFormControls();
+    syncLandingArtistFormControls();
   }
 }
 
@@ -4209,7 +4115,8 @@ function handleArtistLogoRemove(): void {
   }
   artistFormState.logo.file_name = null;
   invalidateArtistLogoPreview();
-  renderArtistForm();
+  syncLandingArtistFormControls();
+  refreshLandingArtistLogoPreview();
   setStatus("Artist logo removed — save to apply.");
 }
 
@@ -4220,11 +4127,11 @@ function handleArtistLogoRemove(): void {
  * records land in the Unfiled scope, never in limbo.
  */
 async function deleteArtist(artist: Artist): Promise<void> {
-  if (artistBusy || artistDeleting) {
+  if (artistBusy || artistDeleting || landingBusy) {
     setStatus("Wait for the current artist request to finish before deleting an artist.", "info");
     return;
   }
-  if (artistLogoBusy) {
+  if (artistLogoBusy || landingLogoBusy) {
     setStatus("Artist delete blocked — wait for the logo import to finish.", "info");
     return;
   }
@@ -4256,8 +4163,7 @@ async function deleteArtist(artist: Artist): Promise<void> {
   artistBusy = true;
   artistDeleting = true;
   libraryWritesInFlight += 1;
-  renderArtists();
-  renderArtistForm();
+  renderLanding();
   // Lock library rows visually for the whole reference-clearing loop; handlers
   // also refuse through `blockLibraryActionWhileBusy`.
   renderLibrary();
@@ -4327,13 +4233,16 @@ async function deleteArtist(artist: Artist): Promise<void> {
     clearArtistDraftForDeletedArtist(artist.id, editingThis);
     // The deleted scope is gone: follow its records into the Unfiled scope, or
     // back to the landing page when nothing is unfiled.
+    let fallbackNote = "";
     if (activeArtistId === artist.id) {
       if (unfiledCount() > 0) {
         activeArtistId = UNFILED_SCOPE;
         reselectCurrentInScope();
+        fallbackNote = " Now in the Unfiled scope.";
       } else {
         activeArtistId = null;
         landingVisible = true;
+        fallbackNote = " No unfiled records remain — choose an artist on the landing screen.";
       }
     }
     renderNewSongArtistOptions();
@@ -4345,7 +4254,7 @@ async function deleteArtist(artist: Artist): Promise<void> {
       await api.removeLogo(artist.logo.file_name).catch(() => undefined);
     }
 
-    const summary = `Deleted artist “${artist.name}”. ${countLabel(nulledSongCount, "song")} and ${countLabel(nulledSetlistCount, "setlist")} are now unfiled.`;
+    const summary = `Deleted artist “${artist.name}”. ${countLabel(nulledSongCount, "song")} and ${countLabel(nulledSetlistCount, "setlist")} are now unfiled.${fallbackNote}`;
     if (failures.length > 0) {
       setStatus(
         `${summary} Some references could not be cleared: ${summarizeRecords(failures)}.`,
@@ -4360,8 +4269,7 @@ async function deleteArtist(artist: Artist): Promise<void> {
     artistDeleting = false;
     artistBusy = false;
     libraryWritesInFlight -= 1;
-    renderArtists();
-    renderArtistForm();
+    renderLanding();
     renderLibrary();
   }
 }
@@ -4437,7 +4345,6 @@ function closeLanding(): void {
 }
 
 /** Best-effort cleanup of staged landing logos no record references. */
-/** Best-effort cleanup of staged landing logos no record references. */
 function discardLandingTransientLogos(): void {
   for (const name of landingTransientLogos) {
     // A staged file adopted by a saved artist is still referenced; the backend
@@ -4464,6 +4371,12 @@ function syncLandingInert(): void {
 }
 
 function renderLanding(): void {
+  // Stash the create-form name before the rebuild: cancel/delete/save paths
+  // below rebuild the card, and the typed-but-unsubmitted name must survive.
+  const liveNameInput = document.getElementById("landing-name");
+  if (liveNameInput instanceof HTMLInputElement) {
+    landingCreateNameDraft = liveNameInput.value;
+  }
   landingOverlay.hidden = !landingVisible;
   syncLandingInert();
   if (!landingVisible) return;
@@ -4507,6 +4420,8 @@ function buildLandingCard(): DocumentFragment {
     } else {
       const toggle = el("button", "btn", "New artist");
       toggle.type = "button";
+      toggle.dataset.landingNewToggle = "true";
+      toggle.disabled = artistBusy || artistDeleting || landingBusy;
       toggle.addEventListener("click", () => {
         landingShowCreate = true;
         renderLanding();
@@ -4534,8 +4449,17 @@ function landingSub(text: string): HTMLParagraphElement {
   return el("p", "landing-sub", text);
 }
 
+/**
+ * Landing artist row: the workspace entry button plus per-row Edit/Delete
+ * management. The edit form renders inline under the row while
+ * `artistFormState` holds that artist's draft.
+ */
 function buildLandingArtistRow(artist: Artist): HTMLLIElement {
   const row = el("li", "landing-row");
+  row.dataset.artistId = artist.id;
+  const editing = artistFormState.mode === "edit" && artistFormState.artistId === artist.id;
+  if (editing) row.classList.add("is-editing");
+
   const button = el("button", "landing-artist");
   button.type = "button";
   button.setAttribute("aria-label", `Open the ${artist.name || "Untitled artist"} workspace`);
@@ -4562,8 +4486,185 @@ function buildLandingArtistRow(artist: Artist): HTMLLIElement {
   button.addEventListener("click", () => {
     void enterScope(artist.id);
   });
-  row.append(button);
+
+  const manage = el("div", "landing-manage");
+  const editButton = el("button", "icon-button");
+  editButton.type = "button";
+  editButton.dataset.landingEdit = artist.id;
+  editButton.title = `Edit ${artist.name || "Untitled artist"}`;
+  editButton.setAttribute("aria-label", `Edit artist ${artist.name || "Untitled artist"}`);
+  editButton.setAttribute("aria-expanded", String(editing));
+  editButton.append(editIcon());
+  editButton.addEventListener("click", () => startArtistEdit(artist.id));
+
+  const deleteButton = el("button", "icon-button", "✕");
+  deleteButton.type = "button";
+  deleteButton.title = `Delete ${artist.name || "Untitled artist"}`;
+  deleteButton.setAttribute("aria-label", `Delete artist ${artist.name || "Untitled artist"}`);
+  deleteButton.addEventListener("click", () => {
+    void deleteArtist(artist);
+  });
+
+  const locked = artistBusy || artistDeleting || landingBusy || restoring || backingUp;
+  editButton.disabled = locked;
+  deleteButton.disabled = locked;
+  manage.append(editButton, deleteButton);
+
+  row.append(button, manage);
+  if (editing) row.append(buildLandingArtistEditForm(artist));
   return row;
+}
+
+/** Locks the landing management buttons while an artist write owns the records. */
+function syncLandingManagementButtons(): void {
+  const locked = artistBusy || artistDeleting || landingBusy || restoring || backingUp;
+  for (const button of landingCard.querySelectorAll<HTMLButtonElement>(".landing-manage button")) {
+    button.disabled = locked;
+  }
+  const toggle = landingCard.querySelector<HTMLButtonElement>('[data-landing-new-toggle]');
+  if (toggle) toggle.disabled = locked;
+}
+
+/**
+ * Inline artist-edit form on the landing card: the same name/logo/width/
+ * alignment fields and validation as the retired library-pane form. Values
+ * live in `artistFormState`, so card rebuilds (logo imports, busy locks)
+ * never reset partially typed fields.
+ */
+function buildLandingArtistEditForm(artist: Artist): HTMLFormElement {
+  const state = artistFormState;
+  const form = el("form", "artist-form");
+  form.dataset.artistEdit = artist.id;
+  form.noValidate = true;
+  form.setAttribute("aria-label", `Edit artist ${artist.name || "Untitled artist"}`);
+
+  const title = el("h3", undefined, "Edit artist");
+  form.append(title);
+
+  const nameField = el("label", "field");
+  nameField.htmlFor = "artist-edit-name";
+  const nameText = el("span", "item-field-label", "Name");
+  const nameInput = document.createElement("input");
+  nameInput.id = "artist-edit-name";
+  nameInput.required = true;
+  nameInput.autocomplete = "off";
+  nameInput.value = state.name;
+  nameField.append(nameText, nameInput);
+  form.append(nameField);
+
+  const previewRow = el("div", "artist-logo-preview-row");
+  const preview = el("div", "artist-logo-preview");
+  preview.id = "artist-edit-logo-preview";
+  preview.setAttribute("aria-hidden", "true");
+  const removeButton = el("button", "btn btn-small btn-danger", "Remove logo");
+  removeButton.type = "button";
+  removeButton.dataset.artistEditRemoveLogo = artist.id;
+  previewRow.append(preview, removeButton);
+  form.append(previewRow);
+
+  const fileField = el("label", "field");
+  fileField.htmlFor = "artist-edit-logo-file";
+  fileField.append(
+    el("span", "item-field-label", "Logo (PNG, JPEG, SVG · max 5 MiB)"),
+  );
+  const fileInput = document.createElement("input");
+  fileInput.id = "artist-edit-logo-file";
+  fileInput.type = "file";
+  fileInput.accept = "image/png,image/jpeg,image/svg+xml";
+  fileField.append(fileInput);
+  form.append(fileField);
+
+  const logoRow = el("div", "logo-row");
+  const widthField = el("div", "field field-grow");
+  const widthLabel = document.createElement("label");
+  widthLabel.htmlFor = "artist-edit-logo-width";
+  const widthText = el("span", "item-field-label", "Width ");
+  const widthOutput = document.createElement("output");
+  widthOutput.id = "artist-edit-logo-width-value";
+  widthOutput.textContent = `${Math.round(state.logo.width_mm)} mm`;
+  widthLabel.append(widthText, widthOutput);
+  const widthInput = document.createElement("input");
+  widthInput.id = "artist-edit-logo-width";
+  widthInput.type = "range";
+  widthInput.min = String(LOGO_MIN_WIDTH_MM);
+  widthInput.max = String(LOGO_MAX_WIDTH_MM);
+  widthInput.step = "1";
+  widthInput.value = String(state.logo.width_mm);
+  widthField.append(widthLabel, widthInput);
+  const alignmentField = el("div", "field");
+  const alignmentLabel = el("span", "field-label", "Alignment");
+  alignmentLabel.id = "artist-edit-logo-alignment-label";
+  const segmented = el("div", "segmented");
+  segmented.setAttribute("role", "radiogroup");
+  segmented.setAttribute("aria-labelledby", "artist-edit-logo-alignment-label");
+  const alignments: LogoAlignment[] = ["Left", "Center", "Right"];
+  for (const value of alignments) {
+    const option = document.createElement("label");
+    const radio = document.createElement("input");
+    radio.type = "radio";
+    radio.name = "artist-edit-logo-alignment";
+    radio.value = value;
+    radio.checked = value === state.logo.alignment;
+    option.append(radio, el("span", undefined, value));
+    segmented.append(option);
+  }
+  alignmentField.append(alignmentLabel, segmented);
+  logoRow.append(widthField, alignmentField);
+  form.append(logoRow);
+
+  const actions = el("div", "artist-form-actions");
+  const cancelButton = el("button", "btn btn-small", "Cancel");
+  cancelButton.type = "button";
+  cancelButton.dataset.artistEditCancel = artist.id;
+  const submitButton = el("button", "btn btn-small btn-primary", "Save artist");
+  submitButton.type = "submit";
+  actions.append(cancelButton, submitButton);
+  form.append(actions);
+
+  // Populate the preview and busy state from `artistFormState` like the
+  // retired pane form did after a render. The form is still detached here, so
+  // paint/sync run against the built nodes directly.
+  paintArtistLogoPreview(preview);
+  form.setAttribute("aria-busy", String(artistBusy));
+
+  nameInput.addEventListener("input", () => {
+    artistFormState.name = nameInput.value;
+    if (nameInput.classList.contains("is-invalid")) {
+      markFieldInvalid(nameInput, false);
+    }
+  });
+  cancelButton.addEventListener("click", () => cancelArtistEdit(artist.id));
+  fileInput.addEventListener("change", () => {
+    void handleArtistLogoFile();
+  });
+  removeButton.addEventListener("click", handleArtistLogoRemove);
+  widthInput.addEventListener("input", () => {
+    artistFormState.logo.width_mm = clamp(
+      Number(widthInput.value),
+      LOGO_MIN_WIDTH_MM,
+      LOGO_MAX_WIDTH_MM,
+    );
+    widthOutput.textContent = `${Math.round(artistFormState.logo.width_mm)} mm`;
+  });
+  for (const radio of segmented.querySelectorAll<HTMLInputElement>('input[type="radio"]')) {
+    radio.addEventListener("change", () => {
+      if (!radio.checked || !isLogoAlignment(radio.value)) return;
+      artistFormState.logo.alignment = radio.value;
+    });
+  }
+  form.addEventListener("submit", (event) => {
+    void handleArtistSubmit(event);
+  });
+  form.addEventListener("keydown", (event) => {
+    if (event.key === "Escape") {
+      // Cancel the draft without closing a reopened landing page underneath.
+      event.preventDefault();
+      event.stopPropagation();
+      cancelArtistEdit(artist.id);
+    }
+  });
+
+  return form;
 }
 
 function buildLandingUnfiledRow(count: number): HTMLLIElement {
@@ -4585,7 +4686,7 @@ function buildLandingUnfiledRow(count: number): HTMLLIElement {
 
 /**
  * Landing-page artist creation: name plus the same logo upload/width/alignment
- * controls and validation as the Artists section. Creating enters the new
+ * controls and validation as the artist edit form. Creating enters the new
  * artist's scope immediately.
  */
 function buildLandingCreateForm(): HTMLFormElement {
@@ -4601,6 +4702,7 @@ function buildLandingCreateForm(): HTMLFormElement {
   nameInput.id = nameId;
   nameInput.required = true;
   nameInput.autocomplete = "off";
+  nameInput.value = landingCreateNameDraft;
   nameLabel.append(nameText, nameInput);
 
   const preview = el("div", "landing-logo-preview");
@@ -4704,6 +4806,10 @@ async function handleLandingLogoFile(fileInput: HTMLInputElement, preview: HTMLE
   const file = fileInput.files?.[0];
   fileInput.value = "";
   if (!file || landingBusy || landingLogoBusy) return;
+  if (artistBusy || artistDeleting || artistLogoBusy) {
+    setStatus("Wait for the current artist request to finish before choosing a logo.", "info");
+    return;
+  }
 
   const allowed = ["image/png", "image/jpeg", "image/svg+xml"];
   if (!allowed.includes(file.type) && !/\.(png|jpe?g|svg)$/i.test(file.name)) {
@@ -4743,6 +4849,10 @@ async function handleLandingCreate(
     setStatus("Wait for the artist logo import to finish before creating.", "info");
     return;
   }
+  if (artistBusy || artistDeleting || artistLogoBusy) {
+    setStatus("Wait for the current artist request to finish before creating.", "info");
+    return;
+  }
   if (!ensureBackend()) return;
 
   const name = nameInput.value.trim();
@@ -4760,6 +4870,7 @@ async function handleLandingCreate(
 
   landingBusy = true;
   submit.disabled = true;
+  syncLandingManagementButtons();
   setStatus(`Creating artist “${name}”…`);
 
   try {
@@ -4778,6 +4889,8 @@ async function handleLandingCreate(
     // scope entry below does not try to clean it up.
     if (saved.logo.file_name) landingTransientLogos.delete(saved.logo.file_name);
     landingLogoFile = null;
+    // The created name is committed: a later New-artist form starts blank.
+    landingCreateNameDraft = "";
     setStatus(`Added artist “${saved.name}”.`, "success");
     await enterScope(saved.id);
   } catch (error) {
@@ -4785,6 +4898,7 @@ async function handleLandingCreate(
   } finally {
     landingBusy = false;
     submit.disabled = false;
+    syncLandingManagementButtons();
   }
 }
 

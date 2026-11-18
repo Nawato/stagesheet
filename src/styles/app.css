@@ -552,53 +552,11 @@ input[type="file"]::file-selector-button {
 }
 
 /* -------------------------------------------------------------------------
-   Artists section (Feature 14)
+   Artist management on the landing screen (Feature 23)
+   The create/edit form keeps the same name/logo/width/alignment controls;
+   only its host moved (out of the library pane). `.artist-thumb` is shared
+   with the landing rows; the row/list pane styles are retired.
    ------------------------------------------------------------------------- */
-
-.artists-section {
-  padding-top: 14px;
-  margin-top: 18px;
-  border-top: 1px dashed var(--line);
-}
-
-.artist-heading {
-  margin-bottom: 8px;
-}
-
-.artist-heading h3 {
-  margin: 0;
-  font-size: 12px;
-  font-weight: 800;
-  letter-spacing: 0.09em;
-  text-transform: uppercase;
-}
-
-.artist-list {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  max-height: 230px;
-  margin: 0 0 12px;
-  padding: 0;
-  overflow-y: auto;
-  list-style: none;
-}
-
-.artist-item {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 8px;
-  padding: 6px;
-  border: 1px solid var(--line);
-  border-radius: 10px;
-  background: #fdfcf9;
-}
-
-.artist-item.is-editing {
-  border-color: var(--accent);
-  box-shadow: 0 0 0 2px rgb(23 86 74 / 0.12);
-}
 
 .artist-thumb {
   display: flex;
@@ -621,32 +579,7 @@ input[type="file"]::file-selector-button {
   object-fit: contain;
 }
 
-.artist-info {
-  display: flex;
-  flex: 1 1 120px;
-  flex-direction: column;
-  gap: 1px;
-  min-width: 0;
-}
-
-.artist-name {
-  overflow: hidden;
-  font-weight: 650;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.artist-meta {
-  color: var(--ink-soft);
-  font-size: 12px;
-}
-
-.artist-actions {
-  display: flex;
-  flex: 0 0 auto;
-  gap: 2px;
-  margin-left: auto;
-}
+/* Shared create/edit artist form, rendered inline on the landing card. */
 
 .artist-form {
   display: flex;
@@ -1784,14 +1717,36 @@ input[type="file"]::file-selector-button {
 }
 
 .landing-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
   margin: 0;
+}
+
+.landing-row.is-editing .landing-artist {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px rgb(23 86 74 / 0.12);
+}
+
+.landing-manage {
+  display: flex;
+  flex: 0 0 auto;
+  gap: 2px;
+}
+
+.landing-row .artist-form {
+  flex: 1 1 100%;
+  padding-top: 12px;
+  border-top: 1px dashed var(--line);
 }
 
 .landing-artist {
   display: flex;
+  flex: 1 1 0;
   align-items: center;
   gap: 12px;
-  width: 100%;
+  min-width: 0;
   min-height: var(--tap);
   padding: 8px 12px;
   border: 1px solid var(--line);

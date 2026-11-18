@@ -179,14 +179,18 @@ Serde notes:
 - The landing page (`#landing-overlay`, chrome only — never sheet markup or
   print CSS) gates the workspace: it shows on startup whenever no artist is
   selected for the session, and reopens later via the header picker. No
-  artists yet → create first (name + logo upload/width/alignment + the Artists
-  section validation). Artists exist → selection list with logo thumbnails and
-  song/setlist counts, a New artist affordance, and an Unfiled entry when
+  artists yet → create first (name + logo upload/width/alignment + the artist
+  form validation). Artists exist → selection list with logo thumbnails and
+  song/setlist counts, per-row **Edit** (the same name/logo/width/alignment
+  form and validation, inline on the landing card) and **Delete** (the same
+  confirm with the unfiled consequence and the same guards), a New artist
+  affordance, and an Unfiled entry when
   unfiled records exist. After entering an artist, unfiled records are offered
   once per entry for assignment (`save_*` loops with per-record status);
   declining keeps them Unfiled. While visible, the overlay marks the header
   and workspace `inert`, so keyboard focus cannot Tab out of the dialog;
-  Escape closes a reopened landing page and focus returns to the scope
+  Escape closes a reopened landing page (an open artist-edit draft cancels
+  first without closing) and focus returns to the scope
   switcher. 44px targets, labels, keyboard focus, and
   dialog/menu/select aria throughout.
 - `Setlist.sheet_options` carries a field-level `#[serde(default)]`; the
@@ -231,8 +235,7 @@ Serde notes:
   `resolveArtistName()` (display/search/sort), `resolveArtistForSong()`
   (resolved counts, scope identity, and the Unfiled bucket), and
   `resolveSetlistLogo()` (own logo → artist logo → placeholder, used by
-  preview, print, and export). `libraryArtistBucket()` remains only as the
-  shared helper behind the Artists-section and landing counts; Unfiled scope
+  preview, print, and export). Unfiled scope
   membership resolves through `resolveArtistForSong()` directly.
   `BreakItem.duration_secs` is the only written break length.
   `withBreakDefaults()`/`normalizeSetlistItems()` convert legacy backup JSON
@@ -470,19 +473,21 @@ model fields are snake_case.
   confirms before writing and reloads all three caches (artists, songs,
   setlists) afterwards.
 - Backup/restore guards: an inline library song draft (including a failed one),
-  a non-pristine artist form (edit mode, typed name, or any logo/width/alignment
-  change), a landing create-form draft (typed name or staged logo), and any
-  in-flight library/artist write or artist/landing logo import all
-  refuse with a titled status message. A pristine empty New-artist form does not
-  block. Restore re-checks the guard after reading the file. Back up locks
-  library row actions, the Add submit, artist rows, and the artist form while it
-  reads the snapshot; Restore does the same during its write phase.
+  a non-pristine landing artist-edit draft (edit mode, typed name, or any
+  logo/width/alignment change — reopen the landing screen via Choose artist…
+  to resolve it), a landing create-form draft (typed name or staged logo), and
+  any in-flight library/artist write or artist/landing logo import all
+  refuse with a titled status message. Restore re-checks the guard after reading
+  the file. Back up locks
+  library row actions, the Add submit, and the landing management buttons while
+  it reads the snapshot; Restore does the same during its write phase.
 - Artist delete guards: it refuses while a library song write is in flight or an
   inline song draft is open (same rationale as backup), reports a titled
   `Artist delete blocked — …` status, and disables library row actions for the
   reference-clearing loop. A logo import holds the artist Save until it
-  finishes; entering/cancelling artist edit mode re-renders the row's
-  `is-editing`/`aria-expanded` state immediately.
+  finishes; entering/cancelling artist edit mode re-renders the landing row's
+  `is-editing`/`aria-expanded` state immediately and returns focus to its
+  Edit button.
 - Logos are **not embedded in v1**. Setlist and artist `logo.file_name`, width,
   and alignment stay in the envelope, so a same-device restore keeps working; on
   a new device the file is absent, the preview shows the logo placeholder, and

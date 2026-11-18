@@ -24,9 +24,9 @@ commit as each change.
   under a new id, and delete with confirmation. Free-text tuning (max 24 chars)
   is part of search, the add form, the library editor, and each setlist song's
   editor details.
-- Managed artist records (name + logo) in the library pane with logo
-  thumbnails, resolved song counts, an inline create/edit form using the setlist
-  logo controls, and confirmed delete. Songs reference artists by id while
+- Managed artist records (name + logo) with logo
+  thumbnails, resolved song counts, an inline create/edit form with the setlist
+  logo controls on the landing screen, and confirmed delete. Songs reference artists by id while
   keeping a name snapshot; renaming updates display without rewriting songs or
   setlists, deleting clears references best-effort and reports failures (the
   confirm names the unfiled consequence), and
@@ -57,13 +57,15 @@ commit as each change.
   `X` → `X (copy)` → `X (copy 2)` without stacking suffixes, and deleting one
   copy keeps a logo the other still references.
 - Per-artist workspace scoping with a landing page for artist
-  creation/selection (name + logo + width/alignment, or a selection list with
-  thumbnails and song/setlist counts plus an Unfiled entry). The header artist
+  creation/selection/management (name + logo + width/alignment, or a selection
+  list with thumbnails and song/setlist counts plus per-row Edit/Delete and
+  an Unfiled entry — the library-pane Artists section is retired). The header artist
   picker is the scope switcher (artist entries plus `Unfiled (N)`, dirty-guard
   on switch); songs and setlists must belong to an artist on save, legacy
   records stay unfiled until assigned (landing offer, Unfiled scope filing, or
-  `File under…`). Artist deletion names the unfiled consequence and nulls
-  references through the unfiled allowance. The library Artist filter, the
+  `File under…`). Artist deletion names the unfiled consequence, nulls
+  references through the unfiled allowance, and names the fallback scope in
+  the status. The library Artist filter, the
   lock chrome, and the per-setlist Artist select are retired; the summary
   keeps the non-matching count without the `· artist` suffix.
 - Per-setlist "Sheet columns" toggles for Key, Tuning, Tempo (BPM), Time, and
@@ -128,8 +130,6 @@ commit as each change.
 ## Still missing (per plan)
 
 - Feature 22 — Duplicate moves beside New, before Save in the header.
-- Feature 23 — artist management (create/edit/delete) moves to the
-  landing screen; the Artists section leaves the library pane.
 - Feature 24 — Backup & Restore move to the landing screen, so a restore
   works before entering any artist scope.
 - Feature 25 — v0.3.0 review hardening: export/scope locks, alignment

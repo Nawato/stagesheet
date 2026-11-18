@@ -1,10 +1,12 @@
 /**
  * Shared artist-resolution helpers.
  *
- * Feature 14 resolves song display names and artist counts; Feature 15 groups
- * songs into library artist-filter buckets with the same identity, and
+ * Feature 14 resolves song display names and artist counts; Feature 20 reuses
+ * the same resolved identity for scope membership and the Unfiled bucket, and
  * Feature 16 reuses `resolveSetlistLogo` for the setlist → artist →
- * placeholder logo chain.
+ * placeholder logo chain. (The retired library Artist filter and Artists
+ * section took their buckets through this module; both are gone since
+ * Features 20 and 23.)
  */
 
 import type { Artist, LogoConfig, Setlist, Song } from "./types";
@@ -57,30 +59,6 @@ export function resolveArtistForSong(
   return (
     artists.find((artist) => artist.name.trim().toLocaleLowerCase() === text) ?? null
   );
-}
-
-/**
- * Library artist-filter value for songs that have no artist identity at all:
- * no record (by id or resolved name) and no legacy text.
- */
-export const NO_ARTIST_FILTER = "none";
-
-/**
- * The library artist-filter bucket a song belongs to: an artist record id,
- * `NO_ARTIST_FILTER` when it has no artist identity, or `null` when it only
- * carries unmatched legacy text.
- *
- * Counts share this helper through `libraryArtistCounts()`, so the
- * Artists-section and landing labels always match the rows a scope shows.
- * Unmatched non-empty legacy text is deliberately unbucketed.
- */
-export function libraryArtistBucket(
-  song: Pick<Song, "artist" | "artist_id">,
-  artists: readonly Artist[],
-): string | null {
-  const record = resolveArtistForSong(song, artists);
-  if (record) return record.id;
-  return song.artist?.trim() ? null : NO_ARTIST_FILTER;
 }
 
 /**
