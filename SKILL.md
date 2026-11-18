@@ -107,19 +107,31 @@ Serde notes:
   **no file / 40 mm / Center**.
 - `Song.artist` stays the display snapshot and legacy free-text field.
   `Song.artist_id` (Feature 14) carries the artist record reference and
-  `#[serde(default)]` keeps old songs loading with `None`. Saving a song assigned
+  `#[serde(default)]` keeps old songs loading with `None`. Since Feature 20,
+  `artist_id` is **mandatory on save**: a song with no `artist_id` fails
+  `save_song` with `“<title>” has no artist — assign it before saving.`
+  Records with `artist_id: None` still load, list, and restore — they are
+  "unfiled", never a load error. Saving a song assigned
   to a record stores both the id and the record's current name in `artist`;
   renaming the artist never rewrites songs. Display resolution is frontend-only
   (`resolveArtistName` in `src/artists.ts`): live record name, else `artist`
   text, else blank. Dangling ids are valid and resolve as unresolved.
 - `Setlist.artist_id` (`#[serde(default)]`, old files load as `None`) is the
-  setlist's **own artist A**. `None` means unlocked. There is no foreign-key
-  validation and no save-bound error: a dangling id resolves as unlocked in the
-  editor and header picker, and the setlist remains saveable. Assigning or
-  clearing A is a normal setlist edit (dirty + persisted on save). The
-  lock/add-gate it drives is UI-only and adds no printed markup; A can change
-  the sheet only through the logo chain. Setlist duplication (Feature 13)
-  copies the field.
+  setlist's **own artist A**. Since Feature 20 it is likewise **mandatory on
+  save** (`save_setlist` fails an unfiled setlist with the same shaped
+  message), while loading/listing/reading backups still accept `None`.
+  A dangling id counts as filed (it is `Some`) but resolves as unfiled in the
+  UI. Assigning or clearing A is a normal setlist edit (dirty + persisted on
+  save). Setlist duplication (Feature 13) copies the field.
+- **Unfiled allowance** (Feature 20): `save_song` / `save_setlist` take an
+  optional `allow_unfiled` argument (JS `allowUnfiled`, default `false`).
+  With the flag, validation skips only the artist check — every other rule
+  still applies. Exactly three paths use it: backup restore (re-saving stored
+  records as-is), artist-deletion reference-nulling, and the `reorder_items`
+  command re-saving an already-stored unfiled setlist. Everything else
+  (editor saves, adds, duplication, backup's dirty-setlist auto-save)
+  requires an artist. Setlist item snapshot songs never go through
+  save-validation: only the setlist itself must be filed.
 - Setlist duplication (Feature 13) is frontend-only through `save_setlist`: the
   new `Setlist` gets a fresh UUID and fresh `created_at`/`updated_at`, while
   `items` are deep-copied values (song snapshot ids are kept) and `venue`,
@@ -131,36 +143,52 @@ Serde notes:
   `Untitled setlist`; candidates compare trimmed and case-insensitively over
   stored setlist titles. A dirty editor saves first (the Print/Backup rule);
   save failures abort the duplicate and leave the cache/editor on the source.
-  Success selects the clean copy in the header even when the artist filter
-  excludes it. No sheet, `<colgroup>`, frame, print-CSS, raster, or layout
-  change is involved.
+  Success selects the clean copy in the header (it copies the filed artist, so
+  it stays in the active scope). No sheet, `<colgroup>`, frame, print-CSS,
+  raster, or layout change is involved.
 - The artist list is frontend-sorted by name. Counts use resolved identity:
   id-backed songs count for their record, legacy-text songs count for a
   same-named record until adopted, and unmatched text stays uncounted. Search
-  and sort-by-artist use the same resolved display name. The Feature 15 library
-  artist filter shares that identity: `libraryArtistBucket()` returns a record
-  id, `"none"` for songs with no artist identity, or no bucket for unmatched
-  legacy text (which stays visible under All artists and in search). Its option
-  counts and predicate use the same helper; the filter itself is in-memory and
-  never persisted or backed up.
-- Feature 16 wires `Setlist.artist_id` through the editor **Artist** select
-  (**No artist** = unlocked), the header **Artist** picker (first dropdown,
-  `All artists` default), and the logo chain. The header picker is view-only:
-  it filters the setlist select by saved `artist_id`, never dirties or persists,
-  and only pre-assigns the artist of a **New** setlist. The current setlist is
-  always kept available in the select even when it falls outside the filter;
-  with zero matches the select shows a "No setlists by …" placeholder.
-- While the current setlist has a live artist A, the library is locked to A:
-  the list is filtered with `resolveArtistForSong()` identity (id-backed songs,
-  plus legacy text whose trimmed, case-insensitive text equals A's name),
-  combined with search, Has tuning, and sort. The Feature 15 Artist select is
-  forced to A and disabled with a visible note; the underlying in-memory
-  `artistFilter` is untouched, so unlocking restores it exactly. Adding a song
-  outside A (including one with no artist) is refused with
-  `“<title>” is not by <A> — switch the setlist artist to add it.` Breaks are
-  always allowed, and drag/reorder of existing items is never gated. Existing
-  non-A items stay; the summary shows `· <A>` plus a count of non-matching songs
-  when any. A dangling setlist artist id is unlocked, never a save error.
+  and sort-by-artist use the same resolved display name.
+  `libraryArtistBucket()` in `src/artists.ts` still shares that identity for
+  the Artists-section counts, and Unfiled membership resolves through
+  `resolveArtistForSong()` directly — but the Feature 15 library Artist select
+  itself is retired (Feature 20 scopes the whole workspace instead).
+- Feature 20 scopes the workspace to one active artist at a time (session-only
+  `activeArtistId`, never persisted/backed up/dirty). The header **Artist**
+  picker is the scope switcher: artist entries plus `Unfiled (N)` plus a
+  `Choose artist…` shortcut back to the landing page; switching follows the
+  existing setlist-switch guard (confirm discard of a dirty editor). The
+  library shows only the active artist's songs (`resolveArtistForSong()`
+  identity: id-backed plus same-named legacy text), combined with search, Has
+  tuning, and sort. The song-count badge reports the scoped count; totals live
+  on the landing page. The Add form auto-assigns the active artist (no dropdown
+  in an artist scope); the Feature 12 inline editor shows the owning artist
+  read-only and adopts it on save — moving a song between artists stays out of
+  scope (delete + re-add in the right library). New setlists pre-assign the
+  active artist; **New is disabled in the Unfiled scope**. Each unfiled setlist
+  gets a `File under…` select that files it through the normal save path;
+  saving an unfiled setlist from the editor fails with the unfiled message
+  until it is filed. The Feature 16 lock chrome (forced filter + note +
+  `· <A>` summary suffix) and the per-setlist editor Artist select are
+  retired; the add-gate refusal stays only as a defensive guard for
+  stale-cache edges, and the summary keeps `· N not by <artist>` for legacy
+  leftovers. A dangling setlist artist id counts as filed but resolves as
+  unfiled in the UI. Feature 19's width slider works unchanged inside a scope
+  (the artist logo is the active artist's).
+- The landing page (`#landing-overlay`, chrome only — never sheet markup or
+  print CSS) gates the workspace: it shows on startup whenever no artist is
+  selected for the session, and reopens later via the header picker. No
+  artists yet → create first (name + logo upload/width/alignment + the Artists
+  section validation). Artists exist → selection list with logo thumbnails and
+  song/setlist counts, a New artist affordance, and an Unfiled entry when
+  unfiled records exist. After entering an artist, unfiled records are offered
+  once per entry for assignment (`save_*` loops with per-record status);
+  declining keeps them Unfiled. While visible, the overlay marks the header
+  and workspace `inert`, so keyboard focus cannot Tab out of the dialog;
+  Escape closes a reopened landing page and focus returns to the scope
+  switcher. 44px targets, labels, keyboard focus, and
+  dialog/menu/select aria throughout.
 - `Setlist.sheet_options` carries a field-level `#[serde(default)]`; the
   `SheetOptions` struct carries a **container-level** `#[serde(default)]` and a
   manual `Default` with every field `true`. So a missing field, a partial
@@ -200,11 +228,12 @@ Serde notes:
   `normalizeArtistId()` maps missing/blank song/setlist `artist_id` values to
   `null` on load, adoption, cloning, saving, and restore.
   `Artist` is mirrored in `types.ts`; `src/artists.ts` holds
-  `resolveArtistName()` (display/search/sort), `resolveArtistForSong()` (counts,
-  filter identity, and the Feature 16 lock/gate identity),
-  `libraryArtistBucket()`/`matchesLibraryArtistFilter()` (the view-only
-  Feature 15 library filter), and `resolveSetlistLogo()` (own logo → artist
-  logo → placeholder, used by preview, print, and export).
+  `resolveArtistName()` (display/search/sort), `resolveArtistForSong()`
+  (resolved counts, scope identity, and the Unfiled bucket), and
+  `resolveSetlistLogo()` (own logo → artist logo → placeholder, used by
+  preview, print, and export). `libraryArtistBucket()` remains only as the
+  shared helper behind the Artists-section and landing counts; Unfiled scope
+  membership resolves through `resolveArtistForSong()` directly.
   `BreakItem.duration_secs` is the only written break length.
   `withBreakDefaults()`/`normalizeSetlistItems()` convert legacy backup JSON
   (`duration_mins` × 60, preferring `duration_secs`) and are applied on restore
@@ -249,10 +278,13 @@ Serde notes:
 `remove_logo`.
 
 `delete_artist` removes only the artist record; the frontend nulls referencing
-song/setlist ids through `save_song`/`save_setlist` loops and reports per-record
-failures. The backend deliberately has no bulk import or cascade command.
+song/setlist ids through `save_song`/`save_setlist` loops with `allowUnfiled`
+and reports per-record failures. Its confirm names the consequence:
+`Delete artist “<name>”? N songs and M setlists will become unfiled.` The backend
+deliberately has no bulk import or cascade command.
 
-JS argument keys are camelCase (`setlistId`, `fileName`); model fields are snake_case.
+JS argument keys are camelCase (`setlistId`, `fileName`, `allowUnfiled`);
+model fields are snake_case.
 
 ## Sheet markup and CSS
 
@@ -406,7 +438,9 @@ JS argument keys are camelCase (`setlistId`, `fileName`); model fields are snake
   `save_artist` / `save_song` / `save_setlist`. Rust validation, trim rules, and
   serde defaults stay the single authority; never add a bulk import command or
   write storage files directly from the frontend. Restore order is artists first,
-  then songs, then setlists.
+  then songs, then setlists. Restore passes `allowUnfiled` so unfiled records
+  round-trip as-is; a dirty editor's auto-save before backup still requires an
+  artist.
 - File access uses `dialog.save` / `dialog.open` plus the existing scoped `fs`
   plugin. The selected path is added to the fs scope for that operation only.
   Do not widen `$APPDATA/stagesheet/**`, add fs commands, or change the CSP for
@@ -437,7 +471,8 @@ JS argument keys are camelCase (`setlistId`, `fileName`); model fields are snake
   setlists) afterwards.
 - Backup/restore guards: an inline library song draft (including a failed one),
   a non-pristine artist form (edit mode, typed name, or any logo/width/alignment
-  change), and any in-flight library/artist write or artist logo import all
+  change), a landing create-form draft (typed name or staged logo), and any
+  in-flight library/artist write or artist/landing logo import all
   refuse with a titled status message. A pristine empty New-artist form does not
   block. Restore re-checks the guard after reading the file. Back up locks
   library row actions, the Add submit, artist rows, and the artist form while it
@@ -458,7 +493,10 @@ JS argument keys are camelCase (`setlistId`, `fileName`); model fields are snake
 
 - `cargo test` in `src-tauri`: model round-trips, artist round-trips and
   name/logo validation, legacy `artist_id` defaulting on songs and setlists,
-  dangling artist ids, legacy minute-break migration and conversion-on-save,
+  dangling artist ids, unfiled save rejection with the named-artist message and
+  the `allow_unfiled` acceptance path (other rules still enforced, item
+  snapshots exempt, legacy unfiled loads, deletion-nulling, backup round trip
+  incl. unfiled), legacy minute-break migration and conversion-on-save,
   first-draft JSON migration, reorder bounds, duration with breaks
   (`duration_secs` totals, 11-second precision), break bounds
   (0/36000 pass, 36001 fails, oversized legacy values load then fail save),

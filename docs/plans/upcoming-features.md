@@ -44,7 +44,8 @@ all mirrored in `SKILL.md`, which is now the single authority for shipped
 behavior. Features 12 (edit library songs), 13 (duplicate setlist as preset
 base), 14 (artist records with logos), 15 (filter library by artist), 16
 (setlist artist + lock), 17 (break seconds), 18 (setlist Delete-clarity), 19
-(effective logo width control), and 21 (print/export toolbar consolidation)
+(effective logo width control), 20 (artist-first mode: landing page +
+per-artist scoping), and 21 (print/export toolbar consolidation)
 are Done; their specs remain below as reference.
 
 - **Validation hardening (with Feature 2)** — Done. `Setlist::validate()` walks
@@ -787,9 +788,9 @@ export. No column, frame, print-CSS, or raster change.
    guards).
 2. QA + `SKILL.md` note + this file status + commit.
 
-## Feature 20: Artist-first mode (landing page + per-artist scoping) — Todo
+## Feature 20: Artist-first mode (landing page + per-artist scoping) — Done
 
-Status: Todo, large, builds on Features 14–16 and supersedes parts of
+Status: Done, large, builds on Features 14–16 and supersedes parts of
 15–16. From user feedback: if no artist is present you must create one
 first — a landing page with artist creation and selection. This tightens
 the model: each song library and setlist belongs to exactly one specific
@@ -816,6 +817,45 @@ artist (1 artist → N songs and N setlists; N setlists → M songs), and
   header artist picker becomes the scope switcher. The non-matching item
   count stays.
 
+### Shipped notes
+
+The backend enforces filing through `validate_for_save()` on `Song` and
+`Setlist` (same rules as `validate()`, plus the artist check): unfiled saves
+fail with `“<title>” has no artist — assign it before saving.`
+`save_song` / `save_setlist` / `reorder_items` carry `allow_unfiled`
+(JS `allowUnfiled`, default `false`); the flag skips only the artist check and
+is used by exactly restore, deletion-nulling, and the stored-unfiled reorder
+path. Duplication and the backup dirty-setlist auto-save require an artist
+automatically (no flag), and unfiled duplications fail with the unfiled
+message. Setlist item snapshots keep plain `validate()`. Storage fixtures
+gained artist ids; no schema bump — `Option<Uuid>` with `#[serde(default)]`
+stays, and unfiled records load/list/restore as before.
+
+The landing overlay (`#landing-overlay`, chrome only — no sheet markup, hidden
+in print) shows on startup with no session selection and reopens via a
+`Choose artist…` picker entry (plus Escape/Back when scoped). No artists →
+create-first form (name + logo upload/width/alignment + the Artists-section
+validation, entering the new scope on success). Artists → per-artist buttons
+with thumbnails and resolved song/setlist counts, a New-artist toggle form,
+and an Unfiled entry with the total unfiled count. The header picker lists
+artist entries plus always-on `Unfiled (N)`; scope switches keep the
+confirm-discard dirty guard and reselect inside the scope. The offer runs once
+per entry per unfiled signature (confirm assigns through the normal commands
+with per-record status; decline keeps Unfiled). `activeArtistId` is in-memory
+only. The Unfiled scope shows resolve-null songs and live-null setlists; New
+is disabled there; the song Add form and the Feature 12 editor dropdown return
+only there (targeting any artist), while an artist scope auto-assigns on Add
+and shows the owning artist read-only in the editor (adopted on save).
+Unfiled setlists file through a `File under…` select; the retired editor
+Artist select is gone, and saving unfiled from the editor surfaces the backend
+message. Artist delete confirms
+`Delete artist “<name>”? N songs and M setlists will become unfiled.`, nulls through
+the allowance, and follows the records (Unfiled scope, or landing when nothing
+is unfiled). The Feature 15 select, lock note, and both Artist selects were
+removed from markup (plus their CSS/rules); the summary drops `· A` but keeps
+`· N not by <artist>`; the badge counts the scope; the Feature 16 refusal
+stays as the stale-cache guard.
+
 ### Data model
 
 - Save-only validation: a song or setlist with no `artist_id` fails with a
@@ -835,7 +875,7 @@ artist (1 artist → N songs and N setlists; N setlists → M songs), and
   the allowance.
 - Artist deletion keeps today's reference-nulling, writing the nulled
   records through the allowance; its confirm must state the consequence:
-  `Delete “<name>”? N songs and M setlists will become unfiled.`
+  `Delete artist “<name>”? N songs and M setlists will become unfiled.`
   Deleted-artist records land in the Unfiled scope, never in limbo.
 
 ### Landing page

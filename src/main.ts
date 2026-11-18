@@ -5,8 +5,6 @@ import { api } from "./api";
 import {
   findArtistById,
   libraryArtistBucket,
-  matchesLibraryArtistFilter,
-  NO_ARTIST_FILTER,
   resolveArtistForSong,
   resolveArtistName,
   resolveSetlistLogo,
@@ -79,17 +77,29 @@ let statusTimer: number | undefined;
 let songSort: SongSortKey = "title";
 let tuningOnly = false;
 /**
- * Library artist filter: `null` = all artists, an artist record id, or
- * `NO_ARTIST_FILTER` for songs with no artist identity. View-only like the
- * other controls: never persisted, never part of the backup envelope.
+ * Active workspace scope (Feature 20): a live artist record id, `UNFILED_SCOPE`
+ * for the Unfiled bucket, or `null` when no artist is selected and the landing
+ * page owns the workspace. In-memory only: never persisted, never backed up,
+ * never dirty.
  */
-let artistFilter: string | null = null;
+let activeArtistId: string | null = null;
+/** True while the landing overlay owns the workspace. */
+let landingVisible = false;
 /**
- * Header artist picker: `null` = All artists, otherwise a live artist record id.
- * View-only: it narrows the setlist select and pre-assigns New, but never dirties
- * a setlist, is never persisted, and never enters the backup envelope.
+ * Unfiled signatures already offered per artist id, so the landing-page
+ * assign offer runs once per entry instead of nagging on every visit.
  */
-let setlistArtistFilter: string | null = null;
+const landingOffered = new Map<string, string>();
+/** Landing-page create form: logo file staged for the next artist record. */
+let landingLogoFile: string | null = null;
+/** Logo files imported for the landing draft that no record references yet. */
+const landingTransientLogos = new Set<string>();
+/** True while the landing create request is in flight. */
+let landingBusy = false;
+/** True while a landing logo upload/import is in flight. */
+let landingLogoBusy = false;
+/** Shows the New-artist form on a landing page that already lists artists. */
+let landingShowCreate = false;
 /**
  * Inline library editor state. At most one row editor is open at a time;
  * opening another row discards the previous draft, because nothing reaches the
@@ -127,13 +137,13 @@ let artistDeleting = false;
 /** Session cache of blob URLs for artist thumbnails, keyed by stored file name. */
 const artistThumbUrls = new Map<string, string>();
 
+/** Scope value selecting the Unfiled bucket (songs/setlists with no live artist). */
+const UNFILED_SCOPE = "__unfiled__";
+/** Picker value reopening the landing page without changing the scope. */
+const LANDING_PICKER_VALUE = "__landing__";
+
 /** Select value marking the legacy free-text artist option in the library editor. */
 const LEGACY_ARTIST_VALUE = "__legacy_artist__";
-
-/** Library artist-filter select value for "All artists" (`artistFilter === null`). */
-const ARTIST_FILTER_ALL = "";
-/** Header artist-picker value for "All artists" (`setlistArtistFilter === null`). */
-const SETLIST_ARTIST_FILTER_ALL = "";
 
 type SongSortKey = "title" | "artist" | "key" | "tuning";
 
@@ -249,12 +259,11 @@ const duplicateSetlistButton = byId<HTMLButtonElement>("duplicate-setlist");
 
 const songSearch = byId<HTMLInputElement>("song-search");
 const songSortSelect = byId<HTMLSelectElement>("song-sort");
-const songArtistFilterSelect = byId<HTMLSelectElement>("song-artist-filter");
-const libraryLockNote = byId<HTMLParagraphElement>("library-lock-note");
 const songTuningOnlyInput = byId<HTMLInputElement>("song-tuning-only");
 const songListEl = byId<HTMLUListElement>("song-list");
 const songCountEl = byId<HTMLSpanElement>("song-count");
 const songForm = byId<HTMLFormElement>("song-form");
+const newSongArtistField = byId<HTMLDivElement>("new-song-artist-field");
 const newSongTitle = byId<HTMLInputElement>("new-song-title");
 const newSongArtist = byId<HTMLSelectElement>("new-song-artist");
 const newSongKey = byId<HTMLInputElement>("new-song-key");
@@ -286,8 +295,9 @@ const backupRestoreButton = byId<HTMLButtonElement>("backup-restore");
 const titleInput = byId<HTMLInputElement>("setlist-title");
 const venueInput = byId<HTMLInputElement>("setlist-venue");
 const dateInput = byId<HTMLInputElement>("setlist-date");
-const setlistArtistSelect = byId<HTMLSelectElement>("setlist-artist");
-const setlistArtistNote = byId<HTMLParagraphElement>("setlist-artist-note");
+const setlistFileUnderRow = byId<HTMLDivElement>("setlist-fileunder");
+const setlistFileUnderSelect = byId<HTMLSelectElement>("setlist-fileunder-select");
+const setlistFileUnderNote = byId<HTMLParagraphElement>("setlist-fileunder-note");
 const dirtyIndicator = byId<HTMLSpanElement>("dirty-indicator");
 const setlistSummary = byId<HTMLParagraphElement>("setlist-summary");
 
@@ -310,6 +320,9 @@ const sheetPages = byId<HTMLDivElement>("sheet-pages");
 const sheetFrame = byId<HTMLDivElement>("sheet-frame");
 const sheetScroll = byId<HTMLDivElement>("sheet-scroll");
 const previewMeta = byId<HTMLParagraphElement>("preview-meta");
+
+const landingOverlay = byId<HTMLDivElement>("landing-overlay");
+const landingCard = byId<HTMLDivElement>("landing-card");
 
 /** Editor "Page layout" radios: Single (default) or Multiple. */
 const pageModeRadios = Array.from(
@@ -406,8 +419,19 @@ function bindEvents(): void {
   });
   setlistArtistFilterSelect.addEventListener("change", () => {
     const value = setlistArtistFilterSelect.value;
-    setlistArtistFilter = artists.some((artist) => artist.id === value) ? value : null;
-    renderSetlistSelect();
+    if (value === LANDING_PICKER_VALUE) {
+      // Reopen the landing page without leaving the scope.
+      landingVisible = true;
+      landingShowCreate = false;
+      renderScopePicker();
+      renderLanding();
+      return;
+    }
+    if (value === UNFILED_SCOPE || artists.some((artist) => artist.id === value)) {
+      void switchScope(value);
+      return;
+    }
+    renderScopePicker();
   });
   setlistSelect.addEventListener("change", () => {
     void handleSetlistChange();
@@ -432,40 +456,18 @@ function bindEvents(): void {
     markDirty();
     renderSheet();
   });
-  setlistArtistSelect.addEventListener("change", () => {
-    if (!current) return;
-    const value = setlistArtistSelect.value;
-    current.artist_id = artists.some((artist) => artist.id === value) ? value : null;
-    markDirty();
-    renderSetlistArtistNote();
-    renderLogoControls();
-    renderSummary();
-    renderLibrary();
-    renderSheet();
-    void refreshLogoIfChanged();
+  setlistFileUnderSelect.addEventListener("change", () => {
+    const value = setlistFileUnderSelect.value;
+    if (!value) {
+      renderFileUnder();
+      return;
+    }
+    void fileCurrentSetlist(value);
   });
 
   songSearch.addEventListener("input", renderLibrary);
   songSortSelect.addEventListener("change", () => {
     songSort = isSongSortKey(songSortSelect.value) ? songSortSelect.value : "title";
-    renderLibrary();
-  });
-  songArtistFilterSelect.addEventListener("change", () => {
-    // The select is disabled while a setlist artist locks the library; ignore
-    // programmatic changes too so the remembered user filter stays intact.
-    if (currentLockArtist()) {
-      renderLibrary();
-      return;
-    }
-    const value = songArtistFilterSelect.value;
-    if (value === ARTIST_FILTER_ALL) {
-      artistFilter = null;
-    } else if (value === NO_ARTIST_FILTER) {
-      artistFilter = NO_ARTIST_FILTER;
-    } else {
-      // Only live records are valid filter targets; anything else is stale.
-      artistFilter = artists.some((artist) => artist.id === value) ? value : null;
-    }
     renderLibrary();
   });
   songTuningOnlyInput.addEventListener("change", () => {
@@ -489,6 +491,12 @@ function bindEvents(): void {
     if (event.key === "Escape") {
       event.preventDefault();
       cancelArtistEdit();
+    }
+  });
+  landingOverlay.addEventListener("keydown", (event) => {
+    if (event.key === "Escape" && activeArtistId !== null) {
+      event.preventDefault();
+      closeLanding();
     }
   });
   artistNameInput.addEventListener("input", () => {
@@ -650,6 +658,13 @@ async function init(): Promise<void> {
     );
   }
 
+  if (backendAvailable) {
+    // Feature 20: startup always lands on artist selection first. The scope is
+    // session-only, so a fresh launch never resumes a previous artist.
+    activeArtistId = null;
+    landingVisible = true;
+    landingShowCreate = false;
+  }
   renderAll();
   if (backendAvailable && !dirty) {
     await loadLogoForCurrent();
@@ -711,7 +726,7 @@ function cloneSetlist(setlist: Setlist): Setlist {
 
 /**
  * Replaces the in-memory caches with a fresh backend snapshot and selects the
- * requested setlist when it still exists (otherwise the most recent one).
+ * requested setlist when it is still in scope (otherwise the first in-scope one).
  */
 function adoptLoadedState(
   loadedSongs: Song[],
@@ -736,15 +751,22 @@ function adoptLoadedState(
   }));
   sortSetlists();
 
-  const preferred = preferredId
-    ? setlists.find((setlist) => setlist.id === preferredId)
-    : undefined;
-  const next =
-    preferred ??
-    setlists.find((setlist) => setlistMatchesHeaderArtist(setlist)) ??
-    setlists[0];
-  current = next ? cloneSetlist(next) : createDraft();
-  dirty = setlists.length === 0;
+  // A scope pointing at a deleted record cannot survive a reload: drop back to
+  // the landing page instead of showing an empty artist scope.
+  if (
+    activeArtistId !== null &&
+    activeArtistId !== UNFILED_SCOPE &&
+    !artists.some((artist) => artist.id === activeArtistId)
+  ) {
+    activeArtistId = null;
+    landingVisible = true;
+  }
+
+  const inScope = setlists.filter((setlist) => setlistInScope(setlist));
+  const preferred = preferredId ? inScope.find((setlist) => setlist.id === preferredId) : undefined;
+  const next = preferred ?? inScope[0];
+  current = next ? cloneSetlist(next) : blankDraftForScope();
+  dirty = !next;
 }
 
 /**
@@ -768,13 +790,15 @@ function adoptArtists(loadedArtists: Artist[]): void {
 }
 
 async function startNewSetlist(): Promise<void> {
+  if (isUnfiledScope()) return;
+  if (!ensureBackend()) return;
+  if (!activeScopeArtist()) return;
   if (!confirmDiscard()) return;
 
   pendingLogoRemovals.clear();
-  current = createDraft();
-  // The header picker is view-only, but it pre-assigns the artist of a New
-  // setlist. The assignment is a normal unsaved edit from there on.
-  current.artist_id = selectedSetlistArtistId();
+  // New setlists pre-assign the active artist; there is no other path to a
+  // filed setlist. The assignment is a normal unsaved edit from here on.
+  current = blankDraftForScope();
   dirty = true;
   clearLogoPreview();
   logoFileInput.value = "";
@@ -902,9 +926,9 @@ async function saveCurrent(): Promise<boolean> {
     await cleanupPendingLogoRemovals();
 
     renderMeta();
-    renderSetlistArtistFilter();
+    renderScopePicker();
     renderSetlistSelect();
-    renderSetlistArtistSection();
+    renderFileUnder();
     renderSheet();
     void refreshLogoIfChanged();
 
@@ -952,9 +976,11 @@ async function deleteCurrent(): Promise<void> {
 
   pendingLogoRemovals.clear();
   clearLogoPreview();
-  const next = setlists.find((setlist) => setlistMatchesHeaderArtist(setlist)) ?? setlists[0];
-  current = next ? cloneSetlist(next) : createDraft();
-  dirty = setlists.length === 0;
+  // Stay inside the active scope: the next setlist is the first remaining
+  // in-scope one, otherwise a blank draft for the scope.
+  const next = setlists.find((setlist) => setlistInScope(setlist));
+  current = next ? cloneSetlist(next) : blankDraftForScope();
+  dirty = !next;
   renderAll();
   if (backendAvailable && !dirty) {
     await loadLogoForCurrent();
@@ -1215,29 +1241,60 @@ function artistFormHasDraft(): boolean {
 /**
  * Backup/restore refuse artist-form drafts too: the form is not persisted until
  * Save, so a snapshot must not silently omit a typed name or changed logo.
- * A pristine empty New-artist form is not a draft.
+ * A pristine empty New-artist form is not a draft. The landing create form
+ * gets the same treatment: a typed name or staged logo blocks the snapshot
+ * while its request or logo import is in flight.
  */
 function libraryDraftGuard(action: "backing up" | "restoring"): string | null {
-  if (artistBusy) {
+  if (artistBusy || landingBusy) {
     return `Wait for the current artist request to finish before ${action}.`;
   }
-  if (artistLogoBusy) {
+  if (artistLogoBusy || landingLogoBusy) {
     return `Artist logo import in progress — wait for it to finish before ${action}.`;
   }
 
   const libraryBlock = libraryWriteGuard(action);
   if (libraryBlock) return libraryBlock;
 
-  if (!artistFormHasDraft()) return null;
+  if (artistFormHasDraft()) {
+    const label = artistFormState.name.trim();
+    if (artistFormState.mode === "edit") {
+      return `Artist draft open — save or cancel the edit for “${label || "this artist"}” before ${action}.`;
+    }
+    if (label) {
+      return `Artist draft open — save or cancel “${label}” before ${action}.`;
+    }
+    return `Artist draft open — save or cancel the new artist before ${action}.`;
+  }
 
-  const label = artistFormState.name.trim();
-  if (artistFormState.mode === "edit") {
-    return `Artist draft open — save or cancel the edit for “${label || "this artist"}” before ${action}.`;
+  const landingBlock = landingDraftGuard(action);
+  if (landingBlock) return landingBlock;
+
+  return null;
+}
+
+/** Typed name in the landing create form, if it is currently rendered. */
+function landingTypedName(): string {
+  const input = document.getElementById("landing-name");
+  return input instanceof HTMLInputElement ? input.value.trim() : "";
+}
+
+/**
+ * True while the landing create form holds anything worth saving: a typed
+ * name or a staged logo. Runs only while the landing page is visible; leaving
+ * it (by entering a scope or closing it) discards the staged files.
+ */
+function landingDraftGuard(action: "backing up" | "restoring"): string | null {
+  if (!landingVisible) return null;
+
+  const name = landingTypedName();
+  if (name) {
+    return `Landing artist draft open — create “${name}” before ${action}.`;
   }
-  if (label) {
-    return `Artist draft open — save or cancel “${label}” before ${action}.`;
+  if (landingLogoFile || landingTransientLogos.size > 0) {
+    return `Landing artist draft open — create the artist before ${action}.`;
   }
-  return `Artist draft open — save or cancel the new artist before ${action}.`;
+  return null;
 }
 
 /** Blocks row/Add actions while a backup, restore, or artist cleanup owns the library. */
@@ -1411,7 +1468,9 @@ async function restoreLibrary(): Promise<void> {
 
     for (const [index, song] of envelope.songs.entries()) {
       try {
-        await api.saveSong(song);
+        // Restore re-saves stored records as-is; unfiled ones pass through the
+        // allowance so the envelope round-trips without a bulk import command.
+        await api.saveSong(song, true);
         importedSongs += 1;
       } catch (error) {
         failures.push(`song ${index + 1} “${song.title}” (${describeError(error)})`);
@@ -1420,7 +1479,7 @@ async function restoreLibrary(): Promise<void> {
 
     for (const [index, setlist] of envelope.setlists.entries()) {
       try {
-        await api.saveSetlist(setlist);
+        await api.saveSetlist(setlist, true);
         importedSetlists += 1;
       } catch (error) {
         failures.push(`setlist ${index + 1} “${setlist.title}” (${describeError(error)})`);
@@ -1502,10 +1561,11 @@ function sortSetlists(): void {
 // ---------------------------------------------------------------------------
 
 function renderAll(): void {
-  renderSetlistArtistFilter();
+  ensureValidScope();
+  renderScopePicker();
   renderSetlistSelect();
   renderMeta();
-  renderSetlistArtistSection();
+  renderFileUnder();
   renderLogoControls();
   renderSheetOptions();
   renderPageModeControls();
@@ -1514,74 +1574,186 @@ function renderAll(): void {
   renderArtistForm();
   renderNewSongArtistOptions();
   renderLibrary();
+  renderLanding();
   renderSheet();
 }
 
 /**
- * Header artist picker: view-only. Options are live records plus All artists;
- * a deleted selection falls back to All so no stale label survives a delete.
+ * Drops a scope that no longer resolves (artist deleted on another device or
+ * by restore) back to the landing page. Runs at the top of every `renderAll`
+ * so no render ever targets a stale artist.
  */
-function renderSetlistArtistFilter(): void {
-  if (setlistArtistFilter !== null && !setlistArtistFilterRecord()) {
-    setlistArtistFilter = null;
+function ensureValidScope(): void {
+  if (
+    activeArtistId !== null &&
+    activeArtistId !== UNFILED_SCOPE &&
+    !artists.some((artist) => artist.id === activeArtistId)
+  ) {
+    activeArtistId = null;
+    landingVisible = true;
+  }
+}
+
+/**
+ * The live artist record behind an artist scope, or null for the Unfiled
+ * scope and the landing page.
+ */
+function activeScopeArtist(): Artist | null {
+  if (!activeArtistId || activeArtistId === UNFILED_SCOPE) return null;
+  return findArtistById(artists, activeArtistId);
+}
+
+/** True while the workspace shows the Unfiled bucket. */
+function isUnfiledScope(): boolean {
+  return activeArtistId === UNFILED_SCOPE;
+}
+
+/**
+ * Songs in the Unfiled bucket: no record by id and no legacy-text match
+ * against a live record. Everything else belongs to its resolved artist.
+ */
+function unfiledSongs(): Song[] {
+  return songs.filter((song) => resolveArtistForSong(song, artists) === null);
+}
+
+/**
+ * Setlists in the Unfiled bucket: no artist id, or an id with no live
+ * record. Setlists have no legacy text, so only the id decides.
+ */
+function unfiledSetlists(): Setlist[] {
+  return setlists.filter(
+    (setlist) => !findArtistById(artists, normalizeArtistId(setlist.artist_id)),
+  );
+}
+
+/** Total Unfiled records, for the picker label and the landing entry. */
+function unfiledCount(): number {
+  return unfiledSongs().length + unfiledSetlists().length;
+}
+
+/** True when a song belongs in the active scope. */
+function songInScope(song: Song): boolean {
+  if (isUnfiledScope()) return resolveArtistForSong(song, artists) === null;
+  const scope = activeScopeArtist();
+  if (!scope) return true;
+  return resolveArtistForSong(song, artists)?.id === scope.id;
+}
+
+/** True when a setlist belongs in the active scope. */
+function setlistInScope(setlist: Pick<Setlist, "artist_id">): boolean {
+  if (isUnfiledScope()) {
+    return !findArtistById(artists, normalizeArtistId(setlist.artist_id));
+  }
+  const scope = activeScopeArtist();
+  if (!scope) return true;
+  return normalizeArtistId(setlist.artist_id) === scope.id;
+}
+
+/** Blank draft pre-assigned to the active scope (unfiled in Unfiled scope). */
+function blankDraftForScope(): Setlist {
+  const draft = createDraft();
+  draft.artist_id = activeScopeArtist()?.id ?? null;
+  return draft;
+}
+
+/**
+ * Keeps `current` inside the active scope after the cache changed underneath
+ * it (filing, deletion, restore). A setlist that left the scope is replaced
+ * by the first remaining in-scope one, otherwise a blank scope draft.
+ */
+function reselectCurrentInScope(): void {
+  if (current && setlistInScope(current)) return;
+  pendingLogoRemovals.clear();
+  clearLogoPreview();
+  const next = setlists.find((setlist) => setlistInScope(setlist));
+  current = next ? cloneSetlist(next) : blankDraftForScope();
+  dirty = !next;
+}
+
+/**
+ * Header scope switcher: artist entries plus `Unfiled (N)` plus a landing
+ * shortcut. Switching follows the existing setlist-switch guard (confirm
+ * discard of a dirty editor) before the scope changes.
+ */
+async function switchScope(next: string): Promise<void> {
+  if (next !== UNFILED_SCOPE && !artists.some((artist) => artist.id === next)) {
+    renderScopePicker();
+    return;
+  }
+  if (next === activeArtistId) {
+    renderScopePicker();
+    return;
+  }
+  if (dirty && !confirmDiscard()) {
+    renderScopePicker();
+    return;
   }
 
+  pendingLogoRemovals.clear();
+  clearLogoPreview();
+  activeArtistId = next;
+  landingVisible = false;
+  const inScope = setlists.filter((setlist) => setlistInScope(setlist));
+  current = inScope[0] ? cloneSetlist(inScope[0]) : blankDraftForScope();
+  dirty = inScope.length === 0;
+  renderAll();
+  if (backendAvailable && !dirty) {
+    await loadLogoForCurrent();
+  }
+  fitPreview();
+
+  const scope = activeScopeArtist();
+  if (scope) void maybeOfferUnfiledAssignment(scope);
+}
+
+/**
+ * Header scope picker. The value always mirrors `activeArtistId` (or the
+ * landing shortcut); stale artist ids fall back to the landing instead of a
+ * dead selection.
+ */
+function renderScopePicker(): void {
   const fragment = document.createDocumentFragment();
-  fragment.append(artistOption(SETLIST_ARTIST_FILTER_ALL, "All artists"));
   for (const artist of artists) {
     fragment.append(artistOption(artist.id, artistLabel(artist)));
   }
+  const unfiled = unfiledCount();
+  fragment.append(artistOption(UNFILED_SCOPE, `Unfiled (${unfiled})`));
+  fragment.append(artistOption(LANDING_PICKER_VALUE, "Choose artist…"));
 
   setlistArtistFilterSelect.replaceChildren(fragment);
-  setlistArtistFilterSelect.value = setlistArtistFilter ?? SETLIST_ARTIST_FILTER_ALL;
-}
+  if (activeArtistId === null) {
+    setlistArtistFilterSelect.value = LANDING_PICKER_VALUE;
+  } else {
+    setlistArtistFilterSelect.value = activeArtistId;
+  }
 
-/** The header picker's live artist record, or null for All artists. */
-function setlistArtistFilterRecord(): Artist | null {
-  return findArtistById(artists, setlistArtistFilter);
-}
-
-/** Artist id for a New setlist, taken from the header picker. */
-function selectedSetlistArtistId(): string | null {
-  return setlistArtistFilterRecord()?.id ?? null;
-}
-
-/** True when a setlist belongs in the header picker's current filter. */
-function setlistMatchesHeaderArtist(setlist: Pick<Setlist, "artist_id">): boolean {
-  const filter = setlistArtistFilterRecord();
-  if (!filter) return true;
-  return normalizeArtistId(setlist.artist_id) === filter.id;
+  // New setlists belong to an artist; the Unfiled scope cannot create one.
+  newSetlistButton.disabled = isUnfiledScope();
+  newSetlistButton.title = isUnfiledScope()
+    ? "Switch to an artist scope to create a setlist"
+    : "";
 }
 
 function renderSetlistSelect(): void {
-  if (setlistArtistFilter !== null && !setlistArtistFilterRecord()) {
-    setlistArtistFilter = null;
-  }
-
-  const filter = setlistArtistFilterRecord();
   const fragment = document.createDocumentFragment();
-  const options = setlists.filter((setlist) => setlistMatchesHeaderArtist(setlist));
+  const options = setlists.filter((setlist) => setlistInScope(setlist));
 
-  if (filter && options.length === 0) {
-    // Zero matches still leaves the current setlist available below, but the
-    // dropdown communicates that New will assign this artist.
-    const empty = artistOption(
-      "",
-      `No setlists by “${artistLabel(filter)}” yet — New uses this artist`,
-    );
+  const scope = activeScopeArtist();
+  if (options.length === 0 && scope) {
+    // The scope is real but empty: New assigns this artist, so say so.
+    const empty = artistOption("", `No setlists by “${artistLabel(scope)}” yet — New uses this artist`);
+    empty.disabled = true;
+    fragment.append(empty);
+  } else if (options.length === 0 && isUnfiledScope()) {
+    const empty = artistOption("", "No unfiled setlists");
     empty.disabled = true;
     fragment.append(empty);
   }
 
   // Never yank the open setlist out of the editor when it falls outside the
-  // header filter; it stays selected and selectable. With All artists, keep the
-  // existing "unsaved draft first" ordering.
+  // scope (a filed record after an artist delete); it stays selectable.
   if (current && !options.some((setlist) => setlist.id === current?.id)) {
-    if (setlistArtistFilter === null) {
-      options.unshift(current);
-    } else {
-      options.push(current);
-    }
+    options.push(current);
   }
 
   for (const setlist of options) {
@@ -1600,31 +1772,76 @@ function renderSetlistSelect(): void {
   }
 }
 
-/** Editor Artist section: the setlist's own artist assignment (unlocked = none). */
-function renderSetlistArtistSection(): void {
-  if (!current) return;
+/**
+ * Filing row for the current setlist. Visible only while the setlist has no
+ * live artist: the retired per-setlist Artist select is gone, and an unfiled
+ * editor save fails with the backend message until the record is filed here.
+ */
+function renderFileUnder(): void {
+  if (!current) {
+    setlistFileUnderRow.hidden = true;
+    return;
+  }
+
+  const live = findArtistById(artists, normalizeArtistId(current.artist_id));
+  setlistFileUnderRow.hidden = live !== null;
+  if (live) return;
 
   const fragment = document.createDocumentFragment();
-  fragment.append(artistOption("", "No artist"));
+  const placeholder = artistOption("", "File under…");
+  placeholder.disabled = true;
+  fragment.append(placeholder);
   for (const artist of artists) {
     fragment.append(artistOption(artist.id, artistLabel(artist)));
   }
-  setlistArtistSelect.replaceChildren(fragment);
-
-  // A dangling id resolves as unlocked; saving it unchanged stays valid.
-  const assigned = findArtistById(artists, normalizeArtistId(current.artist_id));
-  setlistArtistSelect.value = assigned?.id ?? "";
-  renderSetlistArtistNote();
+  setlistFileUnderSelect.replaceChildren(fragment);
+  setlistFileUnderSelect.value = "";
+  const title = current.title.trim() || "Untitled setlist";
+  setlistFileUnderNote.textContent =
+    `“${title}” has no artist — saving is blocked until it is filed. Choose an artist above.`;
 }
 
 /**
- * Feature 16's Artist-section logo note moved to the Logo fieldset showing
- * line (Feature 19). Kept as an always-hidden stub so the editor layout does
- * not show the same note twice.
+ * Files the current setlist under an artist through the normal save path and
+ * moves on inside the active scope: a record filed away from the Unfiled
+ * scope is replaced by the next unfiled setlist (or a blank draft).
  */
-function renderSetlistArtistNote(): void {
-  setlistArtistNote.hidden = true;
-  setlistArtistNote.textContent = "";
+async function fileCurrentSetlist(artistId: string): Promise<void> {
+  if (!current) return;
+  const target = artists.find((artist) => artist.id === artistId);
+  if (!target) {
+    setStatus("That artist is no longer available. Pick another artist.", "error");
+    renderFileUnder();
+    return;
+  }
+  if (!ensureBackend()) {
+    renderFileUnder();
+    return;
+  }
+
+  current.artist_id = artistId;
+  markDirty();
+  const saved = await saveCurrent();
+  if (!saved || !current) {
+    renderFileUnder();
+    return;
+  }
+
+  const filedName = artistLabel(target);
+  if (!setlistInScope(current)) {
+    const filedTitle = current.title;
+    reselectCurrentInScope();
+    renderAll();
+    if (backendAvailable && !dirty) {
+      await loadLogoForCurrent();
+    }
+    fitPreview();
+    setStatus(`Filed “${filedTitle}” under ${filedName}.`, "success");
+    return;
+  }
+
+  renderAll();
+  setStatus(`Filed under ${filedName}.`, "success");
 }
 
 function artistLabel(artist: Artist): string {
@@ -1724,15 +1941,9 @@ function renderPageModeControls(): void {
 }
 
 function renderLibrary(): void {
-  // Rebuild the artist options (labels and counts) on every library render, and
-  // drop a selection whose record was deleted or restored away. The other
-  // controls keep their state; only a stale artist id resets to All artists.
-  renderLibraryArtistFilter();
-
-  const activeArtistFilter = effectiveLibraryArtistFilter();
   const query = songSearch.value.trim().toLocaleLowerCase();
-  const matching = songs
-    .filter((song) => matchesLibraryArtistFilter(song, artists, activeArtistFilter))
+  const scoped = songs.filter((song) => songInScope(song));
+  const matching = scoped
     .filter((song) => {
       if (!query) return true;
       return [song.title, resolveArtistName(song, artists), song.key, song.tuning]
@@ -1753,16 +1964,16 @@ function renderLibrary(): void {
     editor !== null && ordered.some((song) => song.id === editor.songId),
   );
 
-  songCountEl.textContent = String(songs.length);
+  // The badge counts the active scope, not the whole library: totals live on
+  // the landing page.
+  songCountEl.textContent = String(scoped.length);
   songCountEl.setAttribute(
     "aria-label",
-    `${songs.length} ${songs.length === 1 ? "song" : "songs"} in the library`,
+    `${scoped.length} ${scoped.length === 1 ? "song" : "songs"} in this scope`,
   );
 
   if (ordered.length === 0) {
-    songListEl.replaceChildren(
-      el("li", "empty-state", libraryEmptyMessage(query, activeArtistFilter)),
-    );
+    songListEl.replaceChildren(el("li", "empty-state", libraryEmptyMessage(query)));
     return;
   }
 
@@ -1774,81 +1985,10 @@ function renderLibrary(): void {
 }
 
 /**
- * The current setlist's lock artist. Only a live `artist_id` resolves; a
- * dangling id is unlocked, and Setlist has no legacy text field of its own.
- */
-function currentLockArtist(): Artist | null {
-  return current ? findArtistById(artists, normalizeArtistId(current.artist_id)) : null;
-}
-
-/**
- * The library artist bucket actually applied: a setlist lock overrides the
- * Feature 15 selection without destroying it, so unlocking restores exactly the
- * user's previous in-memory choice.
- */
-function effectiveLibraryArtistFilter(): string | null {
-  return currentLockArtist()?.id ?? artistFilter;
-}
-
-/**
- * Fills the library artist filter from the current artist cache. Options list
- * live records with resolved song counts plus No artist. The selected value is
- * kept across re-renders; an id that no longer resolves falls back to All
- * artists so no stale selection survives a delete/restore.
- *
- * While the current setlist has an artist, this select is forced to that record
- * and disabled; the note explains why and the underlying selection is untouched.
- */
-function renderLibraryArtistFilter(): void {
-  if (
-    artistFilter !== null &&
-    artistFilter !== NO_ARTIST_FILTER &&
-    !artists.some((artist) => artist.id === artistFilter)
-  ) {
-    artistFilter = null;
-  }
-
-  const counts = libraryArtistCounts();
-  const fragment = document.createDocumentFragment();
-  fragment.append(artistOption(ARTIST_FILTER_ALL, "All artists"));
-  for (const artist of artists) {
-    fragment.append(
-      artistOption(
-        artist.id,
-        `${artistLabel(artist)} (${counts.get(artist.id) ?? 0})`,
-      ),
-    );
-  }
-  fragment.append(
-    artistOption(
-      NO_ARTIST_FILTER,
-      `No artist (${counts.get(NO_ARTIST_FILTER) ?? 0})`,
-    ),
-  );
-
-  songArtistFilterSelect.replaceChildren(fragment);
-
-  const lock = currentLockArtist();
-  if (lock) {
-    songArtistFilterSelect.value = lock.id;
-    songArtistFilterSelect.disabled = true;
-    songArtistFilterSelect.setAttribute("aria-describedby", "library-lock-note");
-    libraryLockNote.textContent = `Library locked to “${artistLabel(lock)}” by the setlist artist. Set the setlist artist to No artist to filter freely.`;
-    libraryLockNote.hidden = false;
-  } else {
-    songArtistFilterSelect.value = artistFilter ?? ARTIST_FILTER_ALL;
-    songArtistFilterSelect.disabled = false;
-    songArtistFilterSelect.removeAttribute("aria-describedby");
-    libraryLockNote.hidden = true;
-    libraryLockNote.textContent = "";
-  }
-}
-
-/**
- * Song counts per artist-filter bucket: live record ids plus `NO_ARTIST_FILTER`.
- * Uses the same resolution helper as the filter predicate, so an option's count
- * always matches the rows it shows. Unmatched legacy text has no bucket and
- * stays under All artists only.
+ * Song counts per artist bucket: live record ids plus `NO_ARTIST_FILTER`.
+ * Counts share `libraryArtistBucket()`, so the Artists-section and landing
+ * labels always match the rows a scope shows. Unmatched legacy text has no
+ * bucket.
  */
 function libraryArtistCounts(): Map<string, number> {
   const counts = new Map<string, number>();
@@ -1860,19 +2000,30 @@ function libraryArtistCounts(): Map<string, number> {
   return counts;
 }
 
-function libraryEmptyMessage(query: string, activeArtistFilter: string | null): string {
-  if (activeArtistFilter !== null) {
-    const count = libraryArtistCounts().get(activeArtistFilter) ?? 0;
-    if (activeArtistFilter === NO_ARTIST_FILTER) {
-      return count === 0
-        ? "No songs without an artist yet."
-        : "No songs without an artist match that search.";
+function libraryEmptyMessage(query: string): string {
+  const scope = activeScopeArtist();
+  if (isUnfiledScope()) {
+    if (unfiledSongs().length === 0) return "No unfiled songs yet.";
+    if (query) {
+      return tuningOnly
+        ? "No unfiled songs with tuning match that search."
+        : "No unfiled songs match that search.";
     }
-    const selected = artists.find((artist) => artist.id === activeArtistFilter);
-    const name = selected ? artistLabel(selected) : "Untitled artist";
-    return count === 0
-      ? `No songs by “${name}” yet.`
-      : `No songs by “${name}” match that search.`;
+    if (tuningOnly) return "No unfiled songs have a tuning set.";
+    return "No unfiled songs match that search.";
+  }
+
+  const scopedCount = songs.filter((song) => songInScope(song)).length;
+  if (scope) {
+    const name = artistLabel(scope);
+    if (scopedCount === 0) return `No songs by “${name}” yet.`;
+    if (query) {
+      return tuningOnly
+        ? `No songs by “${name}” with tuning match that search.`
+        : `No songs by “${name}” match that search.`;
+    }
+    if (tuningOnly) return `No songs by “${name}” have a tuning set.`;
+    return `No songs by “${name}” match that search.`;
   }
 
   if (songs.length === 0) return "No songs yet. Add the first one below.";
@@ -2368,20 +2519,19 @@ function renderSummary(): void {
   const totalSecs = setlistDurationSecs(current);
   const songCount = current.items.filter((item) => "Song" in item).length;
   const breakCount = current.items.filter((item) => "Break" in item).length;
-  const lock = currentLockArtist();
-  const lockName = lock ? artistLabel(lock) : null;
-  const mismatches = lock
+  // The `· artist` suffix is gone (redundant inside a scope); the non-matching
+  // count stays for legacy leftovers, resolved against the active scope.
+  const scope = activeScopeArtist();
+  const mismatches = scope
     ? current.items.filter(
         (item) =>
           "Song" in item &&
-          resolveArtistForSong(item.Song, artists)?.id !== lock.id,
+          resolveArtistForSong(item.Song, artists)?.id !== scope.id,
       ).length
     : 0;
 
   if (current.items.length === 0) {
-    setlistSummary.textContent = lockName
-      ? `Empty running order · ${lockName}`
-      : "Empty running order";
+    setlistSummary.textContent = "Empty running order";
     return;
   }
 
@@ -2389,9 +2539,8 @@ function renderSummary(): void {
     `${songCount} ${songCount === 1 ? "song" : "songs"}`,
     breakCount > 0 ? `${breakCount} ${breakCount === 1 ? "break" : "breaks"}` : null,
     `${formatRuntime(totalSecs)} total`,
-    lockName,
-    mismatches > 0
-      ? `${mismatches} ${mismatches === 1 ? "song" : "songs"} not by ${lockName}`
+    mismatches > 0 && scope
+      ? `${mismatches} ${mismatches === 1 ? "song" : "songs"} not by ${artistLabel(scope)}`
       : null,
   ].filter((part): part is string => Boolean(part));
 
@@ -2767,10 +2916,12 @@ async function handleSongSubmit(event: SubmitEvent): Promise<void> {
     return;
   }
 
-  const selectedArtist = newSongArtist.value
-    ? artists.find((artist) => artist.id === newSongArtist.value)
-    : null;
-  if (newSongArtist.value && !selectedArtist) {
+  const scope = activeScopeArtist();
+  const selectedArtist = scope ??
+    (newSongArtist.value
+      ? (artists.find((artist) => artist.id === newSongArtist.value) ?? null)
+      : null);
+  if (!scope && newSongArtist.value && !selectedArtist) {
     setStatus(
       "That artist is no longer available. Pick another artist and add the song again.",
       "error",
@@ -2816,7 +2967,15 @@ async function handleSongSubmit(event: SubmitEvent): Promise<void> {
     renderNewSongArtistOptions();
     renderArtists();
     renderLibrary();
-    setStatus(`Added “${song.title}” to the library.`, "success");
+    // A song filed to an artist from the Unfiled scope leaves this scope on
+    // save; name the destination so the row's disappearance is expected.
+    const filedAway = !scope && selectedArtist;
+    setStatus(
+      filedAway
+        ? `Added “${song.title}” to the library, filed under ${artistLabel(selectedArtist)}.`
+        : `Added “${song.title}” to the library.`,
+      "success",
+    );
     if (restoreTitleFocus) {
       newSongTitle.focus();
     } else if (editorFocus && !restoreLibraryEditorFocus(editorFocus)) {
@@ -3174,11 +3333,22 @@ function buildLibraryEditor(
   titleField.input.required = true;
   titleField.input.autocomplete = "off";
 
-  const artistSelect = document.createElement("select");
-  artistSelect.autocomplete = "off";
-  renderArtistSelectOptions(artistSelect, draft);
-  const artistElement = el("label", "item-field song-editor-wide");
-  artistElement.append(el("span", "item-field-label", "Artist"), artistSelect);
+  // An artist scope shows the owning artist read-only (moving a song between
+  // artists is out of scope); the Unfiled scope restores the dropdown so the
+  // song can be filed under any artist on save.
+  const editorScope = activeScopeArtist();
+  const artistElement = el("div", "item-field song-editor-wide");
+  artistElement.append(el("span", "item-field-label", "Artist"));
+  let artistSelect: HTMLSelectElement | null = null;
+  if (editorScope) {
+    artistElement.append(el("span", "item-readonly", artistLabel(editorScope)));
+  } else {
+    const select = document.createElement("select");
+    select.autocomplete = "off";
+    renderArtistSelectOptions(select, draft);
+    artistElement.append(select);
+    artistSelect = select;
+  }
 
   const keyField = textField("Key", draft.key, "Em");
   keyField.input.maxLength = 12;
@@ -3235,22 +3405,25 @@ function buildLibraryEditor(
       input.addEventListener(eventName, rememberFocus);
     }
   }
-  artistSelect.addEventListener("change", rememberFocus);
-  artistSelect.addEventListener("change", () => {
-    const editor = libraryEditor;
-    if (!editor || editor.songId !== song.id || editor.saving) return;
+  if (artistSelect) {
+    const select = artistSelect;
+    select.addEventListener("change", rememberFocus);
+    select.addEventListener("change", () => {
+      const editor = libraryEditor;
+      if (!editor || editor.songId !== song.id || editor.saving) return;
 
-    if (artistSelect.value === LEGACY_ARTIST_VALUE) {
-      editor.draft.artistId = "";
-      editor.draft.keepLegacyArtist = true;
-    } else if (artistSelect.value === "") {
-      editor.draft.artistId = "";
-      editor.draft.keepLegacyArtist = false;
-    } else {
-      editor.draft.artistId = artistSelect.value;
-      editor.draft.keepLegacyArtist = false;
-    }
-  });
+      if (select.value === LEGACY_ARTIST_VALUE) {
+        editor.draft.artistId = "";
+        editor.draft.keepLegacyArtist = true;
+      } else if (select.value === "") {
+        editor.draft.artistId = "";
+        editor.draft.keepLegacyArtist = false;
+      } else {
+        editor.draft.artistId = select.value;
+        editor.draft.keepLegacyArtist = false;
+      }
+    });
+  }
 
   const updateDraft = (key: LibrarySongDraftField, input: HTMLInputElement): void => {
     input.addEventListener("input", () => {
@@ -3313,10 +3486,14 @@ function buildLibraryEditor(
       return;
     }
 
-    const selectedArtist = state.draft.artistId
-      ? artists.find((artist) => artist.id === state.draft.artistId)
-      : null;
-    if (state.draft.artistId && !selectedArtist) {
+    // An artist scope adopts the active artist on save (the song is already in
+    // this library); the Unfiled scope files through the dropdown instead.
+    const saveScope = activeScopeArtist();
+    const selectedArtist = saveScope ??
+      (state.draft.artistId
+        ? (artists.find((artist) => artist.id === state.draft.artistId) ?? null)
+        : null);
+    if (!saveScope && state.draft.artistId && !selectedArtist) {
       // The record disappeared while this draft was open. Fall back to the
       // legacy text (if any) so the next Save can still succeed.
       state.draft.artistId = "";
@@ -3328,15 +3505,16 @@ function buildLibraryEditor(
       renderLibrary();
       return;
     }
-    const artistSnapshot =
-      selectedArtist?.name.trim() ||
-      (state.draft.keepLegacyArtist ? trimmedOrNull(state.draft.legacyArtist) : null);
+    const artistSnapshot = saveScope
+      ? saveScope.name.trim()
+      : (selectedArtist?.name.trim() ||
+        (state.draft.keepLegacyArtist ? trimmedOrNull(state.draft.legacyArtist) : null));
 
     const edited: Song = {
       id: song.id,
       title,
       artist: artistSnapshot,
-      artist_id: selectedArtist?.id ?? null,
+      artist_id: (saveScope ?? selectedArtist)?.id ?? null,
       bpm,
       key: trimmedOrNull(state.draft.key),
       tuning: trimmedOrNull(state.draft.tuning),
@@ -3475,12 +3653,12 @@ function addSongToSetlist(song: Song): void {
   if (blockLibraryActionWhileBusy()) return;
   if (!current) return;
 
-  // The lock gates library adds only (never reorder/existing items). Legacy
-  // text matching uses the same resolved identity as the library filter.
-  const lock = currentLockArtist();
-  if (lock && resolveArtistForSong(song, artists)?.id !== lock.id) {
+  // The add gate is inherent now (the scoped library only offers the scope's
+  // songs); the refusal stays as a defensive guard for stale-cache edges.
+  const scope = activeScopeArtist();
+  if (scope && resolveArtistForSong(song, artists)?.id !== scope.id) {
     setStatus(
-      `“${song.title}” is not by ${artistLabel(lock)} — switch the setlist artist to add it.`,
+      `“${song.title}” is not by ${artistLabel(scope)} — switch artist scope to add it.`,
       "error",
     );
     return;
@@ -3528,6 +3706,10 @@ async function deleteLibrarySong(song: Song): Promise<void> {
 
 /** Rebuilds the Add-to-library artist picker, keeping a still-valid selection. */
 function renderNewSongArtistOptions(): void {
+  // An artist scope auto-assigns the active artist: no dropdown. The Unfiled
+  // scope restores it so new songs can be filed on save.
+  newSongArtistField.hidden = activeScopeArtist() !== null;
+  if (activeScopeArtist() !== null) return;
   const selected = newSongArtist.value;
   renderArtistSelectOptions(newSongArtist, {
     artistId: artists.some((artist) => artist.id === selected) ? selected : "",
@@ -3589,10 +3771,10 @@ function renderArtists(): void {
     return;
   }
 
-  // Counts use resolved identity through the shared library-artist bucket, so
-  // the Artists section and the Feature 15 filter always agree. Id-backed songs
-  // count for their record and legacy text counts for a same-named record until
-  // it is adopted.
+  // Counts use resolved identity through the shared bucket helper, so the
+  // Artists section, the landing page, and the Unfiled entry always agree.
+  // Id-backed songs count for their record and legacy text counts for a
+  // same-named record until it is adopted.
   const counts = libraryArtistCounts();
 
   const locked = artistBusy || restoring || backingUp;
@@ -3911,8 +4093,8 @@ async function handleArtistSubmit(event: SubmitEvent): Promise<void> {
     resetArtistForm();
     renderArtists();
     renderNewSongArtistOptions();
-    renderSetlistArtistFilter();
-    renderSetlistArtistSection();
+    renderScopePicker();
+    renderFileUnder();
     renderLogoControls();
     renderLibrary();
     // A rename can change legacy-text identity and counts; a logo edit changes
@@ -4033,9 +4215,9 @@ function handleArtistLogoRemove(): void {
 
 /**
  * Deletes an artist record and best-effort clears every song/setlist
- * `artist_id` that points at it. Song `artist` snapshots stay untouched, so
- * the last name remains visible; dangling ids from an interrupted delete load
- * as unresolved and are safe.
+ * `artist_id` that points at it through the unfiled allowance. Song `artist`
+ * snapshots stay untouched, so the last name remains visible; the nulled
+ * records land in the Unfiled scope, never in limbo.
  */
 async function deleteArtist(artist: Artist): Promise<void> {
   if (artistBusy || artistDeleting) {
@@ -4058,8 +4240,12 @@ async function deleteArtist(artist: Artist): Promise<void> {
     return;
   }
 
+  const nulledSongCount = songs.filter((song) => song.artist_id === artist.id).length;
+  const nulledSetlistCount = setlists.filter(
+    (setlist) => normalizeArtistId(setlist.artist_id) === artist.id,
+  ).length;
   const confirmed = window.confirm(
-    `Delete artist “${artist.name}”? Songs keep their last artist name text; setlists assigned to this artist become unassigned.`,
+    `Delete artist “${artist.name}”? ${countLabel(nulledSongCount, "song")} and ${countLabel(nulledSetlistCount, "setlist")} will become unfiled.`,
   );
   if (!confirmed) return;
 
@@ -4081,7 +4267,8 @@ async function deleteArtist(artist: Artist): Promise<void> {
     for (const song of [...songs]) {
       if (song.artist_id !== artist.id) continue;
       try {
-        const saved = await api.saveSong({ ...song, artist_id: null });
+        // The nulled record is unfiled by definition: the allowance applies.
+        const saved = await api.saveSong({ ...song, artist_id: null }, true);
         const index = songs.findIndex((entry) => entry.id === saved.id);
         if (index >= 0) songs[index] = saved;
       } catch (error) {
@@ -4092,7 +4279,7 @@ async function deleteArtist(artist: Artist): Promise<void> {
     for (const setlist of [...setlists]) {
       if (normalizeArtistId(setlist.artist_id) !== artist.id) continue;
       try {
-        const saved = await api.saveSetlist({ ...setlist, artist_id: null });
+        const saved = await api.saveSetlist({ ...setlist, artist_id: null }, true);
         const index = setlists.findIndex((entry) => entry.id === saved.id);
         if (index >= 0) {
           setlists[index] = {
@@ -4138,6 +4325,17 @@ async function deleteArtist(artist: Artist): Promise<void> {
       current.artist_id = null;
     }
     clearArtistDraftForDeletedArtist(artist.id, editingThis);
+    // The deleted scope is gone: follow its records into the Unfiled scope, or
+    // back to the landing page when nothing is unfiled.
+    if (activeArtistId === artist.id) {
+      if (unfiledCount() > 0) {
+        activeArtistId = UNFILED_SCOPE;
+        reselectCurrentInScope();
+      } else {
+        activeArtistId = null;
+        landingVisible = true;
+      }
+    }
     renderNewSongArtistOptions();
     renderAll();
     void refreshLogoIfChanged();
@@ -4147,7 +4345,7 @@ async function deleteArtist(artist: Artist): Promise<void> {
       await api.removeLogo(artist.logo.file_name).catch(() => undefined);
     }
 
-    const summary = `Deleted artist “${artist.name}”. Songs keep their last artist name text; setlists are now unassigned.`;
+    const summary = `Deleted artist “${artist.name}”. ${countLabel(nulledSongCount, "song")} and ${countLabel(nulledSetlistCount, "setlist")} are now unfiled.`;
     if (failures.length > 0) {
       setStatus(
         `${summary} Some references could not be cleared: ${summarizeRecords(failures)}.`,
@@ -4185,6 +4383,487 @@ function clearArtistDraftForDeletedArtist(artistId: string, editingThis: boolean
   if (!editingThis) return;
   discardArtistDraftLogos(artistFormState);
   resetArtistForm();
+}
+
+// ---------------------------------------------------------------------------
+// Landing page + scope entry
+// ---------------------------------------------------------------------------
+
+/**
+ * Enters an artist or Unfiled scope from the landing page. Follows the same
+ * dirty-editor guard as the scope switcher; entering hides the overlay and
+ * selects the first in-scope setlist (or a blank scope draft).
+ */
+async function enterScope(id: string): Promise<void> {
+  if (id !== UNFILED_SCOPE && !artists.some((artist) => artist.id === id)) return;
+  if (dirty && !confirmDiscard()) return;
+
+  if (landingLogoFile) landingTransientLogos.add(landingLogoFile);
+  landingLogoFile = null;
+  discardLandingTransientLogos();
+  landingShowCreate = false;
+  landingVisible = false;
+  activeArtistId = id;
+
+  pendingLogoRemovals.clear();
+  clearLogoPreview();
+  const inScope = setlists.filter((setlist) => setlistInScope(setlist));
+  current = inScope[0] ? cloneSetlist(inScope[0]) : blankDraftForScope();
+  dirty = inScope.length === 0;
+  renderAll();
+  if (backendAvailable && !dirty) {
+    await loadLogoForCurrent();
+  }
+  fitPreview();
+
+  const scope = activeScopeArtist();
+  if (scope) await maybeOfferUnfiledAssignment(scope);
+  // The overlay (and its focused control) is gone; land focus on the scope
+  // switcher so keyboard users stay oriented.
+  setlistArtistFilterSelect.focus();
+}
+
+/** Closes a reopened landing page without leaving the active scope. */
+function closeLanding(): void {
+  if (activeArtistId === null) return;
+  if (landingLogoFile) landingTransientLogos.add(landingLogoFile);
+  landingLogoFile = null;
+  discardLandingTransientLogos();
+  landingShowCreate = false;
+  landingVisible = false;
+  renderScopePicker();
+  renderLanding();
+  setlistArtistFilterSelect.focus();
+}
+
+/** Best-effort cleanup of staged landing logos no record references. */
+/** Best-effort cleanup of staged landing logos no record references. */
+function discardLandingTransientLogos(): void {
+  for (const name of landingTransientLogos) {
+    // A staged file adopted by a saved artist is still referenced; the backend
+    // skips those, so this never deletes a live logo.
+    void api.removeLogo(name).catch(() => undefined);
+  }
+  landingTransientLogos.clear();
+}
+
+/**
+ * Traps keyboard focus inside the modal landing dialog: while it is visible,
+ * the header and workspace are `inert`, so Tab cannot leave the overlay. The
+ * status line stays live for announcements. Removing the attribute restores
+ * the background when the overlay hides.
+ */
+function syncLandingInert(): void {
+  for (const node of document.querySelectorAll(".app-shell > header, .app-shell > main")) {
+    if (landingVisible) {
+      node.setAttribute("inert", "");
+    } else {
+      node.removeAttribute("inert");
+    }
+  }
+}
+
+function renderLanding(): void {
+  landingOverlay.hidden = !landingVisible;
+  syncLandingInert();
+  if (!landingVisible) return;
+
+  landingCard.replaceChildren(buildLandingCard());
+  // Move keyboard focus inside the dialog, but never steal it back while the
+  // user is already working in the form (logo imports re-render the card).
+  if (!landingCard.contains(document.activeElement)) {
+    landingCard.querySelector<HTMLElement>("button, input, select")?.focus();
+  }
+}
+
+function buildLandingCard(): DocumentFragment {
+  const fragment = document.createDocumentFragment();
+  const scoped = activeArtistId !== null;
+
+  if (artists.length === 0) {
+    fragment.append(
+      landingHeading("Create your first artist"),
+      landingSub("StageSheet is organized by artist. Create one to open its song library and setlists."),
+      buildLandingCreateForm(),
+    );
+  } else {
+    fragment.append(
+      landingHeading("Choose an artist"),
+      landingSub("Each artist has its own song library and setlists. Totals live here; the library badge counts the active scope."),
+    );
+
+    const list = el("ul", "landing-list");
+    for (const artist of artists) {
+      list.append(buildLandingArtistRow(artist));
+    }
+    const unfiled = unfiledCount();
+    if (unfiled > 0) {
+      list.append(buildLandingUnfiledRow(unfiled));
+    }
+    fragment.append(list);
+
+    if (landingShowCreate) {
+      fragment.append(buildLandingCreateForm());
+    } else {
+      const toggle = el("button", "btn", "New artist");
+      toggle.type = "button";
+      toggle.addEventListener("click", () => {
+        landingShowCreate = true;
+        renderLanding();
+      });
+      fragment.append(toggle);
+    }
+  }
+
+  if (scoped) {
+    const close = el("button", "btn", "Back to workspace");
+    close.type = "button";
+    close.addEventListener("click", closeLanding);
+    fragment.append(close);
+  }
+  return fragment;
+}
+
+function landingHeading(text: string): HTMLHeadingElement {
+  const heading = el("h2", undefined, text);
+  heading.id = "landing-title";
+  return heading;
+}
+
+function landingSub(text: string): HTMLParagraphElement {
+  return el("p", "landing-sub", text);
+}
+
+function buildLandingArtistRow(artist: Artist): HTMLLIElement {
+  const row = el("li", "landing-row");
+  const button = el("button", "landing-artist");
+  button.type = "button";
+  button.setAttribute("aria-label", `Open the ${artist.name || "Untitled artist"} workspace`);
+
+  button.append(buildArtistThumb(artist));
+
+  const info = el("div", "landing-artist-info");
+  info.append(el("span", "landing-artist-name", artist.name || "Untitled artist"));
+  const songCount = songs.filter(
+    (song) => resolveArtistForSong(song, artists)?.id === artist.id,
+  ).length;
+  const setlistCount = setlists.filter(
+    (setlist) => normalizeArtistId(setlist.artist_id) === artist.id,
+  ).length;
+  info.append(
+    el(
+      "span",
+      "landing-artist-meta",
+      `${countLabel(songCount, "song")} · ${countLabel(setlistCount, "setlist")}`,
+    ),
+  );
+  button.append(info);
+
+  button.addEventListener("click", () => {
+    void enterScope(artist.id);
+  });
+  row.append(button);
+  return row;
+}
+
+function buildLandingUnfiledRow(count: number): HTMLLIElement {
+  const row = el("li", "landing-row");
+  const button = el("button", "landing-artist landing-unfiled");
+  button.type = "button";
+  button.setAttribute("aria-label", `Open the Unfiled workspace, ${countLabel(count, "record")}`);
+  button.append(el("span", "artist-thumb is-empty", "—"));
+  const info = el("div", "landing-artist-info");
+  info.append(el("span", "landing-artist-name", "Unfiled"));
+  info.append(el("span", "landing-artist-meta", `${countLabel(count, "record")} with no artist`));
+  button.append(info);
+  button.addEventListener("click", () => {
+    void enterScope(UNFILED_SCOPE);
+  });
+  row.append(button);
+  return row;
+}
+
+/**
+ * Landing-page artist creation: name plus the same logo upload/width/alignment
+ * controls and validation as the Artists section. Creating enters the new
+ * artist's scope immediately.
+ */
+function buildLandingCreateForm(): HTMLFormElement {
+  const form = el("form", "landing-form");
+  form.noValidate = true;
+  form.setAttribute("aria-label", "New artist");
+
+  const nameId = "landing-name";
+  const nameLabel = document.createElement("label");
+  nameLabel.className = "field";
+  const nameText = el("span", "item-field-label", "Name");
+  const nameInput = document.createElement("input");
+  nameInput.id = nameId;
+  nameInput.required = true;
+  nameInput.autocomplete = "off";
+  nameLabel.append(nameText, nameInput);
+
+  const preview = el("div", "landing-logo-preview");
+  preview.setAttribute("aria-hidden", "true");
+  refreshLandingLogoPreview(preview);
+
+  const fileId = "landing-logo-file";
+  const fileLabel = document.createElement("label");
+  fileLabel.className = "field";
+  fileLabel.append(el("span", "item-field-label", "Logo (PNG, JPEG, SVG · max 5 MiB)"));
+  const fileInput = document.createElement("input");
+  fileInput.id = fileId;
+  fileInput.type = "file";
+  fileInput.accept = "image/png,image/jpeg,image/svg+xml";
+  fileLabel.append(fileInput);
+
+  const widthId = "landing-logo-width";
+  const widthLabel = document.createElement("label");
+  widthLabel.className = "field field-grow";
+  const widthText = document.createElement("span");
+  widthText.className = "item-field-label";
+  widthText.append("Width ");
+  const widthOutput = document.createElement("output");
+  widthOutput.id = `${widthId}-value`;
+  widthOutput.textContent = `${DEFAULT_LOGO_WIDTH_MM} mm`;
+  widthText.append(widthOutput);
+  const widthInput = document.createElement("input");
+  widthInput.id = widthId;
+  widthInput.type = "range";
+  widthInput.min = String(LOGO_MIN_WIDTH_MM);
+  widthInput.max = String(LOGO_MAX_WIDTH_MM);
+  widthInput.step = "1";
+  widthInput.value = String(DEFAULT_LOGO_WIDTH_MM);
+  widthInput.addEventListener("input", () => {
+    widthOutput.textContent = `${Math.round(clamp(Number(widthInput.value), LOGO_MIN_WIDTH_MM, LOGO_MAX_WIDTH_MM))} mm`;
+  });
+  widthLabel.append(widthText, widthInput);
+
+  const alignmentGroup = document.createElement("div");
+  alignmentGroup.className = "field";
+  const alignmentLabel = el("span", "field-label", "Alignment");
+  alignmentLabel.id = "landing-logo-alignment-label";
+  const segmented = el("div", "segmented");
+  segmented.setAttribute("role", "radiogroup");
+  segmented.setAttribute("aria-labelledby", "landing-logo-alignment-label");
+  const alignments: LogoAlignment[] = ["Left", "Center", "Right"];
+  for (const value of alignments) {
+    const option = document.createElement("label");
+    const radio = document.createElement("input");
+    radio.type = "radio";
+    radio.name = "landing-logo-alignment";
+    radio.value = value;
+    radio.checked = value === "Center";
+    const text = el("span", undefined, value);
+    option.append(radio, text);
+    segmented.append(option);
+  }
+  alignmentGroup.append(alignmentLabel, segmented);
+
+  const submit = el("button", "btn btn-primary", "Create artist");
+  submit.type = "submit";
+  submit.disabled = landingBusy;
+
+  fileInput.addEventListener("change", () => {
+    void handleLandingLogoFile(fileInput, preview);
+  });
+  nameInput.addEventListener("input", () => {
+    if (nameInput.classList.contains("is-invalid")) markFieldInvalid(nameInput, false);
+  });
+
+  form.addEventListener("submit", (event) => {
+    event.preventDefault();
+    void handleLandingCreate(form, nameInput, widthInput, submit);
+  });
+
+  form.append(nameLabel, preview, fileLabel, widthLabel, alignmentGroup, submit);
+  return form;
+}
+
+function refreshLandingLogoPreview(preview: HTMLElement): void {
+  preview.replaceChildren();
+  if (!landingLogoFile) {
+    preview.append(el("span", "artist-logo-preview-empty", "No logo"));
+    return;
+  }
+  const image = el("img", "artist-logo-preview-img");
+  image.alt = "";
+  preview.append(image);
+  void storedLogoUrl(landingLogoFile)
+    .then((url) => {
+      if (image.isConnected) image.src = url;
+    })
+    .catch(() => {
+      if (!image.isConnected) return;
+      image.remove();
+      preview.append(el("span", "artist-logo-preview-empty", "No preview"));
+    });
+}
+
+async function handleLandingLogoFile(fileInput: HTMLInputElement, preview: HTMLElement): Promise<void> {
+  const file = fileInput.files?.[0];
+  fileInput.value = "";
+  if (!file || landingBusy || landingLogoBusy) return;
+
+  const allowed = ["image/png", "image/jpeg", "image/svg+xml"];
+  if (!allowed.includes(file.type) && !/\.(png|jpe?g|svg)$/i.test(file.name)) {
+    setStatus("Artist logo must be a PNG, JPEG, or SVG image.", "error");
+    return;
+  }
+  if (file.size > 5 * 1024 * 1024) {
+    setStatus("Artist logo must be 5 MiB or smaller.", "error");
+    return;
+  }
+  if (!ensureBackend()) return;
+
+  landingLogoBusy = true;
+  setStatus(`Importing artist logo “${file.name}”…`);
+  try {
+    const bytes = new Uint8Array(await file.arrayBuffer());
+    const storedName = await api.importLogo(bytes, file.name);
+    if (landingLogoFile) landingTransientLogos.add(landingLogoFile);
+    landingLogoFile = storedName;
+    refreshLandingLogoPreview(preview);
+    setStatus("Artist logo imported.", "success");
+  } catch (error) {
+    setStatus(`Could not import artist logo: ${describeError(error)}`, "error");
+  } finally {
+    landingLogoBusy = false;
+  }
+}
+
+async function handleLandingCreate(
+  form: HTMLFormElement,
+  nameInput: HTMLInputElement,
+  widthInput: HTMLInputElement,
+  submit: HTMLButtonElement,
+): Promise<void> {
+  if (landingBusy) return;
+  if (landingLogoBusy) {
+    setStatus("Wait for the artist logo import to finish before creating.", "info");
+    return;
+  }
+  if (!ensureBackend()) return;
+
+  const name = nameInput.value.trim();
+  if (!name) {
+    markFieldInvalid(nameInput, true);
+    setStatus("Artist name is required.", "error");
+    nameInput.focus();
+    return;
+  }
+  markFieldInvalid(nameInput, false);
+
+  const checked = form.querySelector<HTMLInputElement>('input[name="landing-logo-alignment"]:checked');
+  const alignment: LogoAlignment =
+    checked && isLogoAlignment(checked.value) ? checked.value : "Center";
+
+  landingBusy = true;
+  submit.disabled = true;
+  setStatus(`Creating artist “${name}”…`);
+
+  try {
+    const saved = await api.saveArtist({
+      id: newId(),
+      name,
+      logo: {
+        file_name: landingLogoFile,
+        width_mm: clamp(Number(widthInput.value), LOGO_MIN_WIDTH_MM, LOGO_MAX_WIDTH_MM),
+        alignment,
+      },
+    });
+    artists.push(saved);
+    artists.sort((left, right) => left.name.localeCompare(right.name));
+    // The staged logo is now referenced by the record; stop tracking it so the
+    // scope entry below does not try to clean it up.
+    if (saved.logo.file_name) landingTransientLogos.delete(saved.logo.file_name);
+    landingLogoFile = null;
+    setStatus(`Added artist “${saved.name}”.`, "success");
+    await enterScope(saved.id);
+  } catch (error) {
+    setStatus(`Could not create artist: ${describeError(error)}`, "error");
+  } finally {
+    landingBusy = false;
+    submit.disabled = false;
+  }
+}
+
+/**
+ * Once per scope entry, offers to assign every unfiled record that belongs to
+ * no other artist to the artist just entered. Confirming writes through the
+ * normal save commands with per-record status; declining keeps them Unfiled.
+ */
+async function maybeOfferUnfiledAssignment(scope: Artist): Promise<void> {
+  const offerSongs = songs.filter(
+    (song) =>
+      !song.artist_id &&
+      (resolveArtistForSong(song, artists) === null ||
+        resolveArtistForSong(song, artists)?.id === scope.id),
+  );
+  const offerSetlists = setlists.filter(
+    (setlist) => !findArtistById(artists, normalizeArtistId(setlist.artist_id)),
+  );
+  if (offerSongs.length === 0 && offerSetlists.length === 0) return;
+
+  const signature = [
+    ...offerSongs.map((song) => song.id),
+    ...offerSetlists.map((setlist) => setlist.id),
+  ]
+    .sort()
+    .join("|");
+  if (landingOffered.get(scope.id) === signature) return;
+  landingOffered.set(scope.id, signature);
+
+  const confirmed = window.confirm(
+    `${countLabel(offerSongs.length, "song")} and ${countLabel(offerSetlists.length, "setlist")} have no artist. Assign them to “${artistLabel(scope)}”?`,
+  );
+  if (!confirmed) return;
+
+  let assignedSongs = 0;
+  let assignedSetlists = 0;
+  const failures: string[] = [];
+  for (const song of offerSongs) {
+    try {
+      const saved = await api.saveSong({
+        ...song,
+        artist_id: scope.id,
+        artist: scope.name.trim(),
+      });
+      const index = songs.findIndex((entry) => entry.id === saved.id);
+      if (index >= 0) songs[index] = saved;
+      assignedSongs += 1;
+    } catch (error) {
+      failures.push(`song “${song.title}” (${describeError(error)})`);
+    }
+  }
+  for (const setlist of offerSetlists) {
+    try {
+      const saved = await api.saveSetlist({ ...setlist, artist_id: scope.id });
+      const index = setlists.findIndex((entry) => entry.id === saved.id);
+      if (index >= 0) {
+        setlists[index] = {
+          ...saved,
+          artist_id: normalizeArtistId(saved.artist_id),
+        };
+      }
+      if (current?.id === saved.id) current = cloneSetlist(saved);
+      assignedSetlists += 1;
+    } catch (error) {
+      failures.push(`setlist “${setlist.title}” (${describeError(error)})`);
+    }
+  }
+  sortSetlists();
+  renderAll();
+
+  const summary = `Assigned ${countLabel(assignedSongs, "song")} and ${countLabel(assignedSetlists, "setlist")} to “${artistLabel(scope)}”.`;
+  if (failures.length > 0) {
+    setStatus(
+      `${summary} Some records could not be assigned: ${summarizeRecords(failures)}.`,
+      "error",
+    );
+  } else {
+    setStatus(summary, "success");
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -4354,7 +5033,6 @@ async function handleLogoFile(): Promise<void> {
     }
     setlist.logo.file_name = storedName;
     renderLogoControls();
-    renderSetlistArtistNote();
     markDirty();
     renderSheet();
     setStatus("Logo imported.", "success");
@@ -4382,7 +5060,6 @@ function handleLogoRemove(): void {
   setLogoPreview(null);
   renderLogoControls();
   markDirty();
-  renderSetlistArtistNote();
   // With no own logo the preview may now fall back to the artist's logo.
   void refreshLogoIfChanged();
   setStatus(fileName ? "Logo removed — save to apply." : "Logo removed.");

@@ -14,27 +14,31 @@ commit as each change.
   defaults and aliases.
 - JSON storage + capability scoping + the full command list in the README.
 - Song library with instant search (title, resolved artist, key, tuning),
-  view-only sort by title/resolved artist/key/tuning, a "Has tuning" filter,
-  and a view-only Artist filter (All artists / a record with its resolved song
-  count / No artist) that combines with search, tuning, and sort. The filter
-  uses the same resolved identity as the Artists section, keeps the total song
-  badge, and names the active constraint in empty states. One-click add, inline
-  row editing with the add form's validation and field limits (stable id,
-  re-sorted and re-filtered after save), per-row duplicate under a new id, and
-  delete with confirmation. Free-text tuning (max 24 chars) is part of search,
-  the add form, the library editor, and each setlist song's editor details.
+  view-only sort by title/resolved artist/key/tuning, and a "Has tuning"
+  filter that combine with the active artist scope. The library shows only the
+  scope's songs (resolved identity), and the badge counts the scope — totals
+  live on the landing page. One-click add (auto-assigned to the scope artist),
+  inline row editing with the add form's validation and field limits (stable
+  id, re-sorted and re-rendered after save, owning artist read-only in a scope
+  and filed through the dropdown only in the Unfiled scope), per-row duplicate
+  under a new id, and delete with confirmation. Free-text tuning (max 24 chars)
+  is part of search, the add form, the library editor, and each setlist song's
+  editor details.
 - Managed artist records (name + logo) in the library pane with logo
   thumbnails, resolved song counts, an inline create/edit form using the setlist
   logo controls, and confirmed delete. Songs reference artists by id while
   keeping a name snapshot; renaming updates display without rewriting songs or
-  setlists, deleting clears references best-effort and reports failures, and
+  setlists, deleting clears references best-effort and reports failures (the
+  confirm names the unfiled consequence), and
   legacy free-text artists remain as a display fallback (and a "Keep text"
   option) until adopted. Artist logos share the `import_logo` pool and removal
-  skips files any setlist or artist still references.
-- Setlist editor: title/venue/date, artist assignment (`No artist` = unlocked),
-  break insertion (custom label, `mm:ss` length, comment), up/down + drag
-  reorder, inline BPM/key/tuning editing, Comment fields for songs and breaks
-  (max 140 chars) that render on the sheet, and logo upload with
+  skips files any setlist or artist still references. Song and setlist saves
+  require an artist record; legacy unfiled records load, list, and restore
+  as-is until assigned.
+- Setlist editor: title/venue/date, break insertion (custom label, `mm:ss`
+  length, comment), up/down + drag reorder, inline BPM/key/tuning editing,
+  Comment fields for songs and breaks (max 140 chars) that render on the sheet,
+  a `File under…` select while the setlist is unfiled, and logo upload with
   width/alignment controls. Oversized raster logos are downscaled on import;
   SVG logos stay vector. The logo chain is setlist own → artist → placeholder
   in preview, print, and export, and the Logo width slider edits the
@@ -52,11 +56,16 @@ commit as each change.
   artist are copied; the clean copy becomes current. Titles follow
   `X` → `X (copy)` → `X (copy 2)` without stacking suffixes, and deleting one
   copy keeps a logo the other still references.
-- Per-artist setlist picker in the header (`All artists` default; **New**
-  pre-assigns the picked artist) and an editor-only library lock: the current
-  setlist's artist forces the library artist filter, narrows adds to matching
-  songs (legacy text resolves by name), and leaves existing non-matching items
-  untouched. The summary names the artist and any non-matching count.
+- Per-artist workspace scoping with a landing page for artist
+  creation/selection (name + logo + width/alignment, or a selection list with
+  thumbnails and song/setlist counts plus an Unfiled entry). The header artist
+  picker is the scope switcher (artist entries plus `Unfiled (N)`, dirty-guard
+  on switch); songs and setlists must belong to an artist on save, legacy
+  records stay unfiled until assigned (landing offer, Unfiled scope filing, or
+  `File under…`). Artist deletion names the unfiled consequence and nulls
+  references through the unfiled allowance. The library Artist filter, the
+  lock chrome, and the per-setlist Artist select are retired; the summary
+  keeps the non-matching count without the `· artist` suffix.
 - Per-setlist "Sheet columns" toggles for Key, Tuning, Tempo (BPM), Time, and
   Comment, persisted with the setlist and applied to preview, print, and
   export. Column widths are per-combination presets summing to 100% with the
@@ -111,15 +120,13 @@ commit as each change.
   as a versioned JSON envelope (`schema_version: 1`), written and read through
   the dialog-scoped fs permission with no new commands or capability widening.
   Restore validates records, re-saves them through the normal commands
-  (artists first), and reports imported/rejected counts; future schema versions
-  are rejected until the app supports them, older ones can migrate forward.
+  (artists first, unfiled records through the allowance), and reports
+  imported/rejected counts; future schema versions are rejected until the app
+  supports them, older ones can migrate forward.
   Logos are not embedded in v1 and are re-imported manually.
 
 ## Still missing (per plan)
 
-- Feature 20 — artist-first mode: a landing page for artist
-  creation/selection, per-artist song libraries and setlists, and a mandatory
-  artist on save (legacy records stay "unfiled" until assigned).
 - Paginated split-setlist helper (move the second half of a setlist into a new
   one) as an alternative to multi-page mode.
 - Physical-paper QA on A4 (page count, header/footer per engine, legibility),

@@ -70,10 +70,9 @@ export const NO_ARTIST_FILTER = "none";
  * `NO_ARTIST_FILTER` when it has no artist identity, or `null` when it only
  * carries unmatched legacy text.
  *
- * Counts and the filter predicate share this helper, so an option's count
- * always equals the rows it shows. Unmatched non-empty legacy text is
- * deliberately unbucketed: it stays visible under All artists (and search)
- * instead of being forced into No artist.
+ * Counts share this helper through `libraryArtistCounts()`, so the
+ * Artists-section and landing labels always match the rows a scope shows.
+ * Unmatched non-empty legacy text is deliberately unbucketed.
  */
 export function libraryArtistBucket(
   song: Pick<Song, "artist" | "artist_id">,
@@ -82,16 +81,6 @@ export function libraryArtistBucket(
   const record = resolveArtistForSong(song, artists);
   if (record) return record.id;
   return song.artist?.trim() ? null : NO_ARTIST_FILTER;
-}
-
-/** True when the library artist filter (null = all) shows this song. */
-export function matchesLibraryArtistFilter(
-  song: Pick<Song, "artist" | "artist_id">,
-  artists: readonly Artist[],
-  filter: string | null,
-): boolean {
-  if (filter === null) return true;
-  return libraryArtistBucket(song, artists) === filter;
 }
 
 /**

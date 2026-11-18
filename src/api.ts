@@ -5,7 +5,13 @@ import type { Artist, Setlist, Song } from "./types";
 
 export const api = {
   listSongs: () => invoke<Song[]>("list_songs"),
-  saveSong: (song: Song) => invoke<Song>("save_song", { song }),
+  /**
+   * Feature 20: songs must belong to an artist record on save. Pass
+   * `allowUnfiled` only on the restore and artist-deletion paths, where an
+   * already-stored unfiled record is re-saved as-is.
+   */
+  saveSong: (song: Song, allowUnfiled = false) =>
+    invoke<Song>("save_song", { song, allowUnfiled }),
   deleteSong: (id: string) => invoke<void>("delete_song", { id }),
 
   listArtists: () => invoke<Artist[]>("list_artists"),
@@ -14,7 +20,13 @@ export const api = {
 
   listSetlists: () => invoke<Setlist[]>("list_setlists"),
   getSetlist: (id: string) => invoke<Setlist>("get_setlist", { id }),
-  saveSetlist: (setlist: Setlist) => invoke<Setlist>("save_setlist", { setlist }),
+  /**
+   * Feature 20: setlists must belong to an artist record on save, same
+   * allowance rule as songs. `reorder_items` needs no flag: the backend
+   * re-saves the stored record with the allowance internally.
+   */
+  saveSetlist: (setlist: Setlist, allowUnfiled = false) =>
+    invoke<Setlist>("save_setlist", { setlist, allowUnfiled }),
   deleteSetlist: (id: string) => invoke<void>("delete_setlist", { id }),
   reorderItems: (setlistId: string, from: number, to: number) =>
     invoke<Setlist>("reorder_items", { setlistId, from, to }),

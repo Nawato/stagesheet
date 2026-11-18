@@ -245,6 +245,27 @@ impl Song {
 
         Ok(())
     }
+
+    /// Save-time validation for top-level library records (Feature 20).
+    ///
+    /// Every rule from `validate()` still applies; on top, the song must belong
+    /// to an artist record unless `allow_unfiled` skips only that check. The
+    /// allowance exists for exactly three paths: backup restore,
+    /// artist-deletion reference-nulling, and re-saving an already-stored
+    /// unfiled setlist via `reorder_items`. Songs stored as setlist items are
+    /// gig snapshots and never go through this: they keep plain `validate()`.
+    pub fn validate_for_save(&self, allow_unfiled: bool) -> Result<(), String> {
+        self.validate()?;
+
+        if !allow_unfiled && self.artist_id.is_none() {
+            return Err(format!(
+                "\u{201c}{}\u{201d} has no artist \u{2014} assign it before saving.",
+                self.title.trim()
+            ));
+        }
+
+        Ok(())
+    }
 }
 
 /// Trims a free-text value and maps blank input to `None`.
@@ -559,6 +580,25 @@ impl Setlist {
 
         for item in &self.items {
             item.validate()?;
+        }
+
+        Ok(())
+    }
+
+    /// Save-time validation for stored setlists (Feature 20).
+    ///
+    /// Same shape as `Song::validate_for_save`: every `validate()` rule still
+    /// applies, and the setlist must belong to an artist record unless
+    /// `allow_unfiled` skips only that check. Item snapshot songs keep plain
+    /// `validate()` — they are gig copies, not library records.
+    pub fn validate_for_save(&self, allow_unfiled: bool) -> Result<(), String> {
+        self.validate()?;
+
+        if !allow_unfiled && self.artist_id.is_none() {
+            return Err(format!(
+                "\u{201c}{}\u{201d} has no artist \u{2014} assign it before saving.",
+                self.title.trim()
+            ));
         }
 
         Ok(())
@@ -1497,6 +1537,42 @@ mod tests {
 
         assert_eq!(decoded, setlist);
         assert_eq!(decoded.artist_id, Some(artist_id));
+    }
+
+    #[test]
+    fn save_time_artist_requirement_names_the_record() {
+        let mut song = Song::new("Stray");
+        song.artist_id = None;
+        let error = song
+            .validate_for_save(false)
+            .expect_err("unfiled song fails");
+        assert!(
+            error.contains("Stray") && error.contains("has no artist"),
+            "message names the song: {error}"
+        );
+        song.artist_id = Some(Uuid::new_v4());
+        assert!(song.validate_for_save(false).is_ok());
+
+        let mut setlist = Setlist::new("Stray Gig");
+        setlist.artist_id = None;
+        let error = setlist
+            .validate_for_save(false)
+            .expect_err("unfiled setlist fails");
+        assert!(
+            error.contains("Stray Gig") && error.contains("has no artist"),
+            "message names the setlist: {error}"
+        );
+        assert!(setlist.validate_for_save(true).is_ok());
+    }
+
+    #[test]
+    fn save_time_artist_check_skips_setlist_item_snapshots() {
+        // Item songs are gig snapshots, not library records: only the setlist
+        // itself must be filed.
+        let mut setlist = Setlist::new("Gig");
+        setlist.artist_id = Some(Uuid::new_v4());
+        setlist.items.push(SetlistItem::Song(Song::new("Snapshot")));
+        assert!(setlist.validate_for_save(false).is_ok());
     }
 
     #[test]

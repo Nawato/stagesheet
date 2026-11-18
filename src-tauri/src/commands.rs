@@ -17,8 +17,14 @@ pub async fn list_songs(storage: State<'_, Storage>) -> Result<Vec<Song>, AppErr
 }
 
 #[tauri::command]
-pub async fn save_song(song: Song, storage: State<'_, Storage>) -> Result<Song, AppError> {
-    storage.save_song(&song).await?;
+pub async fn save_song(
+    song: Song,
+    allow_unfiled: Option<bool>,
+    storage: State<'_, Storage>,
+) -> Result<Song, AppError> {
+    storage
+        .save_song(&song, allow_unfiled.unwrap_or(false))
+        .await?;
     Ok(song)
 }
 
@@ -62,11 +68,16 @@ pub async fn get_setlist(id: Uuid, storage: State<'_, Storage>) -> Result<Setlis
 #[tauri::command]
 pub async fn save_setlist(
     mut setlist: Setlist,
+    allow_unfiled: Option<bool>,
     storage: State<'_, Storage>,
 ) -> Result<Setlist, AppError> {
-    setlist.validate().map_err(AppError::InvalidInput)?;
+    setlist
+        .validate_for_save(allow_unfiled.unwrap_or(false))
+        .map_err(AppError::InvalidInput)?;
     setlist.touch();
-    storage.save_setlist(&setlist).await?;
+    storage
+        .save_setlist(&setlist, allow_unfiled.unwrap_or(false))
+        .await?;
     Ok(setlist)
 }
 
@@ -85,7 +96,9 @@ pub async fn reorder_items(
     let mut setlist = storage.get_setlist(setlist_id).await?;
     setlist.move_item(from, to)?;
     setlist.touch();
-    storage.save_setlist(&setlist).await?;
+    // Re-saving an already-stored record must never fail on filing state:
+    // reorder keeps whatever the setlist had, filed or unfiled.
+    storage.save_setlist(&setlist, true).await?;
     Ok(setlist)
 }
 

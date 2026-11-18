@@ -88,12 +88,6 @@
                 <option value="tuning">Tuning</option>
               </select>
             </div>
-            <div class="field library-artist-filter">
-              <label for="song-artist-filter">Artist</label>
-              <select id="song-artist-filter">
-                <option value="" selected>All artists</option>
-              </select>
-            </div>
             <label class="check library-filter">
               <input
                 id="song-tuning-only"
@@ -103,8 +97,6 @@
             </label>
           </div>
 
-          <p id="library-lock-note" class="library-lock-note" role="note" hidden></p>
-
           <ul id="song-list" class="song-list"></ul>
 
           <form id="song-form" class="song-form" novalidate>
@@ -113,7 +105,7 @@
               <label for="new-song-title">Title</label>
               <input id="new-song-title" required autocomplete="off" />
             </div>
-            <div class="field">
+            <div class="field" id="new-song-artist-field">
               <label for="new-song-artist">Artist</label>
               <select id="new-song-artist" autocomplete="off">
                 <option value="" selected>No artist</option>
@@ -277,14 +269,13 @@
             </div>
           </div>
 
-          <div class="setlist-artist">
+          <div class="setlist-fileunder" id="setlist-fileunder" hidden>
             <div class="field">
-              <label for="setlist-artist">Artist</label>
-              <select id="setlist-artist" aria-describedby="setlist-artist-note">
-                <option value="" selected>No artist</option>
+              <label for="setlist-fileunder-select">File under…</label>
+              <select id="setlist-fileunder-select" aria-describedby="setlist-fileunder-note">
               </select>
             </div>
-            <p id="setlist-artist-note" class="setlist-artist-note" role="note" hidden></p>
+            <p id="setlist-fileunder-note" class="setlist-artist-note" role="note"></p>
           </div>
 
           <div class="items-heading">
@@ -473,6 +464,16 @@
           </div>
         </section>
       </main>
+
+      <div id="landing-overlay" class="landing-overlay" hidden>
+        <div
+          id="landing-card"
+          class="landing-card"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="landing-title"
+        ></div>
+      </div>
     </div>
 
     <noscript>StageSheet needs JavaScript to build and print setlists.</noscript>

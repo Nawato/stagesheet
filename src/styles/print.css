@@ -33,6 +33,7 @@
   .editor-pane,
   .preview-toolbar,
   .sheet-options,
+  .landing-overlay,
   noscript {
     display: none !important;
   }

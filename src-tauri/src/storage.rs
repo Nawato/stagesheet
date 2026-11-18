@@ -99,8 +99,9 @@ impl Storage {
             .unwrap_or_default())
     }
 
-    pub async fn save_song(&self, song: &Song) -> Result<(), AppError> {
-        song.validate().map_err(AppError::InvalidInput)?;
+    pub async fn save_song(&self, song: &Song, allow_unfiled: bool) -> Result<(), AppError> {
+        song.validate_for_save(allow_unfiled)
+            .map_err(AppError::InvalidInput)?;
 
         let _guard = self.write_lock.lock().await;
         let mut songs = self
@@ -219,8 +220,14 @@ impl Storage {
             .ok_or(AppError::SetlistNotFound(id))
     }
 
-    pub async fn save_setlist(&self, setlist: &Setlist) -> Result<(), AppError> {
-        setlist.validate().map_err(AppError::InvalidInput)?;
+    pub async fn save_setlist(
+        &self,
+        setlist: &Setlist,
+        allow_unfiled: bool,
+    ) -> Result<(), AppError> {
+        setlist
+            .validate_for_save(allow_unfiled)
+            .map_err(AppError::InvalidInput)?;
 
         let _guard = self.write_lock.lock().await;
         self.write_json(&self.setlist_path(setlist.id), setlist)
@@ -515,21 +522,23 @@ mod tests {
     #[tokio::test]
     async fn song_crud_round_trips() {
         let (_dir, storage) = storage();
+        let artist_id = Uuid::new_v4();
         let mut song = Song::new("Opener");
         song.artist = Some("The Band".into());
+        song.artist_id = Some(artist_id);
         song.bpm = Some(128);
         song.key = Some("Em".into());
         song.duration_secs = Some(240);
         song.notes = Some("Count in from the drums".into());
 
-        storage.save_song(&song).await.expect("create");
+        storage.save_song(&song, false).await.expect("create");
         assert_eq!(
             storage.list_songs().await.expect("list"),
             vec![song.clone()]
         );
 
         song.title = "Opener (alt)".into();
-        storage.save_song(&song).await.expect("update");
+        storage.save_song(&song, false).await.expect("update");
         let songs = storage.list_songs().await.expect("list");
         assert_eq!(songs.len(), 1, "upsert must not duplicate rows");
         assert_eq!(songs[0].title, "Opener (alt)");
@@ -608,8 +617,12 @@ mod tests {
         assert!(logo_path.exists(), "an artist reference must keep the file");
 
         let mut setlist = Setlist::new("Gig");
+        setlist.artist_id = Some(Uuid::new_v4());
         setlist.logo.file_name = Some(file_name.clone());
-        storage.save_setlist(&setlist).await.expect("save setlist");
+        storage
+            .save_setlist(&setlist, false)
+            .await
+            .expect("save setlist");
         storage
             .delete_artist(artist.id)
             .await
@@ -642,7 +655,7 @@ mod tests {
             artist_id: Some(artist.id),
             ..Song::new("Opener")
         };
-        storage.save_song(&song).await.expect("save song");
+        storage.save_song(&song, false).await.expect("save song");
 
         let songs = storage.list_songs().await.expect("list songs");
         assert_eq!(songs, vec![song]);
@@ -654,6 +667,7 @@ mod tests {
     async fn setlist_crud_reorder_and_duration() {
         let (_dir, storage) = storage();
         let mut setlist = Setlist::new("Release Show");
+        setlist.artist_id = Some(Uuid::new_v4());
         setlist.venue = Some("Matrix, Bochum".into());
         setlist.date = chrono::NaiveDate::from_ymd_opt(2026, 11, 20);
         setlist.logo.alignment = LogoAlignment::Right;
@@ -673,7 +687,7 @@ mod tests {
             SetlistItem::Song(closer),
         ];
 
-        storage.save_setlist(&setlist).await.expect("create");
+        storage.save_setlist(&setlist, false).await.expect("create");
         assert_eq!(storage.get_setlist(setlist.id).await.expect("get"), setlist);
         assert_eq!(
             storage
@@ -686,7 +700,7 @@ mod tests {
         let mut loaded = storage.get_setlist(setlist.id).await.expect("get");
         loaded.move_item(2, 0).expect("reorder");
         loaded.touch();
-        storage.save_setlist(&loaded).await.expect("update");
+        storage.save_setlist(&loaded, false).await.expect("update");
 
         let reloaded = storage.get_setlist(setlist.id).await.expect("get");
         assert_eq!(
@@ -710,14 +724,15 @@ mod tests {
     async fn page_mode_round_trips_through_storage() {
         let (_dir, storage) = storage();
         let mut setlist = Setlist::new("Two Pages");
+        setlist.artist_id = Some(Uuid::new_v4());
         setlist.page_mode = PageMode::Multiple;
 
-        storage.save_setlist(&setlist).await.expect("create");
+        storage.save_setlist(&setlist, false).await.expect("create");
         let loaded = storage.get_setlist(setlist.id).await.expect("get");
         assert_eq!(loaded.page_mode, PageMode::Multiple);
 
         setlist.page_mode = PageMode::Single;
-        storage.save_setlist(&setlist).await.expect("update");
+        storage.save_setlist(&setlist, false).await.expect("update");
         let loaded = storage.get_setlist(setlist.id).await.expect("get");
         assert_eq!(loaded.page_mode, PageMode::Single);
     }
@@ -727,13 +742,14 @@ mod tests {
         let (_dir, storage) = storage();
 
         let mut setlist = Setlist::new("Gig");
+        setlist.artist_id = Some(Uuid::new_v4());
         setlist.items.push(SetlistItem::Break {
             duration_secs: crate::models::MAX_BREAK_SECS + 1,
             note: None,
             label: None,
         });
         assert!(matches!(
-            storage.save_setlist(&setlist).await,
+            storage.save_setlist(&setlist, false).await,
             Err(AppError::InvalidInput(message)) if message.contains("break length")
         ));
 
@@ -770,7 +786,7 @@ mod tests {
         assert_eq!(loaded.total_duration_secs(), u64::from(u32::MAX));
         assert!(loaded.validate().is_err(), "next save must fail");
         assert!(matches!(
-            storage.save_setlist(&loaded).await,
+            storage.save_setlist(&loaded, false).await,
             Err(AppError::InvalidInput(_))
         ));
     }
@@ -811,7 +827,11 @@ mod tests {
         assert_eq!(loaded.total_duration_secs(), 600);
         assert_eq!(storage.setlist_duration(id).await.expect("duration"), 600);
 
-        storage.save_setlist(&loaded).await.expect("resave");
+        // The legacy file has no artist; filing it is a normal save-time step,
+        // separate from the minute-to-second migration under test.
+        let mut filed = loaded;
+        filed.artist_id = Some(Uuid::new_v4());
+        storage.save_setlist(&filed, false).await.expect("resave");
         let raw = tokio::fs::read_to_string(&path)
             .await
             .expect("read resaved setlist");
@@ -938,5 +958,171 @@ mod tests {
 
         assert!(file_name.ends_with(".svg"));
         assert_eq!(stored_logo_bytes(&storage, &file_name).await, svg);
+    }
+
+    #[tokio::test]
+    async fn unfiled_songs_rejected_without_allowance_accepted_with_it() {
+        let (_dir, storage) = storage();
+        let mut song = Song::new("Stray");
+        song.artist_id = None;
+
+        let error = storage
+            .save_song(&song, false)
+            .await
+            .expect_err("unfiled song save must fail");
+        assert!(
+            matches!(&error, AppError::InvalidInput(message)
+                if message.contains("Stray") && message.contains("has no artist")),
+            "clear message names the song: {error}"
+        );
+        assert!(storage.list_songs().await.expect("list").is_empty());
+
+        // The allowance skips only the artist check.
+        storage
+            .save_song(&song, true)
+            .await
+            .expect("unfiled song saves with the allowance");
+        assert_eq!(storage.list_songs().await.expect("list"), vec![song]);
+
+        // Every other rule still applies under the flag.
+        let mut invalid = Song::new("   ");
+        invalid.artist_id = None;
+        assert!(matches!(
+            storage.save_song(&invalid, true).await,
+            Err(AppError::InvalidInput(message)) if message.contains("song title")
+        ));
+    }
+
+    #[tokio::test]
+    async fn unfiled_setlists_rejected_without_allowance_accepted_with_it() {
+        let (_dir, storage) = storage();
+        let mut setlist = Setlist::new("Stray Gig");
+        setlist.artist_id = None;
+
+        let error = storage
+            .save_setlist(&setlist, false)
+            .await
+            .expect_err("unfiled setlist save must fail");
+        assert!(
+            matches!(&error, AppError::InvalidInput(message)
+                if message.contains("Stray Gig") && message.contains("has no artist")),
+            "clear message names the setlist: {error}"
+        );
+
+        storage
+            .save_setlist(&setlist, true)
+            .await
+            .expect("unfiled setlist saves with the allowance");
+        assert_eq!(storage.get_setlist(setlist.id).await.expect("get"), setlist);
+
+        let mut invalid = Setlist::new("   ");
+        invalid.artist_id = None;
+        assert!(matches!(
+            storage.save_setlist(&invalid, true).await,
+            Err(AppError::InvalidInput(message)) if message.contains("setlist title")
+        ));
+    }
+
+    #[tokio::test]
+    async fn legacy_unfiled_records_load_and_save_through_the_allowance() {
+        let (_dir, storage) = storage();
+
+        // A pre-Feature-20 song file has no artist_id: it loads as None.
+        let mut song = Song::new("Legacy");
+        song.artist = Some("The Band".into());
+        storage.save_song(&song, true).await.expect("save unfiled");
+        let songs = storage.list_songs().await.expect("list");
+        assert_eq!(songs[0].artist_id, None);
+        assert!(matches!(
+            storage.save_song(&songs[0], false).await,
+            Err(AppError::InvalidInput(_))
+        ));
+
+        // Artist-deletion nulling writes through the same allowance: the nulled
+        // record stays loadable and keeps its name snapshot.
+        let artist = Artist::new("The Band");
+        storage.save_artist(&artist).await.expect("save artist");
+        let mut filed = Song::new("Filed");
+        filed.artist = Some(artist.name.clone());
+        filed.artist_id = Some(artist.id);
+        storage.save_song(&filed, false).await.expect("save filed");
+
+        let nulled = Song {
+            artist_id: None,
+            ..filed
+        };
+        storage
+            .save_song(&nulled, true)
+            .await
+            .expect("deletion nulling uses the allowance");
+        let songs = storage.list_songs().await.expect("list");
+        let reloaded = songs
+            .iter()
+            .find(|entry| entry.id == filed.id)
+            .expect("find");
+        assert_eq!(reloaded.artist_id, None);
+        assert_eq!(reloaded.artist.as_deref(), Some("The Band"));
+    }
+
+    #[tokio::test]
+    async fn backup_round_trip_keeps_filed_and_unfiled_records() {
+        let (_dir, storage) = storage();
+        let artist = Artist::new("The Band");
+        storage.save_artist(&artist).await.expect("save artist");
+
+        let mut filed_song = Song::new("Filed Song");
+        filed_song.artist_id = Some(artist.id);
+        filed_song.artist = Some(artist.name.clone());
+        storage
+            .save_song(&filed_song, false)
+            .await
+            .expect("save filed song");
+
+        let unfiled_song = Song::new("Unfiled Song");
+        storage
+            .save_song(&unfiled_song, true)
+            .await
+            .expect("save unfiled song");
+
+        let mut filed_setlist = Setlist::new("Filed Gig");
+        filed_setlist.artist_id = Some(artist.id);
+        storage
+            .save_setlist(&filed_setlist, false)
+            .await
+            .expect("save filed setlist");
+
+        let unfiled_setlist = Setlist::new("Unfiled Gig");
+        storage
+            .save_setlist(&unfiled_setlist, true)
+            .await
+            .expect("save unfiled setlist");
+
+        // The restore path re-saves every record through the allowance, so the
+        // envelope round-trips as-is, filed and unfiled alike.
+        let songs = storage.list_songs().await.expect("list songs");
+        let setlists = storage.list_setlists().await.expect("list setlists");
+        for song in &songs {
+            storage.save_song(song, true).await.expect("restore song");
+        }
+        for setlist in &setlists {
+            storage
+                .save_setlist(setlist, true)
+                .await
+                .expect("restore setlist");
+        }
+
+        let songs = storage.list_songs().await.expect("list songs");
+        assert_eq!(songs.len(), 2);
+        assert!(songs.iter().any(|song| song.artist_id == Some(artist.id)));
+        assert!(songs.iter().any(|song| song.artist_id.is_none()));
+
+        let setlists = storage.list_setlists().await.expect("list setlists");
+        assert_eq!(setlists.len(), 2);
+        assert!(
+            setlists
+                .iter()
+                .any(|setlist| setlist.artist_id == Some(artist.id))
+        );
+        assert!(setlists.iter().any(|setlist| setlist.artist_id.is_none()));
     }
 }

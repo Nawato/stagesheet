@@ -139,19 +139,18 @@ The library pane keeps reusable songs and offers instant search across title,
 artist, key, and tuning. Search matches the resolved artist name, so songs
 assigned to an artist record and older free-text songs filter identically. A
 view-only sort control orders the list by title (default), resolved artist name,
-key, or tuning; missing values sort last and ties fall back to title. An
-**Artist** select filters the list to one artist record, or to **No artist**
-for songs with no resolved artist identity, and combines with search, sort, and
-tuning. Its options carry resolved song counts; legacy text groups under a
-same-named record until adopted, while unmatched non-empty text stays under
-All artists and in search. **Has tuning** narrows the list to songs with a
+key, or tuning; missing values sort last and ties fall back to title. The list
+shows only the active artist's songs — id-backed songs plus legacy text
+grouping under a same-named record until adopted — and combines with search,
+sort, and tuning. **Has tuning** narrows the list to songs with a
 tuning set. Each row adds the song to the running order, duplicates it into the
 library under a new id with a `(copy)` suffix, or removes it after a
 confirmation. **Edit** opens an inline editor in the row with the same fields
 and validation as the add form; saving keeps the song's id and re-applies the
-current search, sort, artist, and tuning filters, while saved setlists keep
+current search, sort, and tuning filters, while saved setlists keep
 their own copies. Sorting and filtering never mark a setlist dirty or change
-the stored data, and the library badge always reports the total song count.
+the stored data, and the library badge counts the active scope — totals live
+on the landing page.
 
 ### Artists
 
@@ -160,9 +159,10 @@ counts. **New artist** takes a name and the same logo upload, width, and
 alignment controls as a setlist; each row's Edit action reuses that form for
 name and logo changes, and Delete confirms first. Renaming never rewrites songs
 or setlists: they reference the record by id, and the record name wins in the
-library display, search, and sort. Song add/edit forms offer **No artist** plus
-every record; legacy free-text songs get a "Keep text" option until they are
-adopted. Deleting an artist clears referencing `artist_id` values best-effort,
+library display, search, and sort. In the Unfiled scope, song add/edit forms
+offer **No artist** plus every record so songs can be filed on save, and
+legacy free-text songs get a "Keep text" option until they are adopted; in an
+artist scope the artist is automatic on add and read-only in the row editor. Deleting an artist clears referencing `artist_id` values best-effort,
 keeps each song's last name snapshot, and leaves its logo file alone while a
 setlist or another artist still uses it. Entering or cancelling edit mode
 updates the row's editing state immediately; a pending logo import holds the
@@ -170,25 +170,28 @@ artist Save until it finishes; and Delete is refused while a library song
 edit/save is in flight and locks library row actions while references are
 cleared.
 
-### Setlist artists and the library lock
+### Artist scope and the library
 
-The setlist editor has an **Artist** select (`No artist` = unlocked). Assigning
-an artist is a normal setlist edit and is saved with the setlist. The header's
-first dropdown is a view-only **Artist** picker (`All artists` default) that
-filters the setlist select to that artist's saved setlists; **New** starts a
-setlist pre-assigned to the picked artist. The open setlist always stays
-available even when it falls outside the filter, and the picker is never saved
-or included in a backup.
+StageSheet is artist-first: a landing page gates startup — create the first
+artist (name plus logo upload/width/alignment), or pick one from the selection
+list with song/setlist counts, plus an **Unfiled** entry when records have no
+artist. It reopens later via **Choose artist…** in the header picker.
 
-While the current setlist has a live artist A, the library narrows to A (with
-legacy artist text matching A's name by resolved identity) and still combines
-with search, sort, and **Has tuning**. The library Artist select is forced to A
-and disabled with a note explaining why; unlocking restores the previous
-in-memory selection. Adding a song that does not belong to A — including a song
-with no artist — is refused with
-`“<title>” is not by <A> — switch the setlist artist to add it.` Breaks are
-always allowed, existing items are never removed or rewritten, and the running
-order summary shows the artist plus a count of non-matching songs when any.
+The header's first dropdown is the scope switcher: artist entries plus
+`Unfiled (N)` plus **Choose artist…**. The library, the setlist list, and the
+song-count badge follow the active scope; search, sort, and **Has tuning**
+still combine on top. **New** starts a setlist pre-assigned to the active
+artist and is disabled in the Unfiled scope. Each unfiled setlist gets a
+**File under…** select that files it through the normal save path; the song
+Add form and the row editor offer an artist dropdown only in the Unfiled
+scope, and saving an unfiled song or setlist fails with a
+`“…has no artist — assign it before saving.”` message until it is filed.
+Adding a song outside the scope — possible only through a stale cache — is
+refused with
+`“<title>” is not by <A> — switch artist scope to add it.` Breaks are
+always allowed, existing items are never removed or rewritten, and the
+running order summary keeps only a count of non-matching songs when any.
+The scope selection is session-only: never saved, never backed up.
 
 ## Backup and restore
 

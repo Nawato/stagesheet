@@ -441,10 +441,6 @@ input[type="file"]::file-selector-button {
   flex: 0 1 118px;
 }
 
-.library-artist-filter {
-  flex: 1 1 120px;
-}
-
 .library-filter {
   flex: 0 1 auto;
   font-size: 12.5px;
@@ -714,25 +710,19 @@ input[type="file"]::file-selector-button {
   margin-bottom: 18px;
 }
 
-.setlist-artist {
+.setlist-fileunder {
   display: flex;
   flex-direction: column;
   gap: 6px;
   margin-bottom: 18px;
 }
 
-.setlist-artist-note {
-  margin: 0;
-  color: var(--ink-soft);
-  font-size: 12px;
+.setlist-fileunder[hidden] {
+  display: none;
 }
 
-.library-lock-note {
-  margin: 0 0 10px;
-  padding: 8px 10px;
-  border-left: 3px solid var(--accent);
-  border-radius: 0 8px 8px 0;
-  background: #fbfaf7;
+.setlist-artist-note {
+  margin: 0;
   color: var(--ink-soft);
   font-size: 12px;
 }
@@ -1739,4 +1729,126 @@ input[type="file"]::file-selector-button {
     animation-duration: 0.01ms !important;
     animation-iteration-count: 1 !important;
   }
+}
+
+/* -------------------------------------------------------------------------
+   Landing page + scope entry (Feature 20)
+   ------------------------------------------------------------------------- */
+
+.landing-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  overflow-y: auto;
+  padding: 48px 16px;
+  background: rgba(24, 22, 18, 0.45);
+}
+
+.landing-overlay[hidden] {
+  display: none;
+}
+
+.landing-card {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  width: min(560px, 100%);
+  padding: 24px;
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  background: var(--paper);
+  box-shadow: 0 18px 60px rgba(0, 0, 0, 0.25);
+}
+
+.landing-card h2 {
+  margin: 0;
+  font-size: 20px;
+}
+
+.landing-sub {
+  margin: 0;
+  color: var(--ink-soft);
+  font-size: 13px;
+}
+
+.landing-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.landing-row {
+  margin: 0;
+}
+
+.landing-artist {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  min-height: var(--tap);
+  padding: 8px 12px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: #fff;
+  color: var(--ink);
+  text-align: left;
+  cursor: pointer;
+}
+
+.landing-artist:hover {
+  border-color: var(--line-strong);
+  background: #fbfaf7;
+}
+
+.landing-artist-info {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.landing-artist-name {
+  font-size: 14px;
+  font-weight: 700;
+}
+
+.landing-artist-meta {
+  color: var(--ink-soft);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+
+.landing-form {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding-top: 14px;
+  border-top: 1px dashed var(--line);
+}
+
+.landing-logo-preview {
+  display: flex;
+  align-items: center;
+  min-height: 48px;
+}
+
+.landing-logo-preview img {
+  max-height: 64px;
+  max-width: 100%;
+}
+
+/* Read-only owning artist in the library editor (artist scope). */
+.item-readonly {
+  display: flex;
+  align-items: center;
+  min-height: var(--tap);
+  color: var(--ink);
+  font-size: 13px;
 }

@@ -131,15 +131,13 @@ harness were removed when the exporter shipped.
 - Sheet correctness fixes from real use: Feature 10 done (per-combination
   column widths + header alignment); Feature 11 done (paginated
   preview/print frames). Both outrank new tooling.
-- Library/setlist tooling slice: Features 12, 13, 14, 15, 16, 17, 18, and 19
-  are Done. In-place library song editing, setlist duplication as a preset base,
-  artist records + logos, the in-memory library artist filter, the setlist
-  artist + per-artist picker + library lock, break-second precision, and the
-  effective logo width control shipped. Duplication copies the setlist artist
-  and shares the logo file. The only remaining overflow tool is the
-  split-setlist helper. Specced next (Todo): Feature 20 (artist-first landing
-  page + per-artist scoping). Feature 21 (print/export toolbar
-  consolidation) is Done.
+- Library/setlist tooling slice: Features 12, 13, 14, 15, 16, 17, 18, 19, 20,
+  and 21 are Done. In-place library song editing, setlist duplication as a
+  preset base, artist records + logos, the artist-first landing page with
+  per-artist scoping (mandatory artist on save, legacy records unfiled until
+  assigned), break-second precision, and the effective logo width control
+  shipped. Duplication copies the setlist artist and shares the logo file. The
+  only remaining overflow tool is the split-setlist helper.
 - `tauri android init` / `ios init` on provisioned machines; native share.
 - Print QA on real A4 (checklist below), backup/restore, app versioning,
   signing/release automation (tracked in the roadmap, P3).
@@ -377,4 +375,22 @@ WebView2/WKWebView when available):**
   its entries lock while a capture runs). The Ctrl/⌘+P pill is gone; the
   Print button carries it as a hover tooltip. No Rust, IPC, storage,
   backup-schema, sheet/colgroup/frame/print-CSS, raster, CSP, or capability
-  change. Feature 20 remains Todo.
+  change.
+- 2026-11-18: Feature 20 shipped (artist-first mode: landing page +
+  per-artist scoping). `artist_id` is mandatory on song/setlist save
+  (`validate_for_save` with the `“<title>” has no artist — assign it before
+  saving.` message); `save_song` / `save_setlist` gained `allow_unfiled`
+  (plus the internal `reorder_items` allowance) used by exactly restore,
+  artist-deletion nulling, and stored-unfiled reorder — everything else
+  requires an artist. No schema bump; unfiled records load/list/restore as-is
+  and existing save fixtures gained artist ids. The landing overlay gates the
+  workspace (create-first, artist list with counts, Unfiled entry, once-per-entry
+  assign offer), the header picker is the scope switcher (`Unfiled (N)` +
+  landing shortcut, dirty-guard on switch), the library/badge/add/editor/New
+  follow the scope, unfiled setlists file through `File under…`, New is
+  disabled in the Unfiled scope, and artist deletion confirms the unfiled
+  consequence and follows the records. The Feature 15 select, the Feature 16
+  lock chrome + per-setlist Artist select are retired (markup, handlers, and
+  CSS removed); the summary drops `· A` but keeps the non-matching count.
+  Session scope state is in-memory only. Only the split-setlist helper remains
+  open behind it.
