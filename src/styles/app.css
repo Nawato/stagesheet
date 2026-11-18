@@ -334,6 +334,23 @@ input[type="file"]::file-selector-button {
   opacity: 0.45;
 }
 
+/* `aria-disabled` keeps the control focusable so the reason can be announced
+   on attempted activation (a `disabled` button never fires click). */
+.btn[aria-disabled="true"] {
+  cursor: not-allowed;
+  opacity: 0.45;
+}
+
+.new-disabled-hint {
+  color: var(--ink-soft);
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.new-disabled-hint[hidden] {
+  display: none;
+}
+
 .btn-primary {
   border-color: var(--accent);
   background: var(--accent);

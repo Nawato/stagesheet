@@ -114,15 +114,20 @@ Serde notes:
   "unfiled", never a load error. Saving a song assigned
   to a record stores both the id and the record's current name in `artist`;
   renaming the artist never rewrites songs. Display resolution is frontend-only
-  (`resolveArtistName` in `src/artists.ts`): live record name, else `artist`
-  text, else blank. Dangling ids are valid and resolve as unresolved.
+  (`resolveArtistName` in `src/artists.ts`): live record name; else (only
+  when `artist_id` is `None`) the `artist` text; else blank. A dangling id
+  (record gone) resolves as **unfiled** for songs and setlists alike — no
+  legacy-text fallback, blank display, Unfiled scope membership, and excluded
+  from the landing assign offer (Feature 25 contract change).
 - `Setlist.artist_id` (`#[serde(default)]`, old files load as `None`) is the
   setlist's **own artist A**. Since Feature 20 it is likewise **mandatory on
   save** (`save_setlist` fails an unfiled setlist with the same shaped
   message), while loading/listing/reading backups still accept `None`.
-  A dangling id counts as filed (it is `Some`) but resolves as unfiled in the
-  UI. Assigning or clearing A is a normal setlist edit (dirty + persisted on
-  save). Setlist duplication (Feature 13) copies the field.
+  A dangling id resolves as **unfiled** in the UI (Unfiled scope,
+  `File under…` row, excluded from the landing assign offer); the backend
+  still accepts `Some` on save. Assigning or clearing A is a normal setlist
+  edit (dirty + persisted on save). Setlist duplication (Feature 13) copies
+  the field.
 - **Unfiled allowance** (Feature 20): `save_song` / `save_setlist` take an
   optional `allow_unfiled` argument (JS `allowUnfiled`, default `false`).
   With the flag, validation skips only the artist check — every other rule
@@ -131,7 +136,11 @@ Serde notes:
   command re-saving an already-stored unfiled setlist. Everything else
   (editor saves, adds, duplication, backup's dirty-setlist auto-save)
   requires an artist. Setlist item snapshot songs never go through
-  save-validation: only the setlist itself must be filed.
+  save-validation: only the setlist itself must be filed. Trust rule
+  (Feature 25): `allow_unfiled` is a UX-convention trust, not a capability —
+  any IPC caller can pass it; the backend narrows *what* is skipped (only the
+  artist check), not *who* may call. The frontend passes it only on the three
+  paths above.
 - Setlist duplication (Feature 13) is frontend-only through `save_setlist`: the
   new `Setlist` gets a fresh UUID and fresh `created_at`/`updated_at`, while
   `items` are deep-copied values (song snapshot ids are kept) and `venue`,
@@ -166,15 +175,18 @@ Serde notes:
   in an artist scope); the Feature 12 inline editor shows the owning artist
   read-only and adopts it on save — moving a song between artists stays out of
   scope (delete + re-add in the right library). New setlists pre-assign the
-  active artist; **New is disabled in the Unfiled scope**. Each unfiled setlist
+  active artist; **New is unavailable in the Unfiled scope** — the button
+  stays activatable (`aria-disabled`, not `disabled`) with an adjacent hint
+  and an empty-state CTA, so attempted activation announces the next step.
+  Each unfiled setlist
   gets a `File under…` select that files it through the normal save path;
   saving an unfiled setlist from the editor fails with the unfiled message
   until it is filed. The Feature 16 lock chrome (forced filter + note +
   `· <A>` summary suffix) and the per-setlist editor Artist select are
   retired; the add-gate refusal stays only as a defensive guard for
   stale-cache edges, and the summary keeps `· N not by <artist>` for legacy
-  leftovers. A dangling setlist artist id counts as filed but resolves as
-  unfiled in the UI. Feature 19's width slider works unchanged inside a scope
+  leftovers. A dangling setlist artist id resolves as unfiled in the UI.
+  Feature 19's width slider works unchanged inside a scope
   (the artist logo is the active artist's).
 - The landing page (`#landing-overlay`, chrome only — never sheet markup or
   print CSS) gates the workspace: it shows on startup whenever no artist is
@@ -185,7 +197,9 @@ Serde notes:
   form and validation, inline on the landing card) and **Delete** (the same
   confirm with the unfiled consequence and the same guards), a New artist
   affordance, and an Unfiled entry when
-  unfiled records exist. After entering an artist, unfiled records are offered
+  unfiled records exist. After entering an artist, truly unfiled records (a
+  null `artist_id` with no resolved artist — dangling ids excluded) are
+  offered
   once per entry for assignment (`save_*` loops with per-record status);
   declining keeps them Unfiled. While visible, the overlay marks the header
   and workspace `inert`, so keyboard focus cannot Tab out of the dialog;
@@ -311,15 +325,17 @@ model fields are snake_case.
   otherwise its artist's `logo` when set, otherwise the setlist placeholder
   config. `resolveSetlistLogo()` is the single helper for preview, print, and
   export; the resolved `LogoConfig` supplies the file name, width, and
-  alignment. The Logo fieldset width slider edits that effective logo: own
-  logo and placeholder paths edit `setlist.logo.width_mm` input-driven (the
+  alignment. The Logo fieldset width slider and alignment radios edit that
+  effective logo: own
+  logo and placeholder paths edit `setlist.logo` input-driven (the
   placeholder pre-sizes the next own logo); the artist path commits
-  `artist.logo.width_mm` via `save_artist` on `change` (release) without
-  dirtying the setlist, guarded like an artist edit and reverting the slider
-  on failure. Uploading an own logo adopts the displayed width/alignment for
+  `artist.logo.width_mm` / `artist.logo.alignment` via `save_artist` on
+  `change` (release) without
+  dirtying the setlist, guarded like an artist edit and reverting the control
+  on refusal or failure. Uploading an own logo adopts the displayed width/alignment for
   a seamless swap; removing it falls back to the artist logo automatically.
   A `Setlist logo` / `<name> logo (artist)` / `No logo yet` showing line names
-  the slider target. No column, frame, print-CSS, or raster change is involved.
+  the width **and** alignment target. No column, frame, print-CSS, or raster change is involved.
 - `<thead>` carries the logo/title/venue/date header and column labels; `<tfoot>`
   carries the footer. Both are marked as table header/footer groups
   (`display: table-header-group` / `table-footer-group`). Chromium-based engines
@@ -481,6 +497,10 @@ model fields are snake_case.
   the file. Back up locks
   library row actions, the Add submit, and the landing management buttons while
   it reads the snapshot; Restore does the same during its write phase.
+  `switchScope` / `enterScope` refuse with a titled status while backing up
+  or restoring, and backup/restore refuse while an export capture runs.
+  Export likewise locks item editing, meta inputs, and scope switching for
+  the capture (working from a pre-capture snapshot of the editor state).
 - Artist delete guards: it refuses while a library song write is in flight or an
   inline song draft is open (same rationale as backup), reports a titled
   `Artist delete blocked — …` status, and disables library row actions for the
@@ -497,11 +517,12 @@ model fields are snake_case.
 ## Tests that must stay green
 
 - `cargo test` in `src-tauri`: model round-trips, artist round-trips and
-  name/logo validation, legacy `artist_id` defaulting on songs and setlists,
+  name/logo validation, song/setlist title trims like artist names, legacy
+  `artist_id` defaulting on songs and setlists,
   dangling artist ids, unfiled save rejection with the named-artist message and
   the `allow_unfiled` acceptance path (other rules still enforced, item
   snapshots exempt, legacy unfiled loads, deletion-nulling, backup round trip
-  incl. unfiled), legacy minute-break migration and conversion-on-save,
+  incl. unfiled, stored-unfiled reorder), legacy minute-break migration and conversion-on-save,
   first-draft JSON migration, reorder bounds, duration with breaks
   (`duration_secs` totals, 11-second precision), break bounds
   (0/36000 pass, 36001 fails, oversized legacy values load then fail save),

@@ -18,10 +18,18 @@ pub async fn list_songs(storage: State<'_, Storage>) -> Result<Vec<Song>, AppErr
 
 #[tauri::command]
 pub async fn save_song(
-    song: Song,
+    mut song: Song,
     allow_unfiled: Option<bool>,
     storage: State<'_, Storage>,
 ) -> Result<Song, AppError> {
+    // Store the title trimmed, like artist names; a whitespace-only title then
+    // fails validation with the clear song error instead of persisting padding.
+    song.trim_title();
+    // `allow_unfiled` is a UX-convention trust, not a capability: any IPC
+    // caller can pass it. The backend narrows *what* is skipped (only the
+    // artist check) rather than *who* may skip it; every other validation rule
+    // still applies. The frontend passes it only on the restore,
+    // artist-deletion nulling, and stored-unfiled reorder paths.
     storage
         .save_song(&song, allow_unfiled.unwrap_or(false))
         .await?;
@@ -71,6 +79,8 @@ pub async fn save_setlist(
     allow_unfiled: Option<bool>,
     storage: State<'_, Storage>,
 ) -> Result<Setlist, AppError> {
+    // Same title trim and `allow_unfiled` trust rule as `save_song` above.
+    setlist.trim_title();
     setlist
         .validate_for_save(allow_unfiled.unwrap_or(false))
         .map_err(AppError::InvalidInput)?;
@@ -122,4 +132,32 @@ pub async fn import_logo(
 #[tauri::command]
 pub async fn remove_logo(file_name: String, storage: State<'_, Storage>) -> Result<(), AppError> {
     storage.remove_logo(&file_name).await
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn song_and_setlist_titles_trim_like_artist_names() {
+        let mut song = Song::new("  Opener  ");
+        song.trim_title();
+        assert_eq!(song.title, "Opener");
+
+        let mut setlist = Setlist::new("  Gig  ");
+        setlist.trim_title();
+        assert_eq!(setlist.title, "Gig");
+
+        // Whitespace-only titles collapse to empty and fail validation with
+        // the clear field error instead of persisting padding.
+        let mut blank_song = Song::new("   ");
+        blank_song.trim_title();
+        assert_eq!(blank_song.title, "");
+        assert!(blank_song.validate_for_save(false).is_err());
+
+        let mut blank_setlist = Setlist::new("   ");
+        blank_setlist.trim_title();
+        assert_eq!(blank_setlist.title, "");
+        assert!(blank_setlist.validate_for_save(false).is_err());
+    }
 }

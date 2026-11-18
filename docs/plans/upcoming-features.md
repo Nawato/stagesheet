@@ -1048,11 +1048,20 @@ frames, the exporter, and raster logic are untouched.
    incl. `.print-hint`).
 2. QA + this file status + commit.
 
-## Feature 22: Header action order (Duplicate beside New) — Todo
+## Feature 22: Header action order (Duplicate beside New) — Done
 
-Status: Todo, tiny, independent UI chrome. From user feedback: the
+Status: Done, tiny, independent UI chrome. From user feedback: the
 **Duplicate** button belongs beside **New**, before **Save** —
 creation-adjacent, not next to **Delete**.
+
+### Shipped notes
+
+`#duplicate-setlist` moved between `#new-setlist` and `#save-setlist`, so
+the header reads scope selects, **New, Duplicate, Save, Delete** (order
+verified in `index.html`). No label, behavior, or flow change: the same
+dirty-save-first, confirm-free duplication. 44px targets and the existing
+wrap behavior are untouched. Feature 18's grouping (Delete next to Save)
+stays intact.
 
 Context: the header currently reads scope selects, New / Save / Delete /
 Duplicate (Feature 13 placed Duplicate beside Delete; Feature 18 put
@@ -1214,11 +1223,63 @@ guards, and per-record reporting move with the buttons.
 1. Landing Backup section + remove the pane fieldset.
 2. QA + this file status + commit.
 
-## Feature 25: v0.3.0 review hardening (safety + correctness) — Todo
+## Feature 25: v0.3.0 review hardening (safety + correctness) — Done
 
-Status: Todo, medium batch, from the five v0.3.0 perspective reviews
+Status: Done, medium batch, from the five v0.3.0 perspective reviews
 (UI, UX, normal user, frontend, backend). Each item is small; they ship
 as one hardening slice because they share the same guard/message code.
+
+### Shipped notes
+
+- **Export capture lock**: `exportCurrent` snapshots the editor state
+  (`cloneSetlist(current)`) before the raster and locks item editing
+  (running-order buttons, drag reorder, all inline song/break field edits),
+  meta inputs (title/venue/date, `File under…`, sheet options, page mode,
+  logo file/width/alignment/remove), setlist switching (New/Save/Delete/
+  Duplicate/setlist select), and scope switching (`switchScope` /
+  `enterScope`) for the capture via `syncCaptureLock()` + `captureGuard()`
+  (refused paths announce through the status line). `renderSheet` already
+  ignored edits mid-capture; the finally block unlocks and re-renders, so
+  no torn captures. Backup/restore refuse while a capture runs, and vice
+  versa.
+- **Backup/restore vs scope switch**: `switchScope` / `enterScope` refuse
+  with a titled `Scope switch blocked — backup/restore in progress…` error
+  status while `backingUp` / `restoring`, so a restore cannot overwrite a
+  reselection.
+- **Alignment binds the displayed logo**: the alignment radios follow the
+  same effective-logo case as the Feature 19 width slider. Own/placeholder
+  paths write `setlist.logo.alignment` (dirty + re-render); the artist path
+  commits via `save_artist` through a shared `commitEffectiveArtistLogo()`
+  helper (one in-flight save, the Feature 14 guards plus backup/restore/
+  export guards, radio revert on refusal/failure, shared-size status). The
+  showing line now names the width **and** alignment target in every case.
+- **Dangling-id resolver contract change**: `resolveArtistForSong()` resolves
+  id-backed songs by id only — a dangling id is unfiled (no legacy-text
+  fallback) — for songs and setlists alike; `resolveArtistName()` likewise
+  shows blank for dangling ids (legacy text only applies when `artist_id`
+  is `None`). The landing assign offer lists only true-`None` records with
+  accurate copy; counts, scopes, and the Unfiled bucket follow the same rule.
+- **Unfiled failure guidance**: when backup / print / duplicate auto-save
+  fails on the artist check, the status names the filing next step
+  (`“<title>” has no artist — open the Unfiled scope or use File under…
+  to file it, or discard the draft, then … again.`) instead of surfacing
+  the raw backend message.
+- **New-disabled explanation**: the disabled New button in the Unfiled scope
+  uses `aria-disabled` (not `disabled`) with an adjacent
+  `#new-setlist-hint` plus Unfiled empty-state guidance copy, so attempted
+  activation (click or keyboard) announces the next step; keyboard/AT access
+  is preserved.
+- **Backend**: `save_song` / `save_setlist` trim titles like artist names;
+  the `allow_unfiled` trust rule is documented in the command code and in
+  `SKILL.md` (any IPC caller can pass it; the backend narrows *what* is
+  skipped, not *who*); the stored-unfiled reorder path has a test;
+  `artistThumbUrls` blob URLs are pruned on artist delete/replace and
+  landing preview blob URLs are revoked on rebuild.
+- **Small correctness**: `parseDuration` rejects empty colon parts (like the
+  break parser); blank song-duplicate titles fall back to `Untitled song`;
+  artist option labels trim; `beforeunload` covers open song/artist/landing
+  drafts; `#setlist-sheet` gets `role="region"`; landing Ctrl/Cmd+S routes
+  to the artist create form.
 
 ### Scope (all must-fix; nothing optional here)
 
@@ -1351,12 +1412,12 @@ logo sizing instead of mm, selectable/vector PDF text, mobile, SQLite.
   logo width control), 20 (landing page + per-artist scoping with
   `artist_id` mandatory on save), and 21 (print/export toolbar
   consolidation) are Done.
-- **P1 — v0.3.1 slice**: Feature 22 (Duplicate beside New before Save, Todo),
+- **P1 — v0.3.1 slice**: Feature 22 (Duplicate beside New before Save — Done),
   Feature 23 (artist management on the landing screen, out of the
   library pane — Done), Feature 24 (Backup & Restore on the landing screen,
   incl. restore-before-scope — Done), Feature 25 (v0.3.0 review hardening:
   export/scope locks, alignment binding, dangling-id resolver, unfiled
-  guidance, backend small items), and Feature 26 (UI polish + language
+  guidance, backend small items — Done), and Feature 26 (UI polish + language
   pass). The split-setlist helper stays open behind these.
 - **P1 — Backup/restore**: Done (Feature 7). One versioned JSON envelope for
   the full library + setlists; logos are re-imported manually in v1.

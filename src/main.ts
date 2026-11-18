@@ -251,6 +251,7 @@ const statusEl = byId<HTMLParagraphElement>("status");
 const setlistArtistFilterSelect = byId<HTMLSelectElement>("setlist-artist-filter");
 const setlistSelect = byId<HTMLSelectElement>("setlist-select");
 const newSetlistButton = byId<HTMLButtonElement>("new-setlist");
+const newSetlistHint = byId<HTMLSpanElement>("new-setlist-hint");
 const saveSetlistButton = byId<HTMLButtonElement>("save-setlist");
 const printButton = byId<HTMLButtonElement>("print-setlist");
 const exportButton = byId<HTMLButtonElement>("export-setlist");
@@ -424,26 +425,30 @@ function bindEvents(): void {
   });
 
   titleInput.addEventListener("input", () => {
-    if (!current) return;
+    if (!current || captureGuard()) return;
     current.title = titleInput.value;
     markDirty();
     renderSetlistSelect();
     renderSheet();
   });
   venueInput.addEventListener("input", () => {
-    if (!current) return;
+    if (!current || captureGuard()) return;
     current.venue = trimmedOrNull(venueInput.value);
     markDirty();
     renderSheet();
   });
   dateInput.addEventListener("input", () => {
-    if (!current) return;
+    if (!current || captureGuard()) return;
     current.date = dateInput.value || null;
     markDirty();
     renderSheet();
   });
   setlistFileUnderSelect.addEventListener("change", () => {
     const value = setlistFileUnderSelect.value;
+    if (captureGuard()) {
+      renderFileUnder();
+      return;
+    }
     if (!value) {
       renderFileUnder();
       return;
@@ -493,7 +498,7 @@ function bindEvents(): void {
   });
   logoRemoveButton.addEventListener("click", handleLogoRemove);
   logoWidthInput.addEventListener("input", () => {
-    if (!current) return;
+    if (!current || captureGuard()) return;
     const width = clamp(
       Number(logoWidthInput.value),
       LOGO_MIN_WIDTH_MM,
@@ -512,13 +517,21 @@ function bindEvents(): void {
     renderSheet();
   });
   logoWidthInput.addEventListener("change", () => {
-    if (!current) return;
+    if (!current || captureGuard()) return;
     if (effectiveLogoCase() !== "artist") return;
     void commitEffectiveArtistLogoWidth();
   });
   for (const radio of alignmentRadios) {
     radio.addEventListener("change", () => {
       if (!current || !radio.checked || !isLogoAlignment(radio.value)) return;
+      if (captureGuard()) {
+        renderLogoControls();
+        return;
+      }
+      if (effectiveLogoCase() === "artist") {
+        void commitEffectiveArtistLogoAlignment(radio.value);
+        return;
+      }
       current.logo.alignment = radio.value;
       markDirty();
       renderSheet();
@@ -529,6 +542,10 @@ function bindEvents(): void {
   for (const [key, input] of sheetOptionInputs) {
     input.addEventListener("change", () => {
       if (!current) return;
+      if (captureGuard()) {
+        renderSheetOptions();
+        return;
+      }
       const options = withSheetDefaults(current.sheet_options);
       options[key] = input.checked;
       current.sheet_options = options;
@@ -540,6 +557,10 @@ function bindEvents(): void {
   for (const radio of pageModeRadios) {
     radio.addEventListener("change", () => {
       if (!current || !radio.checked || !isPageMode(radio.value)) return;
+      if (captureGuard()) {
+        renderPageModeControls();
+        return;
+      }
       current.page_mode = radio.value;
       markDirty();
       renderSheet();
@@ -561,6 +582,11 @@ function bindEvents(): void {
           songForm.requestSubmit();
           return;
         }
+        const landingForm = event.target.closest<HTMLFormElement>("form.landing-form");
+        if (landingForm) {
+          landingForm.requestSubmit();
+          return;
+        }
         const artistEditForm = event.target.closest<HTMLFormElement>("form.artist-form");
         if (artistEditForm) {
           artistEditForm.requestSubmit();
@@ -572,7 +598,7 @@ function bindEvents(): void {
   });
 
   window.addEventListener("beforeunload", (event) => {
-    if (!dirty) return;
+    if (!hasUnsavedWork()) return;
     event.preventDefault();
     event.returnValue = "";
   });
@@ -738,7 +764,14 @@ function adoptArtists(loadedArtists: Artist[]): void {
 }
 
 async function startNewSetlist(): Promise<void> {
-  if (isUnfiledScope()) return;
+  if (isUnfiledScope()) {
+    setStatus(
+      "New setlist is unavailable in the Unfiled scope — switch to an artist scope to create one.",
+      "info",
+    );
+    return;
+  }
+  if (captureGuard()) return;
   if (!ensureBackend()) return;
   if (!activeScopeArtist()) return;
   if (!confirmDiscard()) return;
@@ -762,6 +795,10 @@ async function startNewSetlist(): Promise<void> {
 
 async function handleSetlistChange(): Promise<void> {
   if (!current) return;
+  if (captureGuard()) {
+    setlistSelect.value = current.id;
+    return;
+  }
 
   const next = setlists.find((setlist) => setlist.id === setlistSelect.value);
   if (!next || next.id === current.id) {
@@ -784,16 +821,22 @@ async function handleSetlistChange(): Promise<void> {
   fitPreview();
 }
 
+/** Backend/validation message from the last failed `saveCurrent`, if any. */
+let lastSaveError: string | null = null;
+
 async function saveCurrent(): Promise<boolean> {
-  if (!current) return false;
+  if (!current || captureGuard()) return false;
+  lastSaveError = null;
 
   if (!backendAvailable) {
+    lastSaveError = "Local backend unavailable — changes cannot be saved.";
     setStatus("Backend unavailable — changes cannot be saved.", "error");
     return false;
   }
 
   current.title = current.title.trim();
   if (!current.title) {
+    lastSaveError = "Give the setlist a title before saving.";
     setStatus("Give the setlist a title before saving.", "error");
     titleInput.focus();
     return false;
@@ -811,6 +854,8 @@ async function saveCurrent(): Promise<boolean> {
     const index = Number(row?.dataset.index);
     const item = Number.isInteger(index) ? current.items[index] : undefined;
     if (!item || !("Break" in item)) {
+      lastSaveError =
+        "Could not find the break for this duration field. Reopen the setlist and try again.";
       setStatus(
         "Could not find the break for this duration field. Reopen the setlist and try again.",
         "error",
@@ -823,6 +868,7 @@ async function saveCurrent(): Promise<boolean> {
       const details = input.closest("details");
       if (details) details.open = true;
       input.focus();
+      lastSaveError = committed.error;
       setStatus(committed.error, "error");
       return false;
     }
@@ -847,6 +893,7 @@ async function saveCurrent(): Promise<boolean> {
         item.Break.duration_secs > MAX_BREAK_SECS),
   );
   if (invalidBreak) {
+    lastSaveError = `Break durations must be between 0:00 and 600:00 (${MAX_BREAK_SECS} seconds). Fix the break length before saving.`;
     setStatus(
       `Break durations must be between 0:00 and 600:00 (${MAX_BREAK_SECS} seconds). Fix the break length before saving.`,
       "error",
@@ -891,13 +938,14 @@ async function saveCurrent(): Promise<boolean> {
     );
     return true;
   } catch (error) {
+    lastSaveError = `Could not save: ${describeError(error)}`;
     setStatus(`Could not save: ${describeError(error)}`, "error");
     return false;
   }
 }
 
 async function deleteCurrent(): Promise<void> {
-  if (!current) return;
+  if (!current || captureGuard()) return;
 
   const persisted = setlists.some((setlist) => setlist.id === current?.id);
   const message = persisted
@@ -944,7 +992,7 @@ let duplicating = false;
  * and cache where they were.
  */
 async function duplicateCurrent(): Promise<void> {
-  if (!current || duplicating) return;
+  if (!current || duplicating || captureGuard()) return;
   if (!ensureBackend()) return;
 
   duplicating = true;
@@ -953,7 +1001,11 @@ async function duplicateCurrent(): Promise<void> {
   try {
     if (dirty) {
       const saved = await saveCurrent();
-      if (!saved) return;
+      if (!saved) {
+        const guidance = unfiledSaveGuidance("duplicating");
+        if (guidance) setStatus(guidance, "error");
+        return;
+      }
     }
     if (!current) return;
 
@@ -1065,12 +1117,52 @@ function syncExportControls(disabled: boolean): void {
   }
 }
 
+/**
+ * Refuses editor mutations while an export capture owns the sheet DOM.
+ * `renderSheet` already ignores edits mid-capture; this keeps the model from
+ * changing underneath it so captures never tear.
+ */
+function captureGuard(): boolean {
+  if (!exporting) return false;
+  setStatus("Export in progress — wait for it to finish.", "info");
+  return true;
+}
+
+/**
+ * Locks item editing, meta inputs, and scope switching for the capture.
+ * The exporter works from a snapshot taken before the lock, so edits made
+ * after the capture restores and re-renders cannot tear it.
+ */
+function syncCaptureLock(locked: boolean): void {
+  setlistArtistFilterSelect.disabled = locked;
+  setlistSelect.disabled = locked;
+  newSetlistButton.disabled = locked;
+  saveSetlistButton.disabled = locked;
+  deleteSetlistButton.disabled = locked;
+  duplicateSetlistButton.disabled = locked;
+  titleInput.disabled = locked;
+  venueInput.disabled = locked;
+  dateInput.disabled = locked;
+  setlistFileUnderSelect.disabled = locked;
+  addBreakButton.disabled = locked;
+  logoFileInput.disabled = locked;
+  logoRemoveButton.disabled = locked;
+  logoWidthInput.disabled = locked;
+  for (const radio of alignmentRadios) radio.disabled = locked;
+  for (const [, input] of sheetOptionInputs) input.disabled = locked;
+  for (const radio of pageModeRadios) radio.disabled = locked;
+}
+
 async function printCurrent(): Promise<void> {
   if (!current || exporting) return;
 
   if (dirty && backendAvailable) {
     const saved = await saveCurrent();
-    if (!saved) return;
+    if (!saved) {
+      const guidance = unfiledSaveGuidance("printing");
+      if (guidance) setStatus(guidance, "error");
+      return;
+    }
   }
 
   renderSheet();
@@ -1105,15 +1197,20 @@ async function exportCurrent(format: ExportFormat): Promise<void> {
   // capture; `renderSheet()` restores the framed preview in the finally block.
   sheetFrame.classList.remove("is-framed");
   syncExportControls(true);
+  syncCaptureLock(true);
   setStatus(`Preparing ${format.toUpperCase()} export…`);
+
+  // Snapshot the editor state up front so the capture cannot tear if a guarded
+  // path is reached programmatically mid-raster.
+  const snapshot = cloneSetlist(current);
 
   try {
     const outcome = await exportSetlist({
       sheet,
-      setlist: current,
+      setlist: snapshot,
       // Same resolution chain as the preview; the exporter only needs the
       // stored file name and printed width.
-      logo: resolveSetlistLogo(current, artists),
+      logo: resolveSetlistLogo(snapshot, artists),
       format,
       openAfterExport: exportOpenAfterInput.checked,
     });
@@ -1140,6 +1237,8 @@ async function exportCurrent(format: ExportFormat): Promise<void> {
   } finally {
     exporting = false;
     syncExportControls(false);
+    syncCaptureLock(false);
+    renderScopePicker();
     // Export prep mutates the sheet's inline styles and table markup; a fresh
     // render restores the preview and re-applies the page-mode fit.
     renderSheet();
@@ -1270,6 +1369,10 @@ function blockLibraryActionWhileBusy(): boolean {
  * omits an edit that is visible in the UI.
  */
 async function backUpLibrary(): Promise<void> {
+  if (exporting) {
+    setStatus("Export in progress — wait for it to finish before backing up.", "info");
+    return;
+  }
   if (!ensureBackend() || restoring || backingUp) return;
 
   const libraryBlock = libraryDraftGuard("backing up");
@@ -1289,7 +1392,8 @@ async function backUpLibrary(): Promise<void> {
     if (dirty) {
       const saved = await saveCurrent();
       if (!saved) {
-        setStatus("Save or discard the current setlist before backing up.", "error");
+        const guidance = unfiledSaveGuidance("backing up");
+        if (guidance) setStatus(guidance, "error");
         return;
       }
     }
@@ -1331,6 +1435,10 @@ async function backUpLibrary(): Promise<void> {
  * overwritten; nothing is deleted. Malformed records are skipped and reported.
  */
 async function restoreLibrary(): Promise<void> {
+  if (exporting) {
+    setStatus("Export in progress — wait for it to finish before restoring.", "info");
+    return;
+  }
   if (!ensureBackend() || restoring || backingUp) return;
 
   const libraryBlock = libraryDraftGuard("restoring");
@@ -1483,6 +1591,35 @@ function confirmDiscard(): boolean {
   return window.confirm("Discard unsaved changes to this setlist?");
 }
 
+/**
+ * Names the filing next step when a dirty auto-save fails on the artist
+ * check (backup, print, duplicate). Only substitutes when the save error is
+ * the artist check — every other failure keeps `saveCurrent`'s own accurate
+ * message.
+ */
+function unfiledSaveGuidance(action: "backing up" | "printing" | "duplicating"): string | null {
+  if (!current) return null;
+  if (!lastSaveError || !/has no artist/.test(lastSaveError)) return null;
+  if (findArtistById(artists, normalizeArtistId(current.artist_id))) return null;
+  const title = current.title.trim() || "Untitled setlist";
+  return `“${title}” has no artist — open the Unfiled scope or use File under… to file it, or discard the draft, then ${action} again.`;
+}
+
+/**
+ * True while leaving the page could lose work: a dirty setlist, an open
+ * library song draft, an open landing artist draft, or a typed-but-uncreated
+ * landing artist. `beforeunload` covers all of them, not just the setlist.
+ */
+function hasUnsavedWork(): boolean {
+  if (dirty) return true;
+  if (libraryEditor) return true;
+  if (artistFormHasDraft()) return true;
+  if (landingVisible && (landingTypedName() || landingLogoFile || landingTransientLogos.size > 0)) {
+    return true;
+  }
+  return false;
+}
+
 function sortSetlists(): void {
   setlists.sort((left, right) => {
     const byUpdate = Date.parse(right.updated_at) - Date.parse(left.updated_at);
@@ -1615,6 +1752,20 @@ async function switchScope(next: string): Promise<void> {
     renderScopePicker();
     return;
   }
+  // A scope switch mid-snapshot/write could reselect the workspace out from
+  // under a restore; refuse with a titled status instead.
+  if (backingUp || restoring) {
+    setStatus(
+      `Scope switch blocked — ${backingUp ? "backup" : "restore"} in progress. Wait for it to finish.`,
+      "error",
+    );
+    renderScopePicker();
+    return;
+  }
+  if (captureGuard()) {
+    renderScopePicker();
+    return;
+  }
   if (next === activeArtistId) {
     renderScopePicker();
     return;
@@ -1663,10 +1814,15 @@ function renderScopePicker(): void {
   }
 
   // New setlists belong to an artist; the Unfiled scope cannot create one.
-  newSetlistButton.disabled = isUnfiledScope();
-  newSetlistButton.title = isUnfiledScope()
-    ? "Switch to an artist scope to create a setlist"
-    : "";
+  // The button stays activatable (`aria-disabled`, not `disabled`) so the
+  // reason is announced on attempted activation, with an adjacent hint.
+  const newUnavailable = isUnfiledScope();
+  if (newUnavailable) {
+    newSetlistButton.setAttribute("aria-disabled", "true");
+  } else {
+    newSetlistButton.removeAttribute("aria-disabled");
+  }
+  newSetlistHint.hidden = !newUnavailable;
 }
 
 function renderSetlistSelect(): void {
@@ -1680,7 +1836,7 @@ function renderSetlistSelect(): void {
     empty.disabled = true;
     fragment.append(empty);
   } else if (options.length === 0 && isUnfiledScope()) {
-    const empty = artistOption("", "No unfiled setlists");
+    const empty = artistOption("", "No unfiled setlists — switch to an artist scope to create");
     empty.disabled = true;
     fragment.append(empty);
   }
@@ -1743,6 +1899,10 @@ function renderFileUnder(): void {
  */
 async function fileCurrentSetlist(artistId: string): Promise<void> {
   if (!current) return;
+  if (captureGuard()) {
+    renderFileUnder();
+    return;
+  }
   const target = artists.find((artist) => artist.id === artistId);
   if (!target) {
     setStatus("That artist is no longer available. Pick another artist.", "error");
@@ -1799,10 +1959,10 @@ function renderMeta(): void {
 function renderLogoControls(): void {
   if (!current) return;
 
-  // Feature 19: the slider follows the displayed logo (own → artist →
-  // placeholder). The artist path shows the artist's width; own and
-  // placeholder paths show the setlist's own width (pre-sizing the next own
-  // logo when nothing is displayed yet).
+  // Feature 19 + 25: the width slider and the alignment radios follow the
+  // displayed logo (own → artist → placeholder). The artist path shows the
+  // artist's width/alignment; own and placeholder paths show the setlist's
+  // own config (pre-sizing the next own logo when nothing is displayed yet).
   const logoCase = effectiveLogoCase();
   const effective = resolveSetlistLogo(current, artists);
   const sliderWidth =
@@ -1814,7 +1974,7 @@ function renderLogoControls(): void {
   logoRemoveButton.disabled = !current.logo.file_name && !logoPreviewIsLocal;
 
   for (const radio of alignmentRadios) {
-    radio.checked = radio.value === current.logo.alignment;
+    radio.checked = radio.value === effective.alignment;
   }
 
   renderLogoShowing();
@@ -1836,8 +1996,8 @@ function effectiveLogoArtist(): Artist | null {
 }
 
 /**
- * Visible showing line so the slider's target is unambiguous. Matches the
- * resolution chain in every case.
+ * Visible showing line so the width/alignment target is unambiguous. Names
+ * both controls' target in every resolution case.
  */
 function renderLogoShowing(): void {
   if (!current) {
@@ -1846,15 +2006,15 @@ function renderLogoShowing(): void {
   }
   const logoCase = effectiveLogoCase();
   if (logoCase === "own") {
-    logoShowingEl.textContent = "Setlist logo";
+    logoShowingEl.textContent = "Setlist logo — width and alignment apply here";
     return;
   }
   const artist = effectiveLogoArtist();
   if (logoCase === "artist" && artist) {
-    logoShowingEl.textContent = `${artistLabel(artist)} logo (artist)`;
+    logoShowingEl.textContent = `${artistLabel(artist)} logo (artist) — width and alignment update every setlist using it`;
     return;
   }
-  logoShowingEl.textContent = "No logo yet";
+  logoShowingEl.textContent = "No logo yet — width and alignment will apply to the next own logo";
 }
 
 function renderSheetOptions(): void {
@@ -2116,6 +2276,13 @@ function renderItems(): void {
   });
 
   itemList.replaceChildren(fragment);
+  if (current.items.length === 0 && isUnfiledScope()) {
+    emptyItems.textContent =
+      "Add songs from the library or insert a break to start the running order. New setlists are created from an artist scope.";
+  } else {
+    emptyItems.textContent =
+      "Add songs from the library or insert a break to start the running order.";
+  }
   emptyItems.hidden = current.items.length > 0;
   renderSummary();
 }
@@ -2152,6 +2319,7 @@ function buildSongItem(song: Song, index: number, songNumber: number): HTMLLIEle
   const fields = el("div", "item-fields");
   const titleField = textField("Title", song.title, "Song title");
   titleField.input.addEventListener("input", () => {
+    if (captureGuard()) return;
     song.title = titleField.input.value;
     titleNode.textContent = song.title.trim() || "Untitled song";
     markDirty();
@@ -2160,6 +2328,7 @@ function buildSongItem(song: Song, index: number, songNumber: number): HTMLLIEle
 
   const artistField = textField("Artist", song.artist ?? "", "Artist");
   artistField.input.addEventListener("input", () => {
+    if (captureGuard()) return;
     song.artist = trimmedOrNull(artistField.input.value);
     refreshMeta();
     markDirty();
@@ -2168,6 +2337,7 @@ function buildSongItem(song: Song, index: number, songNumber: number): HTMLLIEle
 
   const keyField = textField("Key", song.key ?? "", "Em");
   keyField.input.addEventListener("input", () => {
+    if (captureGuard()) return;
     song.key = trimmedOrNull(keyField.input.value);
     refreshMeta();
     markDirty();
@@ -2177,6 +2347,7 @@ function buildSongItem(song: Song, index: number, songNumber: number): HTMLLIEle
   const tuningField = textField("Tuning", song.tuning ?? "", "E Std");
   tuningField.input.maxLength = 24;
   tuningField.input.addEventListener("input", () => {
+    if (captureGuard()) return;
     song.tuning = trimmedOrNull(tuningField.input.value);
     refreshMeta();
     markDirty();
@@ -2185,6 +2356,7 @@ function buildSongItem(song: Song, index: number, songNumber: number): HTMLLIEle
 
   const bpmField = numberField("BPM", song.bpm, 1, 400);
   bpmField.input.addEventListener("change", () => {
+    if (captureGuard()) return;
     const value = bpmField.input.valueAsNumber;
     song.bpm = Number.isFinite(value) ? clamp(Math.round(value), 1, 400) : null;
     bpmField.input.value = song.bpm === null ? "" : String(song.bpm);
@@ -2199,6 +2371,7 @@ function buildSongItem(song: Song, index: number, songNumber: number): HTMLLIEle
     "4:30",
   );
   durationField.input.addEventListener("change", () => {
+    if (captureGuard()) return;
     const raw = durationField.input.value.trim();
     const parsed = parseDuration(raw);
     if (raw && parsed === null) {
@@ -2216,6 +2389,7 @@ function buildSongItem(song: Song, index: number, songNumber: number): HTMLLIEle
   const notesField = textField("Comment", song.notes ?? "", "Count-in, capo, cue…");
   notesField.input.maxLength = MAX_COMMENT_CHARS;
   notesField.input.addEventListener("input", () => {
+    if (captureGuard()) return;
     song.notes = trimmedOrNull(notesField.input.value);
     markDirty();
     renderSheet();
@@ -2267,6 +2441,7 @@ function buildBreakItem(breakItem: BreakItem, index: number): HTMLLIElement {
   const labelField = textField("Label", breakItem.label ?? "", "Intermission / Encore");
   labelField.input.maxLength = MAX_BREAK_LABEL_CHARS;
   labelField.input.addEventListener("input", () => {
+    if (captureGuard()) return;
     breakItem.label = trimmedOrNull(labelField.input.value);
     refreshTitle();
     markDirty();
@@ -2282,6 +2457,7 @@ function buildBreakItem(breakItem: BreakItem, index: number): HTMLLIElement {
   // Fits the longest valid value, `600:00` (36000 seconds).
   durationField.input.maxLength = 6;
   durationField.input.addEventListener("change", () => {
+    if (captureGuard()) return;
     const committed = commitBreakDurationInput(durationField.input, breakItem);
     if (!committed.ok) {
       setStatus(committed.error, "error");
@@ -2295,6 +2471,7 @@ function buildBreakItem(breakItem: BreakItem, index: number): HTMLLIElement {
   const noteField = textField("Comment", breakItem.note ?? "", "Tune down, speech…");
   noteField.input.maxLength = MAX_COMMENT_CHARS;
   noteField.input.addEventListener("input", () => {
+    if (captureGuard()) return;
     breakItem.note = trimmedOrNull(noteField.input.value);
     refreshMeta();
     markDirty();
@@ -2673,6 +2850,7 @@ function handleItemClick(event: MouseEvent): void {
 
   const button = event.target.closest<HTMLButtonElement>("button[data-action]");
   if (!button || !itemList.contains(button) || !current) return;
+  if (captureGuard()) return;
 
   const index = Number(button.dataset.index);
   if (!Number.isInteger(index)) return;
@@ -2691,6 +2869,7 @@ function handleItemClick(event: MouseEvent): void {
 }
 
 function moveItem(from: number, to: number): void {
+  if (captureGuard()) return;
   if (!current || from < 0 || to < 0 || from >= current.items.length || to >= current.items.length) {
     return;
   }
@@ -2704,6 +2883,7 @@ function moveItem(from: number, to: number): void {
 }
 
 function removeItem(index: number): void {
+  if (captureGuard()) return;
   if (!current || index < 0 || index >= current.items.length) return;
 
   current.items.splice(index, 1);
@@ -2713,7 +2893,7 @@ function removeItem(index: number): void {
 }
 
 function addBreak(): void {
-  if (!current) return;
+  if (!current || captureGuard()) return;
 
   current.items.push({ Break: { duration_secs: 600, note: null, label: null } });
   markDirty();
@@ -2785,6 +2965,7 @@ function bindDragReorder(): void {
     clearDragState();
     dragFrom = null;
 
+    if (captureGuard()) return;
     if (from !== null && Number.isInteger(to) && from !== to) {
       moveItem(from, to);
     }
@@ -3546,7 +3727,8 @@ async function duplicateLibrarySong(song: Song): Promise<void> {
     sortSongsByTitle();
     renderLanding();
     renderLibrary();
-    setStatus(`Duplicated “${song.title}” as “${saved.title}”.`, "success");
+    const sourceTitle = song.title.trim() || "Untitled song";
+    setStatus(`Duplicated “${sourceTitle}” as “${saved.title}”.`, "success");
   } catch (error) {
     setStatus(`Could not duplicate song: ${describeError(error)}`, "error");
   } finally {
@@ -3556,7 +3738,8 @@ async function duplicateLibrarySong(song: Song): Promise<void> {
 
 /** `Song` → `Song (copy)`, incrementing the suffix instead of stacking copies. */
 function duplicateSongTitle(title: string): string {
-  const base = title.replace(/\s+\(copy(?: \d+)?\)$/i, "").trim() || title.trim();
+  const trimmed = title.trim() || "Untitled song";
+  const base = trimmed.replace(/\s+\(copy(?: \d+)?\)$/i, "").trim() || "Untitled song";
   const used = new Set(songs.map((entry) => entry.title));
 
   let candidate = `${base} (copy)`;
@@ -3570,6 +3753,7 @@ function duplicateSongTitle(title: string): string {
 
 function addSongToSetlist(song: Song): void {
   if (blockLibraryActionWhileBusy()) return;
+  if (captureGuard()) return;
   if (!current) return;
 
   // The add gate is inherent now (the scoped library only offers the scope's
@@ -3649,7 +3833,7 @@ function renderArtistSelectOptions(
   fragment.append(artistOption("", "No artist"));
 
   for (const artist of artists) {
-    fragment.append(artistOption(artist.id, artist.name || "Untitled artist"));
+    fragment.append(artistOption(artist.id, artistLabel(artist)));
   }
 
   const legacy = selection.legacyArtist.trim();
@@ -3675,9 +3859,22 @@ function artistOption(value: string, label: string): HTMLOptionElement {
   return option;
 }
 
+/**
+ * Drops a cached artist thumbnail blob URL so a deleted or replaced logo
+ * file cannot linger in memory. The cache reloads lazily from storage on
+ * the next render, so pruning is always safe.
+ */
+function pruneArtistThumbUrl(fileName: string | null | undefined): void {
+  if (!fileName) return;
+  const url = artistThumbUrls.get(fileName);
+  if (url) {
+    URL.revokeObjectURL(url);
+    artistThumbUrls.delete(fileName);
+  }
+}
+
 /** Logo thumbnail. Rendered only through `<img src>` (never inline SVG). */
-function buildArtistThumb(artist: Artist): HTMLSpanElement {
-  const thumb = el("span", "artist-thumb");
+function buildArtistThumb(artist: Artist): HTMLSpanElement {  const thumb = el("span", "artist-thumb");
   const fileName = artist.logo.file_name;
   if (!fileName) {
     thumb.classList.add("is-empty");
@@ -3899,6 +4096,7 @@ function discardArtistDraftLogos(state: ArtistFormState): void {
 
   for (const name of names) {
     if (state.originalLogo && name === state.originalLogo) continue;
+    pruneArtistThumbUrl(name);
     // A leftover file is harmless; never fail a UI reset over cleanup.
     void api.removeLogo(name).catch(() => undefined);
   }
@@ -3966,6 +4164,7 @@ async function handleArtistSubmit(event: SubmitEvent): Promise<void> {
     }
     for (const fileName of cleanup) {
       if (fileName === saved.logo.file_name) continue;
+      pruneArtistThumbUrl(fileName);
       void api.removeLogo(fileName).catch(() => undefined);
     }
 
@@ -4233,6 +4432,7 @@ async function deleteArtist(artist: Artist): Promise<void> {
     void refreshLogoIfChanged();
 
     if (artist.logo.file_name) {
+      pruneArtistThumbUrl(artist.logo.file_name);
       // Backend skips the file while a setlist or another artist references it.
       await api.removeLogo(artist.logo.file_name).catch(() => undefined);
     }
@@ -4287,6 +4487,14 @@ function clearArtistDraftForDeletedArtist(artistId: string, editingThis: boolean
  */
 async function enterScope(id: string): Promise<void> {
   if (id !== UNFILED_SCOPE && !artists.some((artist) => artist.id === id)) return;
+  if (backingUp || restoring) {
+    setStatus(
+      `Scope switch blocked — ${backingUp ? "backup" : "restore"} in progress. Wait for it to finish.`,
+      "error",
+    );
+    return;
+  }
+  if (captureGuard()) return;
   if (dirty && !confirmDiscard()) return;
 
   if (landingLogoFile) landingTransientLogos.add(landingLogoFile);
@@ -4487,12 +4695,12 @@ function buildLandingArtistRow(artist: Artist): HTMLLIElement {
 
   const button = el("button", "landing-artist");
   button.type = "button";
-  button.setAttribute("aria-label", `Open the ${artist.name || "Untitled artist"} workspace`);
+  button.setAttribute("aria-label", `Open the ${artistLabel(artist)} workspace`);
 
   button.append(buildArtistThumb(artist));
 
   const info = el("div", "landing-artist-info");
-  info.append(el("span", "landing-artist-name", artist.name || "Untitled artist"));
+  info.append(el("span", "landing-artist-name", artistLabel(artist)));
   const songCount = songs.filter(
     (song) => resolveArtistForSong(song, artists)?.id === artist.id,
   ).length;
@@ -4516,16 +4724,16 @@ function buildLandingArtistRow(artist: Artist): HTMLLIElement {
   const editButton = el("button", "icon-button");
   editButton.type = "button";
   editButton.dataset.landingEdit = artist.id;
-  editButton.title = `Edit ${artist.name || "Untitled artist"}`;
-  editButton.setAttribute("aria-label", `Edit artist ${artist.name || "Untitled artist"}`);
+  editButton.title = `Edit ${artistLabel(artist)}`;
+  editButton.setAttribute("aria-label", `Edit artist ${artistLabel(artist)}`);
   editButton.setAttribute("aria-expanded", String(editing));
   editButton.append(editIcon());
   editButton.addEventListener("click", () => startArtistEdit(artist.id));
 
   const deleteButton = el("button", "icon-button", "✕");
   deleteButton.type = "button";
-  deleteButton.title = `Delete ${artist.name || "Untitled artist"}`;
-  deleteButton.setAttribute("aria-label", `Delete artist ${artist.name || "Untitled artist"}`);
+  deleteButton.title = `Delete ${artistLabel(artist)}`;
+  deleteButton.setAttribute("aria-label", `Delete artist ${artistLabel(artist)}`);
   deleteButton.addEventListener("click", () => {
     void deleteArtist(artist);
   });
@@ -4561,7 +4769,7 @@ function buildLandingArtistEditForm(artist: Artist): HTMLFormElement {
   const form = el("form", "artist-form");
   form.dataset.artistEdit = artist.id;
   form.noValidate = true;
-  form.setAttribute("aria-label", `Edit artist ${artist.name || "Untitled artist"}`);
+  form.setAttribute("aria-label", `Edit artist ${artistLabel(artist)}`);
 
   const title = el("h3", undefined, "Edit artist");
   form.append(title);
@@ -4808,6 +5016,10 @@ function buildLandingCreateForm(): HTMLFormElement {
 }
 
 function refreshLandingLogoPreview(preview: HTMLElement): void {
+  // The previous render's blob URL is replaced below; revoke it first so
+  // repeated landing renders cannot leak object URLs.
+  const previous = preview.querySelector<HTMLImageElement>("img");
+  if (previous?.src.startsWith("blob:")) URL.revokeObjectURL(previous.src);
   preview.replaceChildren();
   if (!landingLogoFile) {
     preview.append(el("span", "artist-logo-preview-empty", "No logo"));
@@ -4928,19 +5140,19 @@ async function handleLandingCreate(
 }
 
 /**
- * Once per scope entry, offers to assign every unfiled record that belongs to
- * no other artist to the artist just entered. Confirming writes through the
- * normal save commands with per-record status; declining keeps them Unfiled.
+ * Once per scope entry, offers to assign every truly unfiled record (a null
+ * `artist_id` with no resolved artist — dangling ids are excluded) to the
+ * artist just entered. Confirming writes through the normal save commands
+ * with per-record status; declining keeps them Unfiled.
  */
 async function maybeOfferUnfiledAssignment(scope: Artist): Promise<void> {
   const offerSongs = songs.filter(
     (song) =>
-      !song.artist_id &&
-      (resolveArtistForSong(song, artists) === null ||
-        resolveArtistForSong(song, artists)?.id === scope.id),
+      normalizeArtistId(song.artist_id) === null &&
+      resolveArtistForSong(song, artists) === null,
   );
   const offerSetlists = setlists.filter(
-    (setlist) => !findArtistById(artists, normalizeArtistId(setlist.artist_id)),
+    (setlist) => normalizeArtistId(setlist.artist_id) === null,
   );
   if (offerSongs.length === 0 && offerSetlists.length === 0) return;
 
@@ -5010,10 +5222,111 @@ async function maybeOfferUnfiledAssignment(scope: Artist): Promise<void> {
 // ---------------------------------------------------------------------------
 
 /**
- * Commits the Logo width slider for the artist-logo path (Feature 19).
+ * Commits a width/alignment patch to the displayed artist logo via
+ * `save_artist` (Features 19 + 25: both controls bind the effective logo).
  * Only runs on `change` (release) so dragging never spams `save_artist`;
  * at most one save is in flight at a time. The setlist itself is never
- * dirtied: the artist record is what changed.
+ * dirtied: the artist record is what changed. Refusals and failures revert
+ * the control and report through the status line.
+ */
+async function commitEffectiveArtistLogo(
+  patch: { width_mm?: number; alignment?: LogoAlignment },
+  revert: () => void,
+  summary: string,
+): Promise<void> {
+  if (!current) return;
+  if (effectiveLogoCase() !== "artist") {
+    renderLogoControls();
+    return;
+  }
+  const artist = effectiveLogoArtist();
+  if (!artist) {
+    renderLogoControls();
+    return;
+  }
+
+  // Reuse the Feature 14 artist-edit guards: refuse while a backup/restore,
+  // export capture, or artist-logo import is in flight, while another artist
+  // save runs, or while an artist draft for this artist is open.
+  if (effectiveLogoSaving || artistBusy) {
+    revert();
+    setStatus("Wait for the current artist request to finish before changing the logo.", "info");
+    return;
+  }
+  if (artistLogoBusy) {
+    revert();
+    setStatus("Wait for the artist logo import to finish before changing the logo.", "info");
+    return;
+  }
+  if (backingUp || restoring) {
+    revert();
+    setStatus(
+      backingUp
+        ? "Backup in progress — wait for it to finish before changing the logo."
+        : "Restore in progress — wait for it to finish before changing the logo.",
+      "info",
+    );
+    return;
+  }
+  if (exporting) {
+    revert();
+    setStatus("Export in progress — wait for it to finish before changing the logo.", "info");
+    return;
+  }
+  if (artistFormState.mode === "edit" && artistFormState.artistId === artist.id) {
+    revert();
+    setStatus(
+      `Artist draft open — save or cancel the edit for “${artistLabel(artist)}” before changing the logo.`,
+      "error",
+    );
+    return;
+  }
+  if (!ensureBackend()) {
+    revert();
+    return;
+  }
+
+  effectiveLogoSaving = true;
+  artistBusy = true;
+  logoWidthInput.disabled = true;
+  for (const radio of alignmentRadios) radio.disabled = true;
+  setStatus(`Saving ${summary} for “${artistLabel(artist)}”…`);
+
+  try {
+    const updated: Artist = {
+      ...artist,
+      logo: { ...artist.logo, ...patch },
+    };
+    const saved = await api.saveArtist(updated);
+    const index = artists.findIndex((entry) => entry.id === saved.id);
+    if (index >= 0) {
+      artists[index] = saved;
+    } else {
+      artists.push(saved);
+      artists.sort((left, right) => left.name.localeCompare(right.name));
+    }
+    renderLogoControls();
+    renderSheet();
+    setStatus(
+      `Updated ${summary} for “${artistLabel(saved)}” — applies to every setlist showing that artist's logo.`,
+      "success",
+    );
+  } catch (error) {
+    revert();
+    renderSheet();
+    setStatus(`Could not save ${summary}: ${describeError(error)}`, "error");
+  } finally {
+    effectiveLogoSaving = false;
+    artistBusy = false;
+    logoWidthInput.disabled = false;
+    for (const radio of alignmentRadios) radio.disabled = false;
+  }
+}
+
+/**
+ * Commits the Logo width slider for the artist-logo path (Feature 19).
+ * Own and placeholder paths stay input-driven on `setlist.logo` (see the
+ * `input` handler); the artist path updates the label live and commits here.
  */
 async function commitEffectiveArtistLogoWidth(): Promise<void> {
   if (!current) return;
@@ -5038,86 +5351,39 @@ async function commitEffectiveArtistLogoWidth(): Promise<void> {
     return;
   }
 
-  const revertSlider = (): void => {
+  const revert = (): void => {
     logoWidthInput.value = String(previousWidth);
     logoWidthOutput.textContent = `${Math.round(previousWidth)} mm`;
   };
+  await commitEffectiveArtistLogo(
+    { width_mm: desiredWidth },
+    revert,
+    `logo width to ${Math.round(desiredWidth)} mm`,
+  );
+}
 
-  // Reuse the Feature 14 artist-edit guards: refuse while a backup/restore
-  // or artist-logo import is in flight, while another artist save runs, or
-  // while an artist draft for this artist is open.
-  if (effectiveLogoSaving || artistBusy) {
-    revertSlider();
-    setStatus("Wait for the current artist request to finish before changing the logo width.", "info");
-    return;
-  }
-  if (artistLogoBusy) {
-    revertSlider();
-    setStatus("Wait for the artist logo import to finish before changing the logo width.", "info");
-    return;
-  }
-  if (backingUp || restoring) {
-    revertSlider();
-    setStatus(
-      backingUp
-        ? "Backup in progress — wait for it to finish before changing the logo width."
-        : "Restore in progress — wait for it to finish before changing the logo width.",
-      "info",
-    );
-    return;
-  }
-  if (artistFormState.mode === "edit" && artistFormState.artistId === artist.id) {
-    revertSlider();
-    setStatus(
-      `Artist draft open — save or cancel the edit for “${artistLabel(artist)}” before changing the logo width.`,
-      "error",
-    );
-    return;
-  }
-  if (!ensureBackend()) {
-    revertSlider();
-    return;
-  }
-
-  effectiveLogoSaving = true;
-  artistBusy = true;
-  logoWidthInput.disabled = true;
-  setStatus(`Saving logo width for “${artistLabel(artist)}”…`);
-
-  try {
-    const updated: Artist = {
-      ...artist,
-      logo: { ...artist.logo, width_mm: desiredWidth },
-    };
-    const saved = await api.saveArtist(updated);
-    const index = artists.findIndex((entry) => entry.id === saved.id);
-    if (index >= 0) {
-      artists[index] = saved;
-    } else {
-      artists.push(saved);
-      artists.sort((left, right) => left.name.localeCompare(right.name));
-    }
+/** Commits an alignment radio change to the displayed artist logo (Feature 25). */
+async function commitEffectiveArtistLogoAlignment(alignment: LogoAlignment): Promise<void> {
+  const artist = effectiveLogoArtist();
+  if (!artist) {
     renderLogoControls();
-    renderSheet();
-    setStatus(
-      `Updated logo width for “${artistLabel(saved)}” to ${Math.round(saved.logo.width_mm)} mm — applies to every setlist showing that artist's logo.`,
-      "success",
-    );
-  } catch (error) {
-    revertSlider();
-    renderSheet();
-    setStatus(`Could not save logo width: ${describeError(error)}`, "error");
-  } finally {
-    effectiveLogoSaving = false;
-    artistBusy = false;
-    logoWidthInput.disabled = false;
+    return;
   }
+  const previous = artist.logo.alignment;
+  if (previous === alignment) {
+    renderLogoControls();
+    return;
+  }
+  const revert = (): void => {
+    for (const radio of alignmentRadios) radio.checked = radio.value === previous;
+  };
+  await commitEffectiveArtistLogo({ alignment }, revert, `logo alignment to ${alignment}`);
 }
 
 async function handleLogoFile(): Promise<void> {
   const file = logoFileInput.files?.[0];
   logoFileInput.value = "";
-  if (!file || !current) return;
+  if (!file || !current || captureGuard()) return;
 
   const allowed = ["image/png", "image/jpeg", "image/svg+xml"];
   if (!allowed.includes(file.type) && !/\.(png|jpe?g|svg)$/i.test(file.name)) {
@@ -5184,7 +5450,7 @@ async function handleLogoFile(): Promise<void> {
 }
 
 function handleLogoRemove(): void {
-  if (!current) return;
+  if (!current || captureGuard()) return;
 
   const fileName = current.logo.file_name;
   if (!fileName && !logoPreviewIsLocal) return;

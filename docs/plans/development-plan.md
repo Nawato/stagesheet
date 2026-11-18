@@ -141,9 +141,9 @@ harness were removed when the exporter shipped.
   (artist management on the landing screen, out of the library pane) is Done,
   and Feature 24 (Backup & Restore on the landing screen, incl.
   restore-before-scope) is Done.
-  Specced next (Todo): Feature 22 (Duplicate beside New before Save),
-  Feature 25 (v0.3.0 review hardening), and Feature 26 (UI polish + language
-  pass).
+  Specced next (Todo): Feature 26 (UI polish + language pass). Features 22
+  and 25 (v0.3.0 review hardening: export/scope locks, alignment binding,
+  dangling-id resolver, unfiled guidance, backend small items) are Done.
 - `tauri android init` / `ios init` on provisioned machines; native share.
 - Print QA on real A4 (checklist below), backup/restore, app versioning,
   signing/release automation (tracked in the roadmap, P3).
@@ -424,3 +424,24 @@ WebView2/WKWebView when available):**
   + re-check after file pick), dirty auto-save, and per-record reporting, so a
   fresh profile restores before entering any scope. No Rust, IPC, storage,
   envelope, or schema change. Features 22 and 25–26 remain Todo.
+- 2026-11-18: Feature 25 shipped (v0.3.0 review hardening: safety +
+  correctness). Export captures snapshot the editor state and lock item
+  editing, meta inputs, and scope switching until they restore; scope
+  switches refuse during backup/restore (and vice versa); the Logo alignment
+  radios bind the displayed logo like the width slider (shared
+  `commitEffectiveArtistLogo()` via `save_artist`, showing line names width
+  and alignment target); a dangling artist id resolves as unfiled with no
+  legacy-text fallback for songs and setlists alike (landing offer lists only
+  true-`None` records); backup/print/duplicate auto-save failures on the
+  artist check name the filing next step; New in the Unfiled scope keeps an
+  adjacent hint plus Unfiled empty-state guidance copy and announces on
+  activation
+  (`aria-disabled`); song/setlist titles trim on save like artist names and
+  `allow_unfiled` is documented as UX-convention trust (new reorder + trim
+  tests); blob-URL caches are pruned on logo delete/replace; plus the small
+  correctness batch (`parseDuration` empty colon parts, blank duplicate song
+  title, trimmed artist labels, `beforeunload` drafts, `role="region"` on
+  `#setlist-sheet`, landing Ctrl/Cmd+S to artist create). No new screens, no
+  model changes beyond trims, no envelope change. Feature 22 (Duplicate beside
+  New) is Done in the same tree — one-line move, header order verified
+  (New, Duplicate, Save, Delete). Only Feature 26 remains Todo.

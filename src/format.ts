@@ -61,11 +61,13 @@ export function parseDuration(value: string): number | null {
 
   if (trimmed.includes(":")) {
     const parts = trimmed.split(":");
-    if (parts.length > 3 || parts.some((part) => part !== "" && !/^\d+$/.test(part))) {
+    // Empty colon parts are rejected, like the break parser: "4:" and ":30"
+    // are typos, not 4:00 and 0:30.
+    if (parts.length > 3 || parts.some((part) => !/^\d+$/.test(part))) {
       return null;
     }
 
-    const numbers = parts.map((part) => Number(part || 0));
+    const numbers = parts.map((part) => Number(part));
     if (numbers.some((part) => !Number.isFinite(part))) {
       return null;
     }

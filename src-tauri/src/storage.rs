@@ -1024,6 +1024,49 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn stored_unfiled_setlist_reorder_keeps_filing_state() {
+        let (_dir, storage) = storage();
+        let mut setlist = Setlist::new("Unfiled Gig");
+        setlist.items = vec![
+            SetlistItem::Song(Song::new("Alpha")),
+            SetlistItem::Song(Song::new("Beta")),
+            SetlistItem::Song(Song::new("Gamma")),
+        ];
+        storage
+            .save_setlist(&setlist, true)
+            .await
+            .expect("store unfiled setlist");
+
+        // Mirror the `reorder_items` command: reload, move, re-save with the
+        // allowance so an already-stored unfiled setlist never fails on filing
+        // state. The reorder must keep the record unfiled and ordered.
+        let mut loaded = storage.get_setlist(setlist.id).await.expect("get");
+        loaded.move_item(2, 0).expect("reorder");
+        loaded.touch();
+        storage
+            .save_setlist(&loaded, true)
+            .await
+            .expect("reorder of stored unfiled setlist");
+
+        let reloaded = storage.get_setlist(setlist.id).await.expect("get");
+        let titles: Vec<&str> = reloaded
+            .items
+            .iter()
+            .filter_map(SetlistItem::as_song)
+            .map(|song| song.title.as_str())
+            .collect();
+        assert_eq!(titles, vec!["Gamma", "Alpha", "Beta"]);
+        assert_eq!(reloaded.artist_id, None);
+
+        // The allowance is what skips the artist check: without it the same
+        // record still fails.
+        assert!(matches!(
+            storage.save_setlist(&reloaded, false).await,
+            Err(AppError::InvalidInput(message)) if message.contains("has no artist")
+        ));
+    }
+
+    #[tokio::test]
     async fn legacy_unfiled_records_load_and_save_through_the_allowance() {
         let (_dir, storage) = storage();
 

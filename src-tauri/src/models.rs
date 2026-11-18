@@ -218,6 +218,13 @@ impl Song {
         }
     }
 
+    /// Trims the title like artist names: padded saves store clean, and a
+    /// whitespace-only title fails validation with the clear song error
+    /// instead of persisting padding. Applied by the `save_song` command.
+    pub fn trim_title(&mut self) {
+        self.title = self.title.trim().to_string();
+    }
+
     pub fn validate(&self) -> Result<(), String> {
         if self.title.trim().is_empty() {
             return Err("song title must not be empty".into());
@@ -532,6 +539,12 @@ impl Setlist {
             created_at: now,
             updated_at: now,
         }
+    }
+
+    /// Trims the title like artist names and song titles. Applied by the
+    /// `save_setlist` command.
+    pub fn trim_title(&mut self) {
+        self.title = self.title.trim().to_string();
     }
 
     /// Sum of song durations plus breaks. Songs without durations count as zero.

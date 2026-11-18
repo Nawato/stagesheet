@@ -25,7 +25,8 @@ export interface Song {
   artist: string | null;
   /**
    * Artist record reference. Older files omit the field (loads as null); a
-   * dangling id resolves as unresolved and falls back to `artist` for display.
+   * dangling id resolves as unfiled with no legacy-text fallback (blank
+   * display, Unfiled scope membership).
    */
   artist_id: string | null;
   bpm: number | null;
@@ -165,9 +166,11 @@ export interface Setlist {
   /** Missing in pre-Feature-5 files; use `withPageModeDefaults` when loading. */
   page_mode?: PageMode;
   /**
-   * The setlist's own artist record reference; `null` means unlocked.
+   * The setlist's own artist record reference; `null` means unfiled.
    * Normalize with `normalizeArtistId` when loading/cloning/restoring.
-   * Missing/blank loads as null; dangling ids resolve as unlocked.
+   * Missing/blank loads as null; a dangling id resolves as unfiled
+   * (Unfiled scope, `File under…` row, excluded from the landing assign
+   * offer) while the backend still accepts `Some` on save.
    */
   artist_id?: string | null;
   /** RFC 3339 timestamps. */

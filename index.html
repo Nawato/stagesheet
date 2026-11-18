@@ -53,6 +53,7 @@
             <select id="setlist-select"></select>
           </div>
           <button id="new-setlist" class="btn" type="button">New</button>
+          <span id="new-setlist-hint" class="new-disabled-hint" hidden>Switch to an artist scope to create a setlist.</span>
           <button id="duplicate-setlist" class="btn" type="button">Duplicate</button>
           <button id="save-setlist" class="btn btn-primary" type="button">Save</button>
           <button id="delete-setlist" class="btn btn-danger" type="button">Delete</button>
@@ -354,6 +355,7 @@
               <div
                 id="setlist-sheet"
                 class="sheet"
+                role="region"
                 aria-label="Printable setlist preview"
               ></div>
               <!-- One A4 frame per page in multiple-page mode. Screen + print. -->

@@ -21,19 +21,25 @@ export function findArtistById(
 
 /**
  * Resolved artist name: the record name while `artist_id` points at a live
- * record, otherwise the legacy `artist` text, otherwise blank.
+ * record, otherwise (only when `artist_id` is null) the legacy `artist`
+ * text, otherwise blank.
  *
- * Renaming a record therefore updates every id-backed song without rewriting
- * the snapshot. Search, sorting, and every library display use this helper so
+ * A dangling id (record gone) resolves as unfiled: no legacy-text fallback,
+ * so the display is blank and the song lands in the Unfiled scope (Feature
+ * 25 contract change — songs and setlists alike). Renaming a record
+ * therefore updates every id-backed song without rewriting the snapshot.
+ * Search, sorting, and every library display use this helper so
  * legacy and record-backed songs behave identically.
  */
 export function resolveArtistName(
   song: Pick<Song, "artist" | "artist_id">,
   artists: readonly Artist[],
 ): string {
-  const record = findArtistById(artists, song.artist_id);
-  const recordName = record?.name.trim();
-  if (recordName) return recordName;
+  const rawId = song.artist_id;
+  const id = typeof rawId === "string" ? rawId.trim() : rawId;
+  if (id) {
+    return findArtistById(artists, id)?.name.trim() ?? "";
+  }
 
   return song.artist?.trim() ?? "";
 }
@@ -41,17 +47,19 @@ export function resolveArtistName(
 /**
  * Resolves a song to the artist record it counts as.
  *
- * Id-backed songs resolve by id. Legacy-text songs are grouped under a record
- * with the same trimmed, case-insensitive name when one exists, so old
- * libraries do not show every artist as empty before adoption. Unmatched legacy
- * text and songs without text have no record.
+ * Id-backed songs resolve by id only: a dangling id is unfiled (null), with
+ * no legacy-text fallback (Feature 25). Legacy-text grouping applies only to
+ * records with no id: same trimmed, case-insensitive name as a live record
+ * groups under it until adoption. Unmatched legacy text and songs without
+ * text have no record.
  */
 export function resolveArtistForSong(
   song: Pick<Song, "artist" | "artist_id">,
   artists: readonly Artist[],
 ): Artist | null {
-  const byId = findArtistById(artists, song.artist_id);
-  if (byId) return byId;
+  const rawId = song.artist_id;
+  const id = typeof rawId === "string" ? rawId.trim() : rawId;
+  if (id) return findArtistById(artists, id) ?? null;
 
   const text = song.artist?.trim().toLocaleLowerCase();
   if (!text) return null;

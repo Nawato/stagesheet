@@ -49,7 +49,7 @@ commit as each change.
   (artist)` / `No logo yet` line names the target. Delete/Discard sits next to Save in the header
   actions (away from Add break) and keeps the existing confirmation for saved
   setlists and unsaved drafts.
-- **Duplicate** sits beside **Delete** and turns the current setlist into a
+- **Duplicate** sits beside **New** and turns the current setlist into a
   preset base: a dirty editor is saved first, then a deep copy is written under
   a fresh id and fresh timestamps. Venue, date, items, logo config (the file
   name is shared, never copied), sheet options, page mode, and the setlist
@@ -129,12 +129,26 @@ commit as each change.
   imported/rejected counts; future schema versions are rejected until the app
   supports them, older ones can migrate forward.
   Logos are not embedded in v1 and are re-imported manually.
+- v0.3.0 review hardening: an export capture snapshots the editor state and
+  locks item editing, meta inputs, and scope switching until it restores;
+  scope switches refuse during backup/restore (and vice versa); the Logo
+  alignment radios bind the displayed logo like the width slider (artist path
+  commits via `save_artist`, the showing line names the width and alignment
+  target); a dangling artist id resolves as unfiled with no legacy-text
+  fallback for songs and setlists alike (the landing assign offer lists only
+  true-`None` records); backup/print/duplicate auto-save failures on the
+  artist check name the filing next step; New in the Unfiled scope keeps an
+  adjacent hint plus Unfiled empty-state guidance copy and announces on
+  attempted activation;
+  song/setlist titles trim on save like artist names and `allow_unfiled` is
+  documented as UX-convention trust; blob-URL caches are pruned on logo
+  delete/replace; `parseDuration` rejects empty colon parts, blank duplicate
+  song titles fall back to `Untitled song`, artist option labels trim,
+  `beforeunload` covers open song/artist/landing drafts, `#setlist-sheet`
+  is a landmark region, and landing Ctrl/Cmd+S routes to artist create.
 
 ## Still missing (per plan)
 
-- Feature 22 — Duplicate moves beside New, before Save in the header.
-- Feature 25 — v0.3.0 review hardening: export/scope locks, alignment
-  binding, dangling-id resolver, unfiled guidance, backend small items.
 - Feature 26 — UI polish + language pass (menu anchor, spacing, header
   grouping, landing polish, Duration labels, guidance lines).
 - Paginated split-setlist helper (move the second half of a setlist into a new
