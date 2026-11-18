@@ -110,7 +110,7 @@ export interface SheetOptions {
   show_tuning: boolean;
   /** Tempo (BPM) column. */
   show_tempo: boolean;
-  /** Time (song duration) column. */
+  /** Duration (song duration) column. */
   show_duration: boolean;
   /** Song and break comments; also gates the break label. */
   show_comment: boolean;

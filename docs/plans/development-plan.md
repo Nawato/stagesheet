@@ -140,8 +140,9 @@ harness were removed when the exporter shipped.
   only remaining overflow tool is the split-setlist helper. Feature 23
   (artist management on the landing screen, out of the library pane) is Done,
   and Feature 24 (Backup & Restore on the landing screen, incl.
-  restore-before-scope) is Done.
-  Specced next (Todo): Feature 26 (UI polish + language pass). Features 22
+  restore-before-scope) is Done. Feature 26 (UI polish + language pass: menu
+  anchor, spacing, header grouping, landing polish, Duration labels, guidance
+  lines) is Done. Features 22
   and 25 (v0.3.0 review hardening: export/scope locks, alignment binding,
   dangling-id resolver, unfiled guidance, backend small items) are Done.
 - `tauri android init` / `ios init` on provisioned machines; native share.
@@ -445,3 +446,14 @@ WebView2/WKWebView when available):**
   model changes beyond trims, no envelope change. Feature 22 (Duplicate beside
   New) is Done in the same tree — one-line move, header order verified
   (New, Duplicate, Save, Delete). Only Feature 26 remains Todo.
+- 2026-11-18: Feature 26 shipped (UI polish + language pass). Export menu
+  right-anchored; icon-button rows at 8px separation; header scope selects
+  visually separated from the New/Duplicate/Save/Delete group (divider,
+  heavier Delete, group wrap at narrow widths); landing card vertically
+  centered with display type title and one label token; logo showing line
+  adjacent to width/alignment; `.logo-row` wraps at editor-pane widths;
+  Time → Duration labels (toggle, column heading, related copy; internal
+  `cols-*-time` class names unchanged) with `SKILL.md`/status contract sync;
+  Print-vs-Export guidance in the preview toolbar; Unfiled glossary in the
+  Unfiled empty state. No Rust, IPC, storage, envelope, or behavior change.
+  Only the split-setlist helper remains open.

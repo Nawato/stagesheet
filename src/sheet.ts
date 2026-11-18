@@ -45,7 +45,7 @@ const INFO_COLUMNS: ReadonlyArray<{
   // The editor toggle says "Tempo (BPM)"; the sheet keeps the compact BPM
   // heading so it stays legible in the narrow numeric column.
   { key: "bpm", label: "BPM", className: "col-bpm" },
-  { key: "time", label: "Time", className: "col-time" },
+  { key: "time", label: "Duration", className: "col-time" },
 ];
 
 export function renderSetlistSheet(
@@ -313,8 +313,8 @@ function sheetTableClass(infoColumns: readonly InfoColumn[]): string {
   if (infoColumns.length === 1) return `sheet-table cols-3-${infoColumns[0]}`;
   if (infoColumns.length === 2) return `sheet-table cols-4-${infoColumns.join("-")}`;
   if (infoColumns.length === 3) {
-    // `.cols-5` is the verified key/bpm/time anchor; its narrow columns are
-    // interchangeable, so it also covers tuning/time and key/tuning/time.
+    // `.cols-5` is the verified key/bpm/duration anchor; its narrow columns are
+    // interchangeable, so it also covers tuning/duration and key/tuning/duration.
     return infoColumns.includes("time")
       ? "sheet-table cols-5"
       : "sheet-table cols-5-no-time";

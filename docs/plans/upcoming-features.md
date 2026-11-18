@@ -1343,12 +1343,38 @@ open (undo system, see Feature 26).
 2. Messages (unfiled guidance, New hint) + backend small items.
 3. QA + `SKILL.md` + this file status + commit.
 
-## Feature 26: UI polish + language pass — Todo
+## Feature 26: UI polish + language pass — Done
 
-Status: Todo, small batch, from the v0.3.0 UI and normal-user reviews.
+Status: Done, small batch, from the v0.3.0 UI and normal-user reviews.
 Visual consistency and wording only; no behavior change beyond the
 labels named here. Builds on Feature 22 (assumes the
 New/Duplicate/Save/Delete header order).
+
+### Shipped notes
+
+- Export menu right-anchored (`right: 0`) in the right-aligned toolbar.
+- Icon-button rows (running-order `.item-actions`, library
+  `.song-item-actions`, landing `.landing-manage`) use 8px separation.
+- Header grouping: the scope selects sit in an `app-scope-group` and the
+  four buttons in an `app-setlist-actions` group with a divider; Delete
+  keeps black-on-white with a heavier border/weight as the stronger danger
+  affordance; the four buttons wrap as their own group at narrow widths
+  (stacked divider) instead of orphaning.
+- Landing card vertically centered via auto margins (top-pin only for
+  overflow); display type (`--font-display`, 30px) for the landing title;
+  the landing create/edit forms use the single `field-label` token.
+- Logo showing line moved adjacent to (below) the width/alignment controls.
+- `.logo-row` wraps at editor-pane widths (base `flex-wrap`, not just the
+  ≤ 520px query).
+- Language: **Time → Duration** toggle label, sheet column heading
+  (`sheet.ts` `INFO_COLUMNS`), and related copy (Rust/TS doc comments,
+  `SKILL.md`, `status.md`, CSS comments); internal `cols-*-time` class
+  names unchanged. Preview toolbar carries the one-line guidance
+  "Print is the sharpest paper copy; Export saves a PDF/PNG file". The
+  Unfiled library empty state carries the glossary "Unfiled means no
+  artist yet — file these or pick an artist scope above."
+- Out of scope as specced (stay open): undo, S/M/L sizing, vector PDF,
+  mobile, SQLite.
 
 ### Scope
 
@@ -1418,7 +1444,7 @@ logo sizing instead of mm, selectable/vector PDF text, mobile, SQLite.
   incl. restore-before-scope — Done), Feature 25 (v0.3.0 review hardening:
   export/scope locks, alignment binding, dangling-id resolver, unfiled
   guidance, backend small items — Done), and Feature 26 (UI polish + language
-  pass). The split-setlist helper stays open behind these.
+  pass — Done). The split-setlist helper stays open behind these.
 - **P1 — Backup/restore**: Done (Feature 7). One versioned JSON envelope for
   the full library + setlists; logos are re-imported manually in v1.
   Feature 14 adds the `artists` array without a version bump.

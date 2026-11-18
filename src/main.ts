@@ -2082,7 +2082,8 @@ function renderLibrary(): void {
 function libraryEmptyMessage(query: string): string {
   const scope = activeScopeArtist();
   if (isUnfiledScope()) {
-    if (unfiledSongs().length === 0) return "No unfiled songs yet.";
+    if (unfiledSongs().length === 0)
+      return "No unfiled songs yet. Unfiled means no artist yet — file these or pick an artist scope above.";
     if (query) {
       return tuningOnly
         ? "No unfiled songs with tuning match that search."
@@ -4776,7 +4777,7 @@ function buildLandingArtistEditForm(artist: Artist): HTMLFormElement {
 
   const nameField = el("label", "field");
   nameField.htmlFor = "artist-edit-name";
-  const nameText = el("span", "item-field-label", "Name");
+  const nameText = el("span", "field-label", "Name");
   const nameInput = document.createElement("input");
   nameInput.id = "artist-edit-name";
   nameInput.required = true;
@@ -4798,7 +4799,7 @@ function buildLandingArtistEditForm(artist: Artist): HTMLFormElement {
   const fileField = el("label", "field");
   fileField.htmlFor = "artist-edit-logo-file";
   fileField.append(
-    el("span", "item-field-label", "Logo (PNG, JPEG, SVG · max 5 MiB)"),
+    el("span", "field-label", "Logo (PNG, JPEG, SVG · max 5 MiB)"),
   );
   const fileInput = document.createElement("input");
   fileInput.id = "artist-edit-logo-file";
@@ -4811,7 +4812,7 @@ function buildLandingArtistEditForm(artist: Artist): HTMLFormElement {
   const widthField = el("div", "field field-grow");
   const widthLabel = document.createElement("label");
   widthLabel.htmlFor = "artist-edit-logo-width";
-  const widthText = el("span", "item-field-label", "Width ");
+  const widthText = el("span", "field-label", "Width ");
   const widthOutput = document.createElement("output");
   widthOutput.id = "artist-edit-logo-width-value";
   widthOutput.textContent = `${Math.round(state.logo.width_mm)} mm`;
@@ -4930,7 +4931,7 @@ function buildLandingCreateForm(): HTMLFormElement {
   const nameId = "landing-name";
   const nameLabel = document.createElement("label");
   nameLabel.className = "field";
-  const nameText = el("span", "item-field-label", "Name");
+  const nameText = el("span", "field-label", "Name");
   const nameInput = document.createElement("input");
   nameInput.id = nameId;
   nameInput.required = true;
@@ -4945,7 +4946,7 @@ function buildLandingCreateForm(): HTMLFormElement {
   const fileId = "landing-logo-file";
   const fileLabel = document.createElement("label");
   fileLabel.className = "field";
-  fileLabel.append(el("span", "item-field-label", "Logo (PNG, JPEG, SVG · max 5 MiB)"));
+  fileLabel.append(el("span", "field-label", "Logo (PNG, JPEG, SVG · max 5 MiB)"));
   const fileInput = document.createElement("input");
   fileInput.id = fileId;
   fileInput.type = "file";
@@ -4956,7 +4957,7 @@ function buildLandingCreateForm(): HTMLFormElement {
   const widthLabel = document.createElement("label");
   widthLabel.className = "field field-grow";
   const widthText = document.createElement("span");
-  widthText.className = "item-field-label";
+  widthText.className = "field-label";
   widthText.append("Width ");
   const widthOutput = document.createElement("output");
   widthOutput.id = `${widthId}-value`;

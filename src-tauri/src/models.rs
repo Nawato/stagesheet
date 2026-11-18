@@ -461,7 +461,7 @@ pub struct SheetOptions {
     pub show_tuning: bool,
     /// Tempo (BPM) column.
     pub show_tempo: bool,
-    /// Time (song duration) column.
+    /// Duration (song duration) column.
     pub show_duration: bool,
     /// Song and break comments; also gates the break label.
     pub show_comment: bool,

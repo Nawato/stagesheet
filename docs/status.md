@@ -68,12 +68,12 @@ commit as each change.
   the status. The library Artist filter, the
   lock chrome, and the per-setlist Artist select are retired; the summary
   keeps the non-matching count without the `· artist` suffix.
-- Per-setlist "Sheet columns" toggles for Key, Tuning, Tempo (BPM), Time, and
+- Per-setlist "Sheet columns" toggles for Key, Tuning, Tempo (BPM), Duration, and
   Comment, persisted with the setlist and applied to preview, print, and
   export. Column widths are per-combination presets summing to 100% with the
   `<colgroup>` as the only width source, so the header stays aligned with the
   body in every toggle combination. Title/venue/date and song titles always
-  print; the Time column can be hidden, while break durations always render.
+  print; the Duration column can be hidden, while break durations always render.
 - Validation hardening on save: break length `0..=36000` seconds (the old
   600-minute cap, entered as `mm:ss`), break label ≤ 24 chars, and song/break
   comments ≤ 140 chars (after trim). Break durations render as `11 sec`,
@@ -147,10 +147,22 @@ commit as each change.
   `beforeunload` covers open song/artist/landing drafts, `#setlist-sheet`
   is a landmark region, and landing Ctrl/Cmd+S routes to artist create.
 
+- UI polish + language pass (Feature 26): the export menu is right-anchored
+  in the right-aligned toolbar; icon-button rows (running-order, library,
+  landing manage) use 8px separation; the header reads as scope selects
+  beside a New/Duplicate/Save/Delete group (divider, heavier Delete, and the
+  four buttons wrapping as their own group at narrow widths); the landing
+  card is vertically centered (top-pinned on overflow) with display type for
+  the title and one label token in the form; the logo showing line sits
+  adjacent to the width/alignment controls and `.logo-row` wraps at
+  editor-pane widths. The column toggle and sheet heading read **Duration**
+  (internal `cols-*-time` class names unchanged); the preview toolbar carries
+  the Print-vs-Export guidance line and the Unfiled library empty state names
+  the glossary. Out of scope as specced: undo, S/M/L sizing, vector PDF,
+  mobile, SQLite.
+
 ## Still missing (per plan)
 
-- Feature 26 — UI polish + language pass (menu anchor, spacing, header
-  grouping, landing polish, Duration labels, guidance lines).
 - Paginated split-setlist helper (move the second half of a setlist into a new
   one) as an alternative to multi-page mode.
 - Physical-paper QA on A4 (page count, header/footer per engine, legibility),

@@ -192,7 +192,34 @@ input[type="file"]::file-selector-button {
   display: flex;
   flex-wrap: wrap;
   align-items: flex-end;
+  gap: 8px 12px;
+}
+
+/* Scope selects and setlist actions read as two groups: the divider keeps
+   creation-adjacent buttons apart from navigation, and the four buttons wrap
+   as their own group at narrow widths instead of orphaning. */
+.app-scope-group {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
   gap: 8px;
+}
+
+.app-setlist-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 8px;
+  padding-left: 12px;
+  border-left: 1px solid var(--line);
+}
+
+/* Stronger danger affordance for the destructive header action. Same palette,
+   no theme change: heavier border and weight so Delete never reads as just
+   another button in the group. */
+.app-setlist-actions .btn-danger {
+  border-width: 2px;
+  font-weight: 800;
 }
 
 .select-field {
@@ -519,7 +546,7 @@ input[type="file"]::file-selector-button {
   flex-wrap: wrap;
   justify-content: flex-end;
   max-width: 100%;
-  gap: 2px;
+  gap: 8px;
   margin-left: auto;
 }
 
@@ -790,7 +817,7 @@ input[type="file"]::file-selector-button {
 
 .item-actions {
   display: flex;
-  gap: 0;
+  gap: 8px;
 }
 
 .item-details {
@@ -873,6 +900,7 @@ input[type="file"]::file-selector-button {
 
 .logo-row {
   display: flex;
+  flex-wrap: wrap;
   align-items: flex-end;
   gap: 10px;
 }
@@ -967,6 +995,11 @@ input[type="file"]::file-selector-button {
   font-variant-numeric: tabular-nums;
 }
 
+.preview-guidance {
+  color: var(--ink-soft);
+  font-size: 12px;
+}
+
 /* Below ~70% auto-fit the single-A4 cap gets hard to read on stage; point at
    multiple-page mode instead of leaving a silently clipped page. */
 .preview-toolbar p.is-hint {
@@ -997,7 +1030,7 @@ input[type="file"]::file-selector-button {
 .export-menu {
   position: absolute;
   top: calc(100% + 6px);
-  left: 0;
+  right: 0;
   z-index: 30;
   display: flex;
   flex-direction: column;
@@ -1336,7 +1369,7 @@ input[type="file"]::file-selector-button {
   width: 92%;
 }
 
-/* Index + song + one info column. Key/tuning/bpm are narrow; Time is wider. */
+/* Index + song + one info column. Key/tuning/bpm are narrow; Duration is wider. */
 .sheet-table.cols-3-key col.col-index,
 .sheet-table.cols-3-tuning col.col-index,
 .sheet-table.cols-3-bpm col.col-index,
@@ -1364,7 +1397,7 @@ input[type="file"]::file-selector-button {
   width: 18%;
 }
 
-/* Index + song + two info columns (the six key/tuning/bpm/time pairs). */
+/* Index + song + two info columns (the six key/tuning/bpm/duration pairs). */
 .sheet-table.cols-4-key-tuning col.col-index,
 .sheet-table.cols-4-key-bpm col.col-index,
 .sheet-table.cols-4-key-time col.col-index,
@@ -1404,9 +1437,9 @@ input[type="file"]::file-selector-button {
   width: 18%;
 }
 
-/* Feature 4 baseline: index, song, key, bpm, time. Tuning uses the same width
+/* Feature 4 baseline: index, song, key, bpm, duration. Tuning uses the same width
    as key/bpm when it replaces one of them, so this preset also covers
-   key/tuning/time and tuning/bpm/time. */
+   key/tuning/duration and tuning/bpm/duration. */
 .sheet-table.cols-5 col.col-index {
   width: 7%;
 }
@@ -1425,7 +1458,7 @@ input[type="file"]::file-selector-button {
   width: 18%;
 }
 
-/* Key + tuning + bpm with Time off: the narrow columns stay fixed and the
+/* Key + tuning + bpm with Duration off: the narrow columns stay fixed and the
    song column takes the freed 8%, so the total still lands on 100%. */
 .sheet-table.cols-5-no-time col.col-index {
   width: 7%;
@@ -1595,6 +1628,20 @@ input[type="file"]::file-selector-button {
     width: 100%;
   }
 
+  .app-scope-group {
+    flex: 1 1 100%;
+  }
+
+  /* Stacked below the scope selects, the buttons keep their own divider and
+     wrap inside their group instead of orphaning across the bar. */
+  .app-setlist-actions {
+    flex: 1 1 100%;
+    padding-left: 0;
+    border-left: 0;
+    padding-top: 12px;
+    border-top: 1px solid var(--line);
+  }
+
   .select-field {
     flex: 1 1 100%;
     max-width: none;
@@ -1631,10 +1678,6 @@ input[type="file"]::file-selector-button {
   .item-actions {
     grid-column: 2;
     justify-content: flex-end;
-  }
-
-  .logo-row {
-    flex-wrap: wrap;
   }
 
   .artist-logo-preview {
@@ -1683,6 +1726,9 @@ input[type="file"]::file-selector-button {
   flex-direction: column;
   gap: 14px;
   width: min(560px, 100%);
+  /* Auto margins center the card vertically while the overlay scrolls; when
+     the card overflows, the top stays pinned instead of clipping. */
+  margin: auto;
   padding: 24px;
   border: 1px solid var(--line);
   border-radius: 16px;
@@ -1692,7 +1738,11 @@ input[type="file"]::file-selector-button {
 
 .landing-card h2 {
   margin: 0;
-  font-size: 20px;
+  font-family: var(--font-display);
+  font-size: 30px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  line-height: 1.05;
 }
 
 .landing-sub {
@@ -1726,7 +1776,7 @@ input[type="file"]::file-selector-button {
 .landing-manage {
   display: flex;
   flex: 0 0 auto;
-  gap: 2px;
+  gap: 8px;
 }
 
 .landing-row .artist-form {

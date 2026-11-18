@@ -42,21 +42,25 @@
         </div>
 
         <div class="app-actions" role="group" aria-label="Setlist actions">
-          <div class="select-field">
-            <label for="setlist-artist-filter">Artist</label>
-            <select id="setlist-artist-filter">
-              <option value="" selected>All artists</option>
-            </select>
+          <div class="app-scope-group" role="group" aria-label="Scope">
+            <div class="select-field">
+              <label for="setlist-artist-filter">Artist</label>
+              <select id="setlist-artist-filter">
+                <option value="" selected>All artists</option>
+              </select>
+            </div>
+            <div class="select-field">
+              <label for="setlist-select">Setlist</label>
+              <select id="setlist-select"></select>
+            </div>
           </div>
-          <div class="select-field">
-            <label for="setlist-select">Setlist</label>
-            <select id="setlist-select"></select>
+          <div class="app-setlist-actions" role="group" aria-label="Current setlist">
+            <button id="new-setlist" class="btn" type="button">New</button>
+            <span id="new-setlist-hint" class="new-disabled-hint" hidden>Switch to an artist scope to create a setlist.</span>
+            <button id="duplicate-setlist" class="btn" type="button">Duplicate</button>
+            <button id="save-setlist" class="btn btn-primary" type="button">Save</button>
+            <button id="delete-setlist" class="btn btn-danger" type="button">Delete</button>
           </div>
-          <button id="new-setlist" class="btn" type="button">New</button>
-          <span id="new-setlist-hint" class="new-disabled-hint" hidden>Switch to an artist scope to create a setlist.</span>
-          <button id="duplicate-setlist" class="btn" type="button">Duplicate</button>
-          <button id="save-setlist" class="btn btn-primary" type="button">Save</button>
-          <button id="delete-setlist" class="btn btn-danger" type="button">Delete</button>
         </div>
       </header>
 
@@ -199,7 +203,6 @@
 
           <fieldset class="logo-controls">
             <legend>Logo</legend>
-            <p id="logo-showing" class="logo-showing" role="note">No logo yet</p>
             <div class="logo-row">
               <div class="field field-grow">
                 <label for="logo-file">Image (PNG, JPEG, SVG · max 5 MiB)</label>
@@ -234,6 +237,7 @@
                 </div>
               </div>
             </div>
+            <p id="logo-showing" class="logo-showing" role="note">No logo yet</p>
             <label class="check">
               <input id="logo-grayscale" type="checkbox" checked />
               Grayscale logo in preview
@@ -246,6 +250,7 @@
             <div>
               <h2 id="preview-heading">Print preview</h2>
               <p id="preview-meta">A4 · 210 × 297 mm · black on white</p>
+              <p class="preview-guidance">Print is the sharpest paper copy; Export saves a PDF/PNG file</p>
             </div>
             <div class="preview-tools">
               <div class="preview-actions" role="group" aria-label="Print and export">
@@ -338,7 +343,7 @@
               </label>
               <label class="check">
                 <input id="sheet-option-duration" type="checkbox" checked />
-                Time
+                Duration
               </label>
               <label class="check">
                 <input id="sheet-option-comment" type="checkbox" checked />

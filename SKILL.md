@@ -54,7 +54,7 @@ pub struct SheetOptions {
     pub show_key: bool,       // every field defaults to true
     pub show_tuning: bool,
     pub show_tempo: bool,     // Tempo (BPM) column
-    pub show_duration: bool,  // Time column
+    pub show_duration: bool,  // Duration column
     pub show_comment: bool,   // song/break comments + break label
 }
 
@@ -307,7 +307,7 @@ model fields are snake_case.
 
 - `<div id="setlist-sheet">` contains a `<table class="sheet-table">`.
 - Columns are built from `Setlist.sheet_options`: `#` and `Song` always exist;
-  `Key`, `Tuning`, `BPM`, and `Time` each render only while their toggle is on.
+  `Key`, `Tuning`, `BPM`, and `Duration` each render only while their toggle is on.
   `Tuning` additionally requires at least one song in the setlist to have tuning
   set. The editor labels the tempo toggle **"Tempo (BPM)"**; the sheet keeps the
   compact `BPM` heading.
@@ -316,7 +316,7 @@ model fields are snake_case.
   `.cols-3-key|tuning|bpm` (7/83/10) and `.cols-3-time` (7/75/18);
   `.cols-4-key-tuning|key-bpm|tuning-bpm` (7/73/10/10),
   `.cols-4-key-time|tuning-time|bpm-time` (7/65/10/18);
-  `.cols-5` (any three info columns incl. Time, 7/55/10/10/18);
+  `.cols-5` (any three info columns incl. Duration, 7/55/10/10/18);
   `.cols-5-no-time` (key+tuning+bpm, 7/63/10/10/10); and `.cols-5-tuning`
   (all four info columns, 6/50/9/10/9/16). Every preset sums to 100%. The
   `<colgroup>` is the only width source — never add `th` width rules — and the
