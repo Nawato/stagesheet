@@ -52,12 +52,72 @@ let statusTimer: number | undefined;
 /** Library view controls. In-memory only: sorting/filtering never dirties a setlist. */
 let songSort: SongSortKey = "title";
 let tuningOnly = false;
+/**
+ * Inline library editor state. At most one row editor is open at a time;
+ * opening another row discards the previous draft, because nothing reaches the
+ * cache until Save. The draft survives library re-renders (search, sort, add,
+ * duplicate, delete another row, `renderAll`) and is only cleared by Save,
+ * Cancel, or hiding an idle edited row behind the active filter.
+ */
+let libraryEditor: LibraryEditorState | null = null;
+/** True while the Add-to-library request is in flight. */
+let addingSong = false;
+/** Library writes (add/edit/duplicate/delete) currently in flight. */
+let libraryWritesInFlight = 0;
+/** True while a backup/restore owns the library snapshot. */
+let backingUp = false;
+let restoring = false;
 /** Logo files to delete only after a setlist save succeeds. */
 const pendingLogoRemovals = new Set<string>();
 /** Frames currently rendered in multiple-page mode (the exact page count). */
 let renderedPageCount = 0;
 
 type SongSortKey = "title" | "artist" | "key" | "tuning";
+
+/** Raw strings from the inline library editor; parsed only on Save. */
+interface LibrarySongDraft {
+  title: string;
+  artist: string;
+  key: string;
+  tuning: string;
+  bpm: string;
+  duration: string;
+  notes: string;
+}
+
+interface LibraryEditorState {
+  songId: string;
+  draft: LibrarySongDraft;
+  /** True while the upsert is in flight; fields and Save are disabled. */
+  saving: boolean;
+  /** True after a failed save until the draft is retried or explicitly discarded. */
+  retryPending: boolean;
+  /** Validation markers that must survive a library re-render. */
+  invalidFields: Set<keyof LibrarySongDraft>;
+  /** True when the active search/filter currently hides this row. */
+  hiddenByFilter: boolean;
+  /** Last focused field/button, kept across disabled states and re-renders. */
+  focusMemory: LibraryEditorFocusTarget | null;
+}
+
+/** Focus and selection to restore after an unrelated library re-render. */
+type LibraryEditorFocusTarget =
+  | {
+      kind: "input";
+      songId: string;
+      inputIndex: number;
+      selectionStart: number | null;
+      selectionEnd: number | null;
+      selectionDirection: HTMLInputElement["selectionDirection"];
+    }
+  | {
+      kind: "button";
+      songId: string;
+      action: "save" | "cancel";
+    };
+
+/** Deferred focus restore when an Add finishes while the editor is still busy. */
+let pendingLibraryEditorFocus: LibraryEditorFocusTarget | null = null;
 
 // ---------------------------------------------------------------------------
 // Elements
@@ -87,6 +147,7 @@ const newSongTuning = byId<HTMLInputElement>("new-song-tuning");
 const newSongBpm = byId<HTMLInputElement>("new-song-bpm");
 const newSongDuration = byId<HTMLInputElement>("new-song-duration");
 const newSongNotes = byId<HTMLInputElement>("new-song-notes");
+const addSongButton = songForm.querySelector<HTMLButtonElement>('button[type="submit"]');
 
 const backupExportButton = byId<HTMLButtonElement>("backup-export");
 const backupRestoreButton = byId<HTMLButtonElement>("backup-restore");
@@ -186,6 +247,13 @@ function bindEvents(): void {
     tuningOnly = songTuningOnlyInput.checked;
     renderLibrary();
   });
+  document.addEventListener("focusin", (event) => {
+    if (!(event.target instanceof Element)) return;
+    if (!event.target.closest("form.song-item-editor")) {
+      pendingLibraryEditorFocus = null;
+      if (libraryEditor) libraryEditor.focusMemory = null;
+    }
+  });
   songForm.addEventListener("submit", (event) => {
     void handleSongSubmit(event);
   });
@@ -248,6 +316,19 @@ function bindEvents(): void {
   window.addEventListener("keydown", (event) => {
     if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "s") {
       event.preventDefault();
+      // Inside a song editor, Ctrl/Cmd+S saves the song draft instead of the
+      // setlist. The Add form gets the same treatment for consistency.
+      if (event.target instanceof Element) {
+        const editor = event.target.closest<HTMLFormElement>("form.song-item-editor");
+        if (editor) {
+          editor.requestSubmit();
+          return;
+        }
+        if (songForm.contains(event.target)) {
+          songForm.requestSubmit();
+          return;
+        }
+      }
       void saveCurrent();
     }
   });
@@ -355,6 +436,8 @@ function adoptLoadedState(
 ): void {
   songs = [...loadedSongs];
   sortSongsByTitle();
+  libraryEditor = null;
+  pendingLibraryEditorFocus = null;
   setlists = loadedSetlists.map((setlist) => ({
     ...setlist,
     sheet_options: withSheetDefaults(setlist.sheet_options),
@@ -588,27 +671,70 @@ function baseName(path: string): string {
 // Backup / restore
 // ---------------------------------------------------------------------------
 
-let restoring = false;
+/**
+ * Refuses backup/restore while a library write is in flight or an inline draft
+ * (including a failed one) is open. This keeps stored-only snapshots from
+ * silently omitting unsaved edits and prevents writes from landing after the
+ * restore adopts its reloaded state.
+ */
+function libraryDraftGuard(action: "backing up" | "restoring"): string | null {
+  if (libraryWritesInFlight > 0) {
+    return `Wait for the current library request to finish before ${action}.`;
+  }
+  const editor = libraryEditor;
+  if (!editor) return null;
+  const kind = editor.retryPending ? "failed edit" : "edit";
+  if (editor.hiddenByFilter) {
+    return `Clear the search or filter, then save or cancel the ${kind} for “${libraryEditorLabel(editor)}” before ${action}.`;
+  }
+  return `Save or cancel the ${kind} for “${libraryEditorLabel(editor)}” before ${action}.`;
+}
+
+/** Blocks row/Add actions while a backup or restore owns the library snapshot. */
+function blockLibraryActionWhileBusy(): boolean {
+  if (restoring) {
+    setStatus("Restore in progress — wait for it to finish.", "info");
+    return true;
+  }
+  if (backingUp) {
+    setStatus("Backup in progress — wait for it to finish.", "info");
+    return true;
+  }
+  return false;
+}
 
 /**
  * Writes the whole library and every setlist to one versioned JSON file. Like
  * Print, it saves a dirty editor first so the backup matches what the user sees.
+ * Library drafts must be saved or cancelled first so a backup never silently
+ * omits an edit that is visible in the UI.
  */
 async function backUpLibrary(): Promise<void> {
-  if (!ensureBackend() || restoring) return;
+  if (!ensureBackend() || restoring || backingUp) return;
 
-  if (dirty) {
-    const saved = await saveCurrent();
-    if (!saved) {
-      setStatus("Save or discard the current setlist before backing up.", "error");
-      return;
-    }
+  const libraryBlock = libraryDraftGuard("backing up");
+  if (libraryBlock) {
+    setStatus(libraryBlock, "error");
+    return;
   }
 
-  backupExportButton.disabled = true;
-  backupRestoreButton.disabled = true;
-
   try {
+    backingUp = true;
+    backupExportButton.disabled = true;
+    backupRestoreButton.disabled = true;
+    syncAddSongControls();
+    // Disable row actions for the whole snapshot read/write; handlers also
+    // guard so keyboard/programmatic paths cannot mutate the library.
+    renderLibrary();
+
+    if (dirty) {
+      const saved = await saveCurrent();
+      if (!saved) {
+        setStatus("Save or discard the current setlist before backing up.", "error");
+        return;
+      }
+    }
+
     const [backupSongs, backupSetlists] = await Promise.all([
       api.listSongs(),
       api.listSetlists(),
@@ -628,8 +754,11 @@ async function backUpLibrary(): Promise<void> {
   } catch (error) {
     setStatus(`Backup failed: ${describeError(error)}`, "error");
   } finally {
+    backingUp = false;
     backupExportButton.disabled = false;
     backupRestoreButton.disabled = false;
+    syncAddSongControls();
+    renderLibrary();
   }
 }
 
@@ -639,7 +768,13 @@ async function backUpLibrary(): Promise<void> {
  * overwritten; nothing is deleted. Malformed records are skipped and reported.
  */
 async function restoreLibrary(): Promise<void> {
-  if (!ensureBackend() || restoring) return;
+  if (!ensureBackend() || restoring || backingUp) return;
+
+  const libraryBlock = libraryDraftGuard("restoring");
+  if (libraryBlock) {
+    setStatus(libraryBlock, "error");
+    return;
+  }
 
   const picked = await readBackupFile().catch((error: unknown) => {
     setStatus(`Restore failed: ${describeError(error)}`, "error");
@@ -679,15 +814,25 @@ async function restoreLibrary(): Promise<void> {
     return;
   }
 
-  restoring = true;
-  backupExportButton.disabled = true;
-  backupRestoreButton.disabled = true;
+  const lateLibraryBlock = libraryDraftGuard("restoring");
+  if (lateLibraryBlock) {
+    setStatus(lateLibraryBlock, "error");
+    return;
+  }
 
   let importedSongs = 0;
   let importedSetlists = 0;
   const failures: string[] = [];
 
   try {
+    restoring = true;
+    backupExportButton.disabled = true;
+    backupRestoreButton.disabled = true;
+    syncAddSongControls();
+    // Row controls are guarded in their handlers; this render applies the visual
+    // disabled state without touching any draft (none can be open here).
+    renderLibrary();
+
     for (const [index, song] of envelope.songs.entries()) {
       try {
         await api.saveSong(song);
@@ -744,6 +889,8 @@ async function restoreLibrary(): Promise<void> {
     restoring = false;
     backupExportButton.disabled = false;
     backupRestoreButton.disabled = false;
+    syncAddSongControls();
+    renderLibrary();
   }
 }
 
@@ -867,6 +1014,15 @@ function renderLibrary(): void {
     compareLibrarySongs(left, right, songSort),
   );
 
+  // The inline editor is taller than the normal list cap; let the library pane
+  // scroll instead of nesting the editor in a 340px scroller while it is open.
+  reconcileLibraryEditor(ordered);
+  const editor = libraryEditor;
+  songListEl.classList.toggle(
+    "has-editor",
+    editor !== null && ordered.some((song) => song.id === editor.songId),
+  );
+
   songCountEl.textContent = String(songs.length);
   songCountEl.setAttribute(
     "aria-label",
@@ -915,6 +1071,10 @@ function compareLibrarySongs(left: Song, right: Song, sort: SongSortKey): number
 
 function buildLibraryRow(song: Song): HTMLLIElement {
   const row = el("li", "song-item");
+  const editor = libraryEditor;
+  const editing = editor !== null && editor.songId === song.id;
+  if (editing) row.classList.add("is-editing");
+
   const info = el("div", "song-info");
   info.append(el("span", "song-item-title", song.title));
 
@@ -944,6 +1104,16 @@ function buildLibraryRow(song: Song): HTMLLIElement {
     void duplicateLibrarySong(song);
   });
 
+  const editButton = el("button", "icon-button");
+  editButton.type = "button";
+  editButton.dataset.editSongId = song.id;
+  editButton.title = `Edit ${song.title}`;
+  editButton.setAttribute("aria-label", `Edit ${song.title} in the library`);
+  editButton.setAttribute("aria-expanded", String(editing));
+  if (editing) editButton.setAttribute("aria-controls", libraryEditorId(song.id));
+  editButton.append(editIcon());
+  editButton.addEventListener("click", () => openLibraryEditor(song.id));
+
   const removeButton = el("button", "icon-button", "✕");
   removeButton.type = "button";
   removeButton.title = `Remove ${song.title} from the library`;
@@ -952,8 +1122,16 @@ function buildLibraryRow(song: Song): HTMLLIElement {
     void deleteLibrarySong(song);
   });
 
-  actions.append(addButton, copyButton, removeButton);
+  if (restoring || backingUp) {
+    addButton.disabled = true;
+    copyButton.disabled = true;
+    editButton.disabled = true;
+    removeButton.disabled = true;
+  }
+
+  actions.append(addButton, copyButton, editButton, removeButton);
   row.append(info, actions);
+  if (editing && editor) row.append(buildLibraryEditor(song, editor));
   return row;
 }
 
@@ -983,6 +1161,30 @@ function copyIcon(): SVGSVGElement {
     sheet.setAttribute("rx", "2");
     svg.append(sheet);
   }
+
+  return svg;
+}
+
+/** Pencil glyph for the inline library editor. */
+function editIcon(): SVGSVGElement {
+  const ns = "http://www.w3.org/2000/svg";
+  const svg = document.createElementNS(ns, "svg");
+  svg.setAttribute("viewBox", "0 0 24 24");
+  svg.setAttribute("width", "17");
+  svg.setAttribute("height", "17");
+  svg.setAttribute("fill", "none");
+  svg.setAttribute("stroke", "currentColor");
+  svg.setAttribute("stroke-width", "1.8");
+  svg.setAttribute("stroke-linecap", "round");
+  svg.setAttribute("stroke-linejoin", "round");
+  svg.setAttribute("aria-hidden", "true");
+  svg.setAttribute("focusable", "false");
+
+  const outline = document.createElementNS(ns, "path");
+  outline.setAttribute("d", "M4 20h4L18.5 9.5a2.1 2.1 0 0 0-3-3L5 17v3Z");
+  const nib = document.createElementNS(ns, "path");
+  nib.setAttribute("d", "M13.5 6.5l4 4");
+  svg.append(outline, nib);
 
   return svg;
 }
@@ -1600,6 +1802,8 @@ function bindDragReorder(): void {
 
 async function handleSongSubmit(event: SubmitEvent): Promise<void> {
   event.preventDefault();
+  if (addingSong) return;
+  if (blockLibraryActionWhileBusy()) return;
   if (!ensureBackend()) return;
 
   const title = newSongTitle.value.trim();
@@ -1636,21 +1840,591 @@ async function handleSongSubmit(event: SubmitEvent): Promise<void> {
     notes: trimmedOrNull(newSongNotes.value),
   };
 
+  const addFormOwnedFocus =
+    addFormOwnsFocus() ||
+    (event.submitter instanceof HTMLElement && songForm.contains(event.submitter));
+
   try {
+    addingSong = true;
+    libraryWritesInFlight += 1;
+    syncAddSongControls();
+
     await api.saveSong(song);
+    // Capture focus ownership before reset/render; a user who moved to the
+    // inline editor, search, or sort must not be pulled back to the Add title.
+    pendingLibraryEditorFocus = null;
+    const directEditorFocus = captureLibraryEditorFocus();
+    const editorFocus =
+      directEditorFocus ?? (isPageFocusLost() ? libraryEditor?.focusMemory ?? null : null);
+    const restoreTitleFocus =
+      addFormOwnsFocus() ||
+      (addFormOwnedFocus && isPageFocusLost() && !editorFocus);
     songs.push(song);
     sortSongsByTitle();
     songForm.reset();
     renderLibrary();
     setStatus(`Added “${song.title}” to the library.`, "success");
-    newSongTitle.focus();
+    if (restoreTitleFocus) {
+      newSongTitle.focus();
+    } else if (editorFocus && !restoreLibraryEditorFocus(editorFocus)) {
+      pendingLibraryEditorFocus = editorFocus;
+    }
   } catch (error) {
-    setStatus(`Could not save song: ${describeError(error)}`, "error");
+    setStatus(
+      `Could not add “${song.title}” to the library: ${describeError(error)}`,
+      "error",
+    );
+  } finally {
+    addingSong = false;
+    libraryWritesInFlight -= 1;
+    syncAddSongControls();
+  }
+}
+
+/** Locks the Add-to-library submit during an Add request, backup, or restore. */
+function syncAddSongControls(): void {
+  const locked = addingSong || restoring || backingUp;
+  // Only an actual Add request keeps the editable form semantically busy.
+  songForm.setAttribute("aria-busy", String(addingSong));
+  if (addSongButton) {
+    addSongButton.disabled = locked;
+    addSongButton.textContent = addingSong ? "Adding…" : "Add song";
+  }
+}
+
+function addFormOwnsFocus(): boolean {
+  const active = document.activeElement;
+  if (isPageFocusLost()) {
+    // With an inline draft open, body focus usually means the editor was
+    // disabled/rendered, not that the Add form owns the caret.
+    return !libraryEditor;
+  }
+  return active !== null && songForm.contains(active);
+}
+
+function libraryEditorId(songId: string): string {
+  return `song-editor-${songId}`;
+}
+
+function draftFromSong(song: Song): LibrarySongDraft {
+  return {
+    title: song.title,
+    artist: song.artist ?? "",
+    key: song.key ?? "",
+    tuning: song.tuning ?? "",
+    bpm: song.bpm === null ? "" : String(song.bpm),
+    duration: durationInputValue(song.duration_secs),
+    notes: song.notes ?? "",
+  };
+}
+
+/** Title used in editor statuses so a failure/discard names exactly one song. */
+function libraryEditorLabel(editor: LibraryEditorState): string {
+  const draftTitle = editor.draft.title.trim();
+  if (draftTitle) return draftTitle;
+  return songs.find((song) => song.id === editor.songId)?.title.trim() || "Untitled song";
+}
+
+/**
+ * Opens the inline editor for one library row. Only one editor exists at a
+ * time: opening another row discards the previous draft without touching the
+ * cache, which is safe because edits are only persisted by Save. The draft is
+ * kept in state so unrelated library re-renders cannot reset it.
+ */
+function openLibraryEditor(songId: string): void {
+  if (blockLibraryActionWhileBusy()) return;
+
+  const song = songs.find((entry) => entry.id === songId);
+  if (!song) return;
+
+  if (libraryEditor?.saving) {
+    setStatus("Wait for the current song save to finish before editing another.", "info");
+    return;
+  }
+
+  if (libraryEditor?.songId === songId) {
+    focusLibraryEditor(songId);
+    return;
+  }
+
+  const previous = libraryEditor;
+  if (previous && (previous.retryPending || previous.invalidFields.size > 0)) {
+    setStatus(`Discarded the failed edit for “${libraryEditorLabel(previous)}”.`, "info");
+  }
+
+  pendingLibraryEditorFocus = null;
+  libraryEditor = {
+    songId,
+    draft: draftFromSong(song),
+    saving: false,
+    retryPending: false,
+    invalidFields: new Set(),
+    hiddenByFilter: false,
+    focusMemory: null,
+  };
+  renderLibrary();
+  focusLibraryEditor(songId);
+}
+
+/**
+ * Tracks whether the open editor's row is visible. An idle editor whose row is
+ * hidden is dropped during the same render, so clearing the filter cannot
+ * resurrect it. A saving editor is left alone until the request resolves:
+ * success closes it normally, while failure keeps the draft so clearing the
+ * filter allows a retry.
+ */
+function reconcileLibraryEditor(ordered: Song[]): void {
+  const editor = libraryEditor;
+  if (!editor) return;
+
+  const song = songs.find((entry) => entry.id === editor.songId);
+  if (!song) {
+    if (!editor.saving) {
+      libraryEditor = null;
+      pendingLibraryEditorFocus = null;
+    }
+    return;
+  }
+
+  const visible = ordered.some((entry) => entry.id === editor.songId);
+  if (visible) {
+    const wasHidden = editor.hiddenByFilter;
+    editor.hiddenByFilter = false;
+    if (!editor.saving && wasHidden && editor.retryPending) {
+      setStatus(
+        `Restored the failed edit for “${libraryEditorLabel(editor)}”. Retry Save.`,
+        "info",
+      );
+    }
+    return;
+  }
+
+  editor.hiddenByFilter = true;
+  if (editor.saving) return;
+  // A failed draft stays retry-pending even while hidden; further filter
+  // renders must not silently discard it. Clearing the filter restores it.
+  if (editor.retryPending) return;
+
+  libraryEditor = null;
+  pendingLibraryEditorFocus = null;
+  setStatus(
+    `Edit cancelled — “${libraryEditorLabel(editor)}” is hidden by the current search or filter.`,
+    "info",
+  );
+}
+
+/** Discards the open row draft and returns focus to that row's Edit button. */
+function cancelLibraryEditor(songId: string): void {
+  const editor = libraryEditor;
+  if (!editor || editor.songId !== songId || editor.saving) return;
+  if (editor.retryPending || editor.invalidFields.size > 0) {
+    setStatus(`Discarded the failed edit for “${libraryEditorLabel(editor)}”.`, "info");
+  }
+  pendingLibraryEditorFocus = null;
+  libraryEditor = null;
+  renderLibrary();
+  focusLibraryEditButton(songId);
+}
+
+function findLibraryEditor(songId: string): HTMLFormElement | null {
+  for (const form of songListEl.querySelectorAll<HTMLFormElement>("form.song-item-editor")) {
+    if (form.dataset.editSongId === songId) return form;
+  }
+  return null;
+}
+
+function focusLibraryEditor(songId: string): void {
+  const input = findLibraryEditor(songId)?.querySelector<HTMLInputElement>("input");
+  input?.focus();
+}
+
+/** Keeps focus in the library after a re-render; falls back to search when filtered out. */
+function focusLibraryEditButton(songId: string): void {
+  for (const button of songListEl.querySelectorAll<HTMLButtonElement>("button[data-edit-song-id]")) {
+    if (button.dataset.editSongId === songId) {
+      button.focus();
+      return;
+    }
+  }
+  songSearch.focus();
+}
+
+/**
+ * Focus is ours to restore only while the editor still owns it or the browser
+ * dropped it to the page body. Any deliberate move to search/sort/Add form wins.
+ */
+function shouldRestoreEditorFocus(focusTarget: HTMLElement | null): boolean {
+  const active = document.activeElement;
+  return (
+    active === null ||
+    active === document.body ||
+    active === document.documentElement ||
+    active === focusTarget
+  );
+}
+
+function isPageFocusLost(): boolean {
+  const active = document.activeElement;
+  return active === null || active === document.body || active === document.documentElement;
+}
+
+/** Converts a focused editor element into a restorable descriptor. */
+function libraryEditorFocusTargetFromElement(
+  element: Element | null,
+): LibraryEditorFocusTarget | null {
+  if (!element) return null;
+
+  const form = element.closest<HTMLFormElement>("form.song-item-editor");
+  const songId = form?.dataset.editSongId;
+  if (!form || !songId) return null;
+
+  if (element instanceof HTMLInputElement) {
+    const inputs = [...form.querySelectorAll<HTMLInputElement>("input")];
+    const inputIndex = inputs.indexOf(element);
+    if (inputIndex < 0) return null;
+    return {
+      kind: "input",
+      songId,
+      inputIndex,
+      selectionStart: element.selectionStart,
+      selectionEnd: element.selectionEnd,
+      selectionDirection: element.selectionDirection,
+    };
+  }
+
+  if (element instanceof HTMLButtonElement && element.closest(".song-editor-actions")) {
+    return {
+      kind: "button",
+      songId,
+      action: element.type === "submit" ? "save" : "cancel",
+    };
+  }
+
+  return null;
+}
+
+/** Remembers the focused inline-editor field/button before an unrelated render. */
+function captureLibraryEditorFocus(): LibraryEditorFocusTarget | null {
+  return libraryEditorFocusTargetFromElement(document.activeElement);
+}
+
+/** Restores a field/button and selection once its editor controls are enabled. */
+function restoreLibraryEditorFocus(target: LibraryEditorFocusTarget): boolean {
+  const editor = libraryEditor;
+  if (!editor || editor.songId !== target.songId) return false;
+
+  const form = findLibraryEditor(target.songId);
+  if (!form) return false;
+
+  const element =
+    target.kind === "input"
+      ? [...form.querySelectorAll<HTMLInputElement>("input")][target.inputIndex]
+      : form.querySelector<HTMLButtonElement>(
+          target.action === "save"
+            ? 'button[type="submit"]'
+            : '.song-editor-actions button:not([type="submit"])',
+        );
+  if (!element || element.disabled) return false;
+
+  element.focus();
+  if (
+    element instanceof HTMLInputElement &&
+    target.kind === "input" &&
+    target.selectionStart !== null &&
+    target.selectionEnd !== null
+  ) {
+    try {
+      element.setSelectionRange(
+        target.selectionStart,
+        target.selectionEnd,
+        target.selectionDirection ?? undefined,
+      );
+    } catch {
+      // Number inputs reject selection ranges; focus restoration still applies.
+    }
+  }
+  return true;
+}
+
+/** Applies a deferred Add-success focus restore once save controls re-enable. */
+function restorePendingLibraryEditorFocus(): void {
+  const pending = pendingLibraryEditorFocus;
+  if (!pending) return;
+  if (!isPageFocusLost()) {
+    pendingLibraryEditorFocus = null;
+    return;
+  }
+  if (!libraryEditor || libraryEditor.songId !== pending.songId) {
+    pendingLibraryEditorFocus = null;
+    return;
+  }
+  if (restoreLibraryEditorFocus(pending)) {
+    pendingLibraryEditorFocus = null;
+  }
+}
+
+/** Locks every control in an inline editor while its upsert is in flight. */
+function setLibraryEditorBusy(form: HTMLFormElement, busy: boolean): void {
+  form.setAttribute("aria-busy", String(busy));
+  for (const input of form.querySelectorAll<HTMLInputElement>("input")) {
+    input.disabled = busy;
+  }
+  for (const button of form.querySelectorAll<HTMLButtonElement>("button")) {
+    button.disabled = busy;
+  }
+  const saveButton = form.querySelector<HTMLButtonElement>('button[type="submit"]');
+  if (saveButton) {
+    saveButton.textContent = busy ? "Saving…" : "Save";
+  }
+}
+
+/**
+ * Inline library editor with the same fields and bounds as "Add to library".
+ * The form is a sibling of the row actions (never nested in a button), so Enter
+ * saves through normal form submission; Escape cancels. Values come from the
+ * state draft so re-renders cannot reset partially typed fields.
+ */
+function buildLibraryEditor(
+  song: Song,
+  state: LibraryEditorState,
+): HTMLFormElement {
+  const draft = state.draft;
+  const form = el("form", "song-item-editor");
+  form.id = libraryEditorId(song.id);
+  form.dataset.editSongId = song.id;
+  form.noValidate = true;
+  form.setAttribute("aria-label", `Edit ${song.title} in the library`);
+
+  const fields = el("div", "item-fields song-editor-fields");
+
+  const titleField = textField("Title", draft.title, "Song title");
+  titleField.element.classList.add("song-editor-wide");
+  titleField.input.required = true;
+  titleField.input.autocomplete = "off";
+
+  const artistField = textField("Artist", draft.artist, "Artist");
+  artistField.element.classList.add("song-editor-wide");
+  artistField.input.autocomplete = "off";
+
+  const keyField = textField("Key", draft.key, "Em");
+  keyField.input.maxLength = 12;
+  keyField.input.autocomplete = "off";
+
+  const tuningField = textField("Tuning", draft.tuning, "E Std");
+  tuningField.input.maxLength = 24;
+  tuningField.input.autocomplete = "off";
+
+  const bpmField = numberField("BPM", null, 1, 400);
+  bpmField.input.value = draft.bpm;
+
+  const durationField = textField("Duration", draft.duration, "4:30");
+  durationField.input.inputMode = "numeric";
+
+  const notesField = textField("Comment", draft.notes, "Count-in, capo, cue…");
+  notesField.element.classList.add("song-editor-wide");
+  notesField.input.maxLength = MAX_COMMENT_CHARS;
+  notesField.input.autocomplete = "off";
+
+  fields.append(
+    titleField.element,
+    artistField.element,
+    keyField.element,
+    tuningField.element,
+    bpmField.element,
+    durationField.element,
+    notesField.element,
+  );
+
+  const fieldInputs: Record<keyof LibrarySongDraft, HTMLInputElement> = {
+    title: titleField.input,
+    artist: artistField.input,
+    key: keyField.input,
+    tuning: tuningField.input,
+    bpm: bpmField.input,
+    duration: durationField.input,
+    notes: notesField.input,
+  };
+  for (const key of state.invalidFields) {
+    markFieldInvalid(fieldInputs[key], true);
+  }
+
+  const rememberFocus = (event: Event): void => {
+    const editor = libraryEditor;
+    if (!editor || editor.songId !== song.id) return;
+    const target = libraryEditorFocusTargetFromElement(
+      event.target instanceof Element ? event.target : null,
+    );
+    if (target) editor.focusMemory = target;
+  };
+  form.addEventListener("focusin", rememberFocus);
+  for (const input of Object.values(fieldInputs)) {
+    for (const eventName of ["input", "keyup", "mouseup", "select"] as const) {
+      input.addEventListener(eventName, rememberFocus);
+    }
+  }
+
+  const updateDraft = (key: keyof LibrarySongDraft, input: HTMLInputElement): void => {
+    input.addEventListener("input", () => {
+      const editor = libraryEditor;
+      if (!editor || editor.songId !== song.id || editor.saving) return;
+      editor.draft[key] = input.value;
+      if (editor.invalidFields.delete(key)) {
+        markFieldInvalid(input, false);
+      }
+    });
+  };
+
+  updateDraft("title", titleField.input);
+  updateDraft("artist", artistField.input);
+  updateDraft("key", keyField.input);
+  updateDraft("tuning", tuningField.input);
+  updateDraft("bpm", bpmField.input);
+  updateDraft("duration", durationField.input);
+  updateDraft("notes", notesField.input);
+
+  const actions = el("div", "song-editor-actions");
+  const cancelButton = el("button", "btn btn-small", "Cancel");
+  cancelButton.type = "button";
+  const saveButton = el("button", "btn btn-small btn-primary", "Save");
+  saveButton.type = "submit";
+  actions.append(cancelButton, saveButton);
+
+  form.addEventListener("submit", (event) => {
+    event.preventDefault();
+    const state = libraryEditor;
+    if (!state || state.songId !== song.id || state.saving) return;
+    if (blockLibraryActionWhileBusy()) return;
+    if (!ensureBackend()) return;
+
+    const title = state.draft.title.trim();
+    if (!title) {
+      state.invalidFields.add("title");
+      markFieldInvalid(titleField.input, true);
+      setStatus("Song title is required.", "error");
+      titleField.input.focus();
+      return;
+    }
+
+    const bpmRaw = state.draft.bpm.trim();
+    const bpm = bpmRaw ? Number(bpmRaw) : null;
+    if (bpm !== null && (!Number.isInteger(bpm) || bpm < 1 || bpm > 400)) {
+      state.invalidFields.add("bpm");
+      markFieldInvalid(bpmField.input, true);
+      setStatus("BPM must be a whole number between 1 and 400.", "error");
+      bpmField.input.focus();
+      return;
+    }
+
+    const durationRaw = state.draft.duration.trim();
+    const duration = parseDuration(durationRaw);
+    if (durationRaw && duration === null) {
+      state.invalidFields.add("duration");
+      markFieldInvalid(durationField.input, true);
+      setStatus("Duration must use mm:ss, for example 4:30.", "error");
+      durationField.input.focus();
+      return;
+    }
+
+    const edited: Song = {
+      id: song.id,
+      title,
+      artist: trimmedOrNull(state.draft.artist),
+      bpm,
+      key: trimmedOrNull(state.draft.key),
+      tuning: trimmedOrNull(state.draft.tuning),
+      duration_secs: duration,
+      notes: trimmedOrNull(state.draft.notes),
+    };
+
+    const focusTarget =
+      form.contains(document.activeElement) && document.activeElement instanceof HTMLElement
+        ? document.activeElement
+        : null;
+
+    state.retryPending = false;
+    state.saving = true;
+    setStatus(`Saving “${edited.title}”…`);
+    setLibraryEditorBusy(form, true);
+    libraryWritesInFlight += 1;
+    void saveEditedLibrarySong(edited, state, focusTarget).finally(() => {
+      libraryWritesInFlight -= 1;
+      if (libraryEditor === state) {
+        state.saving = false;
+        const currentForm = findLibraryEditor(song.id) ?? form;
+        setLibraryEditorBusy(currentForm, false);
+        if (
+          focusTarget &&
+          currentForm.contains(focusTarget) &&
+          shouldRestoreEditorFocus(focusTarget)
+        ) {
+          focusTarget.focus();
+        }
+      }
+      restorePendingLibraryEditorFocus();
+    });
+  });
+
+  cancelButton.addEventListener("click", () => {
+    cancelLibraryEditor(song.id);
+  });
+
+  form.addEventListener("keydown", (event) => {
+    if (event.key === "Escape") {
+      event.preventDefault();
+      cancelLibraryEditor(song.id);
+    }
+  });
+
+  form.append(fields, actions);
+  setLibraryEditorBusy(form, state.saving);
+  return form;
+}
+
+/**
+ * Upserts the edited song under its stable id through the normal command, then
+ * re-sorts and re-renders so the active search/sort/tuning filter still applies.
+ */
+async function saveEditedLibrarySong(
+  edited: Song,
+  state: LibraryEditorState,
+  focusTarget: HTMLElement | null,
+): Promise<void> {
+  try {
+    const saved = await api.saveSong(edited);
+    const index = songs.findIndex((song) => song.id === saved.id);
+    if (index >= 0) {
+      songs[index] = saved;
+    } else {
+      songs.push(saved);
+    }
+    sortSongsByTitle();
+
+    const closedEditor = libraryEditor === state;
+    if (closedEditor) libraryEditor = null;
+    renderLibrary();
+    setStatus(
+      `Updated “${saved.title}” in the library. Setlists keep their own copies.`,
+      "success",
+    );
+    if (closedEditor && focusTarget && shouldRestoreEditorFocus(focusTarget)) {
+      focusLibraryEditButton(saved.id);
+    }
+  } catch (error) {
+    // Keep the editor/draft retryable (even while a filter hides the row). The
+    // hint only appears when the row is currently filtered out; visibility
+    // transitions replace this message with a restore notice.
+    state.retryPending = true;
+    const hint = state.hiddenByFilter ? " Clear the search or filter to retry." : "";
+    setStatus(
+      `Could not save “${edited.title.trim() || libraryEditorLabel(state)}” in the library: ${describeError(error)}${hint}`,
+      "error",
+    );
   }
 }
 
 /** Saves a copy of a library song under a new id and a non-colliding “(copy)” title. */
 async function duplicateLibrarySong(song: Song): Promise<void> {
+  if (blockLibraryActionWhileBusy()) return;
   if (!ensureBackend()) return;
 
   const copy: Song = {
@@ -1659,6 +2433,7 @@ async function duplicateLibrarySong(song: Song): Promise<void> {
     title: duplicateSongTitle(song.title),
   };
 
+  libraryWritesInFlight += 1;
   try {
     const saved = await api.saveSong(copy);
     songs.push(saved);
@@ -1667,6 +2442,8 @@ async function duplicateLibrarySong(song: Song): Promise<void> {
     setStatus(`Duplicated “${song.title}” as “${saved.title}”.`, "success");
   } catch (error) {
     setStatus(`Could not duplicate song: ${describeError(error)}`, "error");
+  } finally {
+    libraryWritesInFlight -= 1;
   }
 }
 
@@ -1685,6 +2462,7 @@ function duplicateSongTitle(title: string): string {
 }
 
 function addSongToSetlist(song: Song): void {
+  if (blockLibraryActionWhileBusy()) return;
   if (!current) return;
 
   current.items.push({ Song: { ...song } });
@@ -1695,18 +2473,30 @@ function addSongToSetlist(song: Song): void {
 }
 
 async function deleteLibrarySong(song: Song): Promise<void> {
+  if (blockLibraryActionWhileBusy()) return;
   if (!ensureBackend()) return;
+  if (libraryEditor?.songId === song.id && libraryEditor.saving) {
+    setStatus("Wait for this song's save to finish before deleting it.", "info");
+    return;
+  }
   if (!window.confirm(`Remove “${song.title}” from the library? Setlists keep their own copies.`)) {
     return;
   }
 
+  libraryWritesInFlight += 1;
   try {
     await api.deleteSong(song.id);
     songs = songs.filter((entry) => entry.id !== song.id);
+    if (libraryEditor?.songId === song.id) {
+      libraryEditor = null;
+      pendingLibraryEditorFocus = null;
+    }
     renderLibrary();
     setStatus(`Removed “${song.title}” from the library.`);
   } catch (error) {
     setStatus(`Could not remove song: ${describeError(error)}`, "error");
+  } finally {
+    libraryWritesInFlight -= 1;
   }
 }
 
@@ -1912,6 +2702,15 @@ function newId(): string {
 function trimmedOrNull(value: string): string | null {
   const trimmed = value.trim();
   return trimmed ? trimmed : null;
+}
+
+function markFieldInvalid(input: HTMLInputElement, invalid: boolean): void {
+  input.classList.toggle("is-invalid", invalid);
+  if (invalid) {
+    input.setAttribute("aria-invalid", "true");
+  } else {
+    input.removeAttribute("aria-invalid");
+  }
 }
 
 function clamp(value: number, min: number, max: number): number {

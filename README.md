@@ -130,8 +130,11 @@ artist, key, and tuning. A view-only sort control orders the list by title
 title. The **Has tuning** checkbox narrows the list to songs with a tuning set and
 combines with the search query. Each row adds the song to the running order,
 duplicates it into the library under a new id with a `(copy)` suffix, or removes
-it after a confirmation. Sorting and filtering never mark a setlist dirty or
-change the stored data.
+it after a confirmation. **Edit** opens an inline editor in the row with the same
+fields and validation as the add form; saving keeps the song's id and re-applies
+the current search, sort, and tuning filter, while saved setlists keep their own
+copies. Sorting and filtering never mark a setlist dirty or change the stored
+data.
 
 ## Backup and restore
 
@@ -157,6 +160,14 @@ a clear "update StageSheet" message instead of being partially imported.
 
 Restore overwrites existing songs and setlists with the same IDs and does not
 delete anything else. Malformed records are skipped and reported with counts.
+Back up and Restore require open library drafts to be saved or cancelled first
+and refuse while a library write is in flight. Back up locks library row actions
+and the Add submit while it reads the snapshot; Restore does the same during its
+write phase and re-enables them when the restore finishes (after adopting on
+success or after the failure path). The setlist editor and header actions are
+not locked, and a setlist draft edited during a restore can be replaced by the
+restored state.
+
 **Logo images are not embedded in v1**: a setlist keeps its `logo.file_name`, so
 restoring on the same device keeps working, but on a new device the image is
 missing and must be re-imported manually for each setlist. A later envelope
@@ -204,9 +215,11 @@ change.
   defaults and aliases.
 - JSON storage + capability scoping + the full command list above.
 - Song library with instant search (title, artist, key, tuning), view-only sort by
-  title/artist/key/tuning, a "Has tuning" filter, one-click add, per-row duplicate
-  under a new id, and delete with confirmation. Free-text tuning (max 24 chars) is
-  part of search, the add form, and each song's editor details.
+  title/artist/key/tuning, a "Has tuning" filter, one-click add, inline row
+  editing with the add form's validation and field limits (stable id, re-sorted
+  and re-filtered after save), per-row duplicate under a new id, and delete with
+  confirmation. Free-text tuning (max 24 chars) is part of search, the add form,
+  the library editor, and each setlist song's editor details.
 - Setlist editor: title/venue/date, break insertion (custom label, length in
   minutes, comment), up/down + drag reorder, inline BPM/key/tuning editing,
   Comment fields for songs and breaks (max 140 chars) that render on the sheet,
@@ -268,10 +281,10 @@ change.
 
 ### Still missing (per plan)
 
-- Planned library/setlist tooling (Features 12–17, Todo): in-place library
-  song editing, setlist duplication as a preset base, managed artists
-  (name + logo) with record-based library filter and per-artist setlist
-  picker + lock, and break durations with second precision.
+- Planned library/setlist tooling (Features 13–17, Todo): setlist duplication as
+  a preset base, managed artists (name + logo) with record-based library filter
+  and per-artist setlist picker + lock, and break durations with second
+  precision.
 - Paginated split-setlist helper (duplicate setlist, move second half) as an
   alternative to multi-page mode.
 - Physical-paper QA on A4 (page count, header/footer per engine, legibility),

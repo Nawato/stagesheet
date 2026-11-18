@@ -130,11 +130,11 @@ harness were removed when the exporter shipped.
 - Sheet correctness fixes from real use: Feature 10 done (per-combination
   column widths + header alignment); Feature 11 done (paginated
   preview/print frames). Both outrank new tooling.
-- Library/setlist tooling slice: Features 12–17 are Todo, Feature 18 is Done.
-  In-place library song editing, setlist duplication as a preset base, and
-  break seconds. Features 12–13 and 17 are independent; 14 → 15 → 16 form the
-  artist chain: 14 (artist records + logos) → 15 (library artist filter) → 16
-  (setlist artist + per-artist picker + lock).
+- Library/setlist tooling slice: Feature 12 is Done; Features 13–17 are Todo,
+  Feature 18 is Done. In-place library song editing shipped; setlist duplication
+  as a preset base and break seconds remain. Features 13 and 17 are independent;
+  14 → 15 → 16 form the artist chain: 14 (artist records + logos) → 15 (library
+  artist filter) → 16 (setlist artist + per-artist picker + lock).
 - `tauri android init` / `ios init` on provisioned machines; native share.
 - Print QA on real A4 (checklist below), backup/restore, app versioning,
   signing/release automation (tracked in the roadmap, P3).
@@ -161,8 +161,8 @@ black-on-white. Plus Vitest units for `format.ts` (`parseDuration`,
 `formatDuration`, `formatRuntime`). Keep the harness small; paper QA stays
 manual by design. Feature 18 has landed with its manual QA (button location
 at full and narrowed widths, confirm for persisted/draft setlists, cancel
-keeps everything, post-delete selection + logo cleanup). Features 12–17 land
-with the manual QA matrices in their specs (edit validation + id stability,
+keeps everything, post-delete selection + logo cleanup). The library/setlist
+tooling specs carry their manual QA matrices (edit validation + id stability,
 duplicate fidelity, break conversion, artist CRUD + adoption, filter
 combinations, lock gating + backup round trip); harness coverage follows the
 same pattern once built.
@@ -235,3 +235,28 @@ WebView2/WKWebView when available):**
   and footer in preview and print; frame count equals exported PDF page
   count). Both P0 sheet-correctness items from real use are now done;
   physical-paper QA and cross-engine checks remain on the Phase 6 checklist.
+- 2026-11-18: Feature 12 shipped (inline library song editor with the add
+  form's validation and bounds, stable-id upsert through `save_song`, active
+  search/sort/tuning filter preserved, Cancel/Escape discard without touching
+  the cache, copy-semantics status line). Drafts and validation markers survive
+  unrelated library re-renders; an idle hidden row cancels with a status
+  announcement, while a hidden row during a save resolves on outcome (success
+  closes normally, failure marks the draft retry-pending so it survives later
+  hidden renders and returns with a titled retry notice). Failed/discard
+  statuses name the song. Saves lock the fields and a retry clears
+  retry-pending with a titled “Saving…” status. Focus restoration is
+  ownership-aware, Ctrl/Cmd+S routes to the active song form, row deletion is
+  blocked while that song is saving, Add-to-library requests are single-flight,
+  a successful Add preserves a focused inline editor’s caret, and Add failures
+  name the attempted title. Back up/Restore refuse while a library write is in
+  flight or an inline draft (including failed) is open, and both lock library
+  rows/Add while they own the snapshot; Restore re-enables them when it
+  finishes (after adopting on success or on the failure path). Setlist
+  editor/header actions stay unlocked, and a setlist draft edited during restore
+  may be replaced by the adopted state. A successful Add focuses its title when
+  the Add form still owns focus (including page-lost focus when no editor draft
+  exists), or when it owned focus at submit, focus remains page-lost, and no
+  inline editor focus target exists; otherwise a focused inline field/button and
+  selection are restored, with outside focus cancelling any deferred restore. No
+  Rust, IPC, storage, backup-file format, or contract change. Features 13–17
+  remain Todo.

@@ -457,11 +457,16 @@ input[type="file"]::file-selector-button {
   list-style: none;
 }
 
+.song-list.has-editor {
+  max-height: none;
+}
+
 .song-item {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   justify-content: space-between;
-  gap: 8px;
+  gap: 4px 8px;
   padding: 6px 6px 6px 12px;
   border: 1px solid var(--line);
   border-radius: 10px;
@@ -470,6 +475,7 @@ input[type="file"]::file-selector-button {
 
 .song-info {
   display: flex;
+  flex: 1 1 160px;
   flex-direction: column;
   gap: 1px;
   min-width: 0;
@@ -493,7 +499,36 @@ input[type="file"]::file-selector-button {
 .song-item-actions {
   display: flex;
   flex: 0 0 auto;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  max-width: 100%;
   gap: 2px;
+  margin-left: auto;
+}
+
+/* Inline library editor: the row wraps so the form sits under its summary. */
+.song-item.is-editing {
+  align-items: flex-start;
+}
+
+.song-item-editor {
+  display: flex;
+  flex: 1 0 100%;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 2px;
+  padding-top: 8px;
+  border-top: 1px dashed var(--line);
+}
+
+.song-editor-wide {
+  grid-column: 1 / -1;
+}
+
+.song-editor-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
 }
 
 .song-form {

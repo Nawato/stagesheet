@@ -30,8 +30,8 @@ written (legacy `artist` text stays as a display fallback until adopted).
 
 Full specs lived here until the 2026-11 cleanup; the contract facts below are
 all mirrored in `SKILL.md`, which is now the single authority for shipped
-behavior. Feature 18 (setlist Delete-clarity) is Done; its spec remains below
-as reference.
+behavior. Features 12 (edit library songs) and 18 (setlist Delete-clarity) are
+Done; their specs remain below as reference.
 
 - **Validation hardening (with Feature 2)** — Done. `Setlist::validate()` walks
   every item. Bounds enforced in Rust: break `duration_mins` `0..=600`, break
@@ -88,13 +88,38 @@ as reference.
   export/measurement source. Frame count equals exported PDF page count.
   WebKitGTK frames are normalized with `zoom: 0.885` in print.
 
-## Feature 12: Edit library songs — Todo
+## Feature 12: Edit library songs — Done
 
-Status: Todo. Library rows today offer Add / Duplicate / Delete only, so a
-typo fix means delete + re-add under a new id. Setlist-side editing already
-exists (title/venue/date inputs plus per-row "Edit details" / "Edit break"),
-so this feature is the library half of "edit existing songs and playlists";
-no setlist-editor change ships here.
+Status: Done. Library rows used to offer Add / Duplicate / Delete only, so a
+typo fix meant delete + re-add under a new id. Per-row **Edit** now opens an
+inline editor in the row; Save upserts the same id and re-applies the active
+search/sort/tuning filter, Cancel (or Escape) discards the draft without
+touching the cache. Only one row editor is open at a time — opening another
+discards the previous draft. Drafts and validation markers survive unrelated
+library re-renders. If the active search or filter hides an idle edited row,
+the editor closes and the status line announces the cancellation so clearing
+the filter cannot resurrect it; while a save is in flight the hidden state is
+deferred until the outcome is known — success closes the edit normally, while
+failure marks the draft retry-pending and reports a titled error. Retry-pending
+drafts stay alive across further hidden renders; clearing the filter restores
+the editor with a titled “retry Save” notice. Starting a retry clears
+retry-pending and shows a titled `Saving “<title>”…` status, so restore notices
+cannot appear while the request is running. Opening another row or cancelling
+discards a failed draft with a titled discard message. Back up and Restore
+refuse while a library write is in flight or an inline draft (including a failed
+one) is open. Hidden retry-pending drafts add “Clear the search or filter, then
+save or cancel…” to that guard. Back up locks library rows and the Add submit
+while it reads the snapshot; Restore does the same during its write phase and
+re-enables them when it finishes (after adopting on success or on the failure
+path). These locks do not cover the setlist editor or header actions, and a
+setlist draft edited during a restore can be replaced by the adopted state. A
+successful Add focuses its title when the Add form still owns focus (including
+page-lost focus when no editor draft exists), or when the Add form owned focus
+at submit, focus is still page-lost, and no inline editor focus target exists;
+otherwise it restores the focused inline editor field or Save/Cancel button and
+selection. Deferred focus restores are cancelled by an outside focus and only
+apply while focus remains page-lost. Setlist-side editors are unchanged,
+and no data-contract change was needed.
 
 Locked answer to the "songs must be uniform" feedback: the library is the one
 canonical edit place, and setlist items stay copies on purpose (a gig snapshot
@@ -133,6 +158,38 @@ field is a record dropdown; until then it stays the free-text input.)
   bad duration, over-long tuning/comment); id stable across save (check
   `songs.json`); saved setlists byte-identical after a library edit; backup
   round trip unaffected.
+- Draft/state QA: type in the editor, then trigger search, sort, Has tuning,
+  add, duplicate, and delete-another-song in turn; the draft must survive each
+  rebuild. Hiding an idle edited row cancels it with the draft title in the
+  status message, and clearing the filter must not bring it back. Validation
+  styling and `aria-invalid` survive a re-render and clear per field on input.
+- Save/filter race QA: hide the edited row during an in-flight save. Success
+  closes normally with the Updated status; failure reports a titled error and
+  marks the draft retry-pending. Retry-pending drafts survive further hidden
+  renders; clearing the filter restores the editor with a titled retry notice.
+  Starting the retry replaces that notice with `Saving “<title>”…` and clears
+  retry-pending. Opening another row or cancelling discards the failed draft
+  with a titled message. The row cannot be deleted while its save is in flight.
+- Backup/restore QA: Back up and Restore refuse with a titled message while a
+  library write is in flight or a normal/failed inline draft is open; hidden
+  retry-pending drafts add the “Clear the search or filter, then…” instruction.
+  Back up locks library rows and the Add submit while reading the snapshot, and
+  Restore locks them during its write phase and re-enables them when the
+  operation finishes (success or failure). The setlist editor/header actions
+  stay unlocked and a setlist draft edited during restore may be replaced by the
+  adopted state.
+- Focus and keyboard QA: every field and Save are disabled during the request;
+  focus returns to Edit only when it was still in the editor or lost to the page
+  body, never stealing from search/sort/Add. A successful Add focuses its title
+  when the Add form still owns focus (including page-lost focus when no editor
+  draft exists), or when the Add form owned focus at submit, focus is still
+  page-lost, and no inline editor focus target exists; otherwise it restores the
+  focused inline editor field or Save/Cancel button and selection. Deferred
+  restores are cancelled by focusing outside the editor and only apply while
+  focus remains page-lost. Ctrl/Cmd+S inside the inline editor saves the song,
+  inside the Add form adds the song, and elsewhere saves the setlist. Repeated
+  shortcuts do not double-submit, and a failed Add preserves the typed values
+  and names the tried title.
 
 ### Build order
 
@@ -484,11 +541,11 @@ misread instead of adding new behavior.
   (multi-page mode + sub-70% legibility nudge). Feature 13 adds setlist
   duplication; the remaining slice is a split-setlist helper (move second half
   to a new setlist) as an alternative to multi-page.
-- **P1 — Library/setlist tooling**: Feature 18 (delete clarity) is Done.
-  Feature 12 (edit library songs) and Feature 13 (duplicate setlist as preset
-  base) are independent; Feature 17 (break seconds) is likewise independent.
-  Then the artist chain in order: 14 (artist records + logos) → 15 (library
-  artist filter) → 16 (setlist artist + per-artist picker + lock).
+- **P1 — Library/setlist tooling**: Features 12 (edit library songs) and 18
+  (delete clarity) are Done. Feature 13 (duplicate setlist as preset base) and
+  Feature 17 (break seconds) are independent and remain Todo. Then the artist
+  chain in order: 14 (artist records + logos) → 15 (library artist filter) →
+  16 (setlist artist + per-artist picker + lock).
 - **P1 — Backup/restore**: Done (Feature 7). One versioned JSON envelope for
   the full library + setlists; logos are re-imported manually in v1.
   Feature 14 adds the `artists` array without a version bump.
