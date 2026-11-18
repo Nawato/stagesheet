@@ -278,9 +278,6 @@ const newSongDuration = byId<HTMLInputElement>("new-song-duration");
 const newSongNotes = byId<HTMLInputElement>("new-song-notes");
 const addSongButton = songForm.querySelector<HTMLButtonElement>('button[type="submit"]');
 
-const backupExportButton = byId<HTMLButtonElement>("backup-export");
-const backupRestoreButton = byId<HTMLButtonElement>("backup-restore");
-
 const titleInput = byId<HTMLInputElement>("setlist-title");
 const venueInput = byId<HTMLInputElement>("setlist-venue");
 const dateInput = byId<HTMLInputElement>("setlist-date");
@@ -487,12 +484,6 @@ function bindEvents(): void {
     }
   });
   addBreakButton.addEventListener("click", addBreak);
-  backupExportButton.addEventListener("click", () => {
-    void backUpLibrary();
-  });
-  backupRestoreButton.addEventListener("click", () => {
-    void restoreLibrary();
-  });
 
   itemList.addEventListener("click", handleItemClick);
   bindDragReorder();
@@ -1289,8 +1280,6 @@ async function backUpLibrary(): Promise<void> {
 
   try {
     backingUp = true;
-    backupExportButton.disabled = true;
-    backupRestoreButton.disabled = true;
     syncAddSongControls();
     renderLanding();
     // Disable row actions for the whole snapshot read/write; handlers also
@@ -1330,8 +1319,6 @@ async function backUpLibrary(): Promise<void> {
     setStatus(`Backup failed: ${describeError(error)}`, "error");
   } finally {
     backingUp = false;
-    backupExportButton.disabled = false;
-    backupRestoreButton.disabled = false;
     syncAddSongControls();
     renderLanding();
     renderLibrary();
@@ -1404,8 +1391,6 @@ async function restoreLibrary(): Promise<void> {
 
   try {
     restoring = true;
-    backupExportButton.disabled = true;
-    backupRestoreButton.disabled = true;
     syncAddSongControls();
     renderLanding();
     // Row controls are guarded in their handlers; this render applies the visual
@@ -1478,8 +1463,6 @@ async function restoreLibrary(): Promise<void> {
     );
   } finally {
     restoring = false;
-    backupExportButton.disabled = false;
-    backupRestoreButton.disabled = false;
     syncAddSongControls();
     renderLanding();
     renderLibrary();
@@ -4398,6 +4381,7 @@ function buildLandingCard(): DocumentFragment {
       landingHeading("Create your first artist"),
       landingSub("StageSheet is organized by artist. Create one to open its song library and setlists."),
       buildLandingCreateForm(),
+      buildLandingBackupSection(),
     );
   } else {
     fragment.append(
@@ -4421,13 +4405,14 @@ function buildLandingCard(): DocumentFragment {
       const toggle = el("button", "btn", "New artist");
       toggle.type = "button";
       toggle.dataset.landingNewToggle = "true";
-      toggle.disabled = artistBusy || artistDeleting || landingBusy;
+      toggle.disabled = artistBusy || artistDeleting || landingBusy || restoring || backingUp;
       toggle.addEventListener("click", () => {
         landingShowCreate = true;
         renderLanding();
       });
       fragment.append(toggle);
     }
+    fragment.append(buildLandingBackupSection());
   }
 
   if (scoped) {
@@ -4437,6 +4422,46 @@ function buildLandingCard(): DocumentFragment {
     fragment.append(close);
   }
   return fragment;
+}
+
+/**
+ * Backup section on the landing card (Feature 24): the same Back up / Restore
+ * entry points as the retired library-pane fieldset, so restore works before
+ * entering any scope. The card rebuilds from restored data via `renderAll`,
+ * and the user then enters a scope. Buttons live on the card, so the
+ * background `inert` scope does not block them.
+ */
+function buildLandingBackupSection(): HTMLElement {
+  const section = el("section", "landing-backup");
+  section.setAttribute("aria-labelledby", "landing-backup-heading");
+  const heading = el("h3", undefined, "Backup");
+  heading.id = "landing-backup-heading";
+  const hint = el(
+    "p",
+    "landing-backup-hint",
+    "One JSON file with every artist, song, and setlist. Logos are not included — re-import them after restoring on another device.",
+  );
+  hint.id = "landing-backup-hint";
+  section.setAttribute("aria-describedby", "landing-backup-hint");
+  const actions = el("div", "landing-backup-actions");
+  const busy = backingUp || restoring;
+  const backUpButton = el("button", "btn btn-small", "Back up");
+  backUpButton.type = "button";
+  backUpButton.id = "backup-export";
+  backUpButton.disabled = busy;
+  backUpButton.addEventListener("click", () => {
+    void backUpLibrary();
+  });
+  const restoreButton = el("button", "btn btn-small", "Restore");
+  restoreButton.type = "button";
+  restoreButton.id = "backup-restore";
+  restoreButton.disabled = busy;
+  restoreButton.addEventListener("click", () => {
+    void restoreLibrary();
+  });
+  actions.append(backUpButton, restoreButton);
+  section.append(heading, hint, actions);
+  return section;
 }
 
 function landingHeading(text: string): HTMLHeadingElement {

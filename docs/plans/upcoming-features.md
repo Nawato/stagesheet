@@ -1159,15 +1159,27 @@ validation, logo pool, and deletion-nulling are untouched.
 2. QA + `SKILL.md` note (where artist UI lives) + this file status +
    commit.
 
-## Feature 24: Backup & Restore on the landing screen — Todo
+## Feature 24: Backup & Restore on the landing screen — Done
 
-Status: Todo, medium, builds on Features 20 and 23. From user feedback:
-backup/restore should be a separate button set in the artist
+Status: Done, medium, builds on Features 20 and 23. From user feedback: backup/restore should be a separate button set in the artist
 selection/creation screen — and it fixes the v0.3.0 UX finding that a
 fresh-device restore currently needs a throwaway artist first.
 
-Context: the backup fieldset lives in the library pane, which is
+Context: the backup fieldset lived in the library pane, which is
 `inert` while the landing overlay gates the workspace.
+
+### Shipped notes
+
+The library-pane `.backup-controls` fieldset (markup, hint copy, CSS,
+handlers) is removed. The landing card carries a **Backup** section with
+separate **Back up** and **Restore** buttons (same labels) wired to the same
+`backUpLibrary` / `restoreLibrary` entry points — same guards (including the
+landing-draft guard with the re-check after the file is picked), same dirty
+auto-save before backup, same per-record reporting. The section renders on the
+first-run card too, so a fresh profile restores before entering any scope;
+after a restore the card rebuilds from the restored artists/songs/setlists
+(counts and the Unfiled entry refresh) and the user then enters a scope. No
+envelope, schema, IPC, storage, or Rust change.
 
 ### Data model
 
@@ -1342,7 +1354,7 @@ logo sizing instead of mm, selectable/vector PDF text, mobile, SQLite.
 - **P1 — v0.3.1 slice**: Feature 22 (Duplicate beside New before Save, Todo),
   Feature 23 (artist management on the landing screen, out of the
   library pane — Done), Feature 24 (Backup & Restore on the landing screen,
-  incl. restore-before-scope), Feature 25 (v0.3.0 review hardening:
+  incl. restore-before-scope — Done), Feature 25 (v0.3.0 review hardening:
   export/scope locks, alignment binding, dangling-id resolver, unfiled
   guidance, backend small items), and Feature 26 (UI polish + language
   pass). The split-setlist helper stays open behind these.

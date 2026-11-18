@@ -839,8 +839,7 @@ input[type="file"]::file-selector-button {
   border-radius: 12px;
 }
 
-.logo-controls legend,
-.backup-controls legend {
+.logo-controls legend {
   padding: 0 6px;
   color: var(--ink-soft);
   font-size: 11px;
@@ -853,28 +852,6 @@ input[type="file"]::file-selector-button {
   margin: 0;
   color: var(--ink-soft);
   font-size: 12px;
-}
-
-.backup-controls {
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-  margin-top: 18px;
-  padding: 12px;
-  border: 1px solid var(--line);
-  border-radius: 12px;
-}
-
-.backup-hint {
-  margin: 0;
-  color: var(--ink-soft);
-  font-size: 12px;
-}
-
-.backup-actions {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
 }
 
 .logo-row {
@@ -1797,6 +1774,36 @@ input[type="file"]::file-selector-button {
 .landing-logo-preview img {
   max-height: 64px;
   max-width: 100%;
+}
+
+/* Backup section on the landing card (Feature 24). Buttons reuse .btn sizing
+   (44px targets, visible labels, native keyboard focus). */
+.landing-backup {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding-top: 14px;
+  border-top: 1px dashed var(--line);
+}
+
+.landing-backup h3 {
+  margin: 0;
+  font-size: 12px;
+  font-weight: 800;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+}
+
+.landing-backup-hint {
+  margin: 0;
+  color: var(--ink-soft);
+  font-size: 12px;
+}
+
+.landing-backup-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
 }
 
 /* Read-only owning artist in the library editor (artist scope). */

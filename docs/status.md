@@ -119,7 +119,10 @@ commit as each change.
   build plus `cargo test` on `ubuntu-latest` with the webkit2gtk-4.1 packages,
   cached npm/Cargo downloads. No secrets, bundles, signing, or mobile builds.
 - One-file backup/restore of artists, the whole song library, and every setlist
-  as a versioned JSON envelope (`schema_version: 1`), written and read through
+  as a versioned JSON envelope (`schema_version: 1`), from a Backup section on
+  the landing card (Back up / Restore, same guards and per-record reporting —
+  restore works before entering any scope, then the user enters one). Written
+  and read through
   the dialog-scoped fs permission with no new commands or capability widening.
   Restore validates records, re-saves them through the normal commands
   (artists first, unfiled records through the allowance), and reports
@@ -130,8 +133,6 @@ commit as each change.
 ## Still missing (per plan)
 
 - Feature 22 — Duplicate moves beside New, before Save in the header.
-- Feature 24 — Backup & Restore move to the landing screen, so a restore
-  works before entering any artist scope.
 - Feature 25 — v0.3.0 review hardening: export/scope locks, alignment
   binding, dangling-id resolver, unfiled guidance, backend small items.
 - Feature 26 — UI polish + language pass (menu anchor, spacing, header

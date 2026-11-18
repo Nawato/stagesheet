@@ -138,10 +138,12 @@ harness were removed when the exporter shipped.
   assigned), break-second precision, and the effective logo width control
   shipped. Duplication copies the setlist artist and shares the logo file. The
   only remaining overflow tool is the split-setlist helper. Feature 23
-  (artist management on the landing screen, out of the library pane) is Done.
+  (artist management on the landing screen, out of the library pane) is Done,
+  and Feature 24 (Backup & Restore on the landing screen, incl.
+  restore-before-scope) is Done.
   Specced next (Todo): Feature 22 (Duplicate beside New before Save),
-  Feature 24 (Backup & Restore on the landing screen), Feature 25 (v0.3.0
-  review hardening), and Feature 26 (UI polish + language pass).
+  Feature 25 (v0.3.0 review hardening), and Feature 26 (UI polish + language
+  pass).
 - `tauri android init` / `ios init` on provisioned machines; native share.
 - Print QA on real A4 (checklist below), backup/restore, app versioning,
   signing/release automation (tracked in the roadmap, P3).
@@ -415,3 +417,10 @@ WebView2/WKWebView when available):**
   delete-active-artist fallback rule is unchanged with a status naming the
   fallback, and the retired count/bucket helpers are deleted. No Rust, IPC,
   storage, or backup change. Features 22 and 24–26 remain Todo.
+- 2026-11-18: Feature 24 shipped (Backup & Restore on the landing screen).
+  The library-pane `.backup-controls` fieldset (markup, hint copy, CSS,
+  handlers) is removed; the landing card carries a Backup section with Back up
+  / Restore wired to the same entry points, guards (incl. landing-draft guard
+  + re-check after file pick), dirty auto-save, and per-record reporting, so a
+  fresh profile restores before entering any scope. No Rust, IPC, storage,
+  envelope, or schema change. Features 22 and 25–26 remain Todo.
