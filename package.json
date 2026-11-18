@@ -1,7 +1,7 @@
 {
   "name": "stagesheet",
   "private": true,
-  "version": "0.3.0",
+  "version": "0.3.1",
   "description": "Print-ready A4 setlists for live performers",
   "license": "MIT",
   "type": "module",
