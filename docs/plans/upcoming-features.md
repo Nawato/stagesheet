@@ -1417,6 +1417,496 @@ logo sizing instead of mm, selectable/vector PDF text, mobile, SQLite.
    internal `cols-*-time` class names unchanged).
 3. QA + this file status + commit.
 
+## Feature 27: Artist-creation logo reaches the setlist (bugfix) — Todo
+
+Status: Todo, small, builds on Features 14/16/19/20/23/25. From user feedback:
+a logo uploaded during artist creation does not show in the setlist afterwards —
+the new setlist shows the placeholder and the Logo fieldset sticks on the
+`No logo yet` path.
+
+Context: the landing create form stages the upload in `landingLogoFile` /
+transient-logo tracking, `save_artist` persists `logo.file_name` + width +
+alignment, then `enterScope()` runs. The display resolves through
+`resolveSetlistLogo()` (own → artist → placeholder, `src/artists.ts`), with
+blob URLs for preview and export-only data URLs (`logo.ts` / `exporter.ts`).
+Suspected cause per UX review: the record saves the file name but the artists
+cache / thumbnail blob URL is not warmed and the setlist preview is not
+re-resolved after scope entry, so the fieldset showing line, slider, and
+`<img>` stay on the placeholder path.
+
+### Data model
+
+None. No serde, storage, IPC, backup, or schema change. `Artist.logo` and the
+shared `logos/` pool (`import_logo` / `remove_logo`) are unchanged.
+
+### Behavior (must-fix per UX review)
+
+- After `save_artist` from landing create **and** from the landing inline row
+  Edit: reload the `artists` cache, revoke/recreate the thumbnail blob URL for
+  the saved `file_name` (reuse the `pruneArtistThumbUrl` / landing-preview
+  revoke pattern from Feature 25), and re-run `resolveSetlistLogo()` for the
+  current draft plus landing thumbnails **before** `renderAll()`.
+- `enterScope()` / `switchScope()` must await the logo load for the new scope
+  (`loadLogoForCurrent()` / `refreshLogoIfChanged()` equivalent, same as the
+  delete/duplicate paths) after the scope is set — never rely on the stale
+  preview `<img>`.
+- The Logo fieldset showing line plus width slider / alignment radios recompute
+  from the resolved config (own → artist → placeholder). The Feature 19/25
+  binding stays: own/placeholder paths edit `setlist.logo` input-driven;
+  the artist path commits via `save_artist` on `change` without dirtying the
+  setlist, with revert-on-refusal/failure and the shared-size status. The
+  showing line must read `<name> logo (artist)` with the matching width and
+  alignment once the fix lands.
+- Constraints intact: logos render only via `<img src>` (blob/data URLs, never
+  inline SVG); no widening of `$APPDATA/stagesheet/**`; no CSP change; the
+  preview-blob vs export-data-URL split (`storedLogoDataUrl()`) stays.
+
+### Sheet + print
+
+No structural change. Preview, frames, print, and export keep consuming the
+resolved `LogoConfig` through the existing path (grayscale-forced in
+print/export).
+
+### Tests + QA (all six gate the fix)
+
+1. Create artist with logo (upload + non-default width/alignment) → enter scope
+   → New setlist shows the **artist logo** at that width/alignment; the showing
+   line reads `<name> logo (artist)` with matching width/alignment.
+2. In-scope setlist: upload an own logo → adopts the displayed width/alignment
+   (seamless swap); remove it → falls back to the artist logo automatically, no
+   placeholder flash after reload.
+3. Width slider + alignment radios on the artist path persist via `save_artist`
+   without dirtying the setlist; reload keeps them; refusal/failure reverts
+   the control with the existing status.
+4. Placeholder path unchanged: artist with no logo + setlist with no logo →
+   `No logo yet`, slider pre-sizes the next own logo.
+5. Export (PDF/PNG) and `window.print()` from the new setlist include the logo,
+   grayscale-forced, with no CSP console errors and no blob-URL fetch.
+6. Backup on the same device round-trips `file_name`/width/alignment; a
+   new-device restore shows the placeholder + re-import prompt (v1
+   logos-not-embedded rule — not fixed here).
+
+### Out of scope
+
+Embedding logo bytes in the backup envelope (future schema version), any
+export/print layout change, any new token or styling.
+
+### Build order
+
+1. Cache warm + re-resolve on artist save and scope entry + showing-line
+   recompute.
+2. QA (six gates) + `SKILL.md` note if the resolution path changes + this file
+   status + commit.
+
+## Feature 28: Opt-in library ⇄ setlist song sync (per-edit offer) — Todo
+
+Status: Todo, medium, builds on Features 12/14/20/25 and Feature 27's
+re-resolve. From user feedback: editing a song in the Song Library or in a
+setlist should offer to apply the same change to the other copy, and accepting
+should refresh the setlist preview automatically.
+
+This **reverses the Feature 12 locked "no propagation" decision into opt-in
+per-edit propagation**: the copy semantics stay (gig snapshots may diverge on
+purpose — capo, shortened version, key), but each save with a matching
+opposite copy asks once. There is deliberately no silent sync, no global
+toggle, and no per-song "always sync" flag. UX-reviewed (custom modal, safe
+default, guard matrix, wording) — the must-fix items below are part of the
+spec, not guidance.
+
+### Data model
+
+None. All writes go through the existing `save_song` / `save_setlist`
+validation (including the Feature 20 mandatory-`artist_id` check).
+`allowUnfiled` is **not** used for propagation writes (only the three
+`SKILL.md` paths); a target that fails artist validation aborts with the
+named-artist message. No serde, storage, IPC, envelope, or schema change.
+
+### Matching + scope rules (locked)
+
+- Match key is `Song.id` equality only — never title/artist-text fallback.
+  Duplicated setlists that deep-copied snapshots keep ids, so they match by
+  design and must be named in the dialog. Dangling/legacy-text rows are
+  excluded (same rule as the landing assign offer).
+- Only candidates **in the active artist scope** are counted/offered/written.
+  Unfiled records never auto-match; cross-artist propagation is out of scope
+  ("switch scope and re-edit" instead of a cross-artist write).
+- Multiple targets: one modal lists up to 3 setlist names via the existing
+  `summarizeRecords(records, 3)` pattern, then `+K more`. Accepting writes
+  each target through the normal commands with per-target reporting, never
+  partial-silent: `Updated 2 of 3 — “<Setlist>” failed: <error>. Retry from
+  that setlist.`
+- Dirty-target policy: a target setlist with unsaved changes is skipped and
+  reported per target (`Skipped “<Setlist>”: unsaved changes.`); the primary
+  save still succeeds.
+
+### UI — custom modal, safe default, exact wording
+
+- A small `role="dialog" aria-modal="true"` modal reusing the landing-overlay
+  dialog tokens (no new color/radius/shadow values; motion limited to
+  open/close opacity/transform with a `prefers-reduced-motion` bypass; no
+  sheet/print CSS change). **Not** `window.confirm`: button order/labels are
+  platform-dependent and cannot carry the direction + count + names + gig
+  risk content. Background `inert` while open; two buttons only, 44px
+  min-height, visible `:focus-visible` outline, both always enabled once shown.
+- **Safe default**: initial focus on **Keep**; Enter and Escape = Keep/dismiss;
+  Update requires explicit Tab/click. No auto-focus on Update. No "don't ask
+  again" checkbox — the dialog asks **every time** a matching in-scope
+  opposite copy exists. A per-setlist picker or "apply to all listed" split is
+  a follow-up, still per-edit, never persisted.
+- Strings (adjust only quoted names/counts):
+
+  **Library → setlist** (after the library save succeeds, before any snapshot
+  write):
+  - Heading: `Update N setlist copies?`
+  - Body: `You changed “<song title>”. N setlists in <Artist> still have the
+    old gig copy: <Setlist A>, <Setlist B>[, +K more]. Setlist copies are gig
+    snapshots — they may have a different key, capo, or shortened notes on
+    purpose.`
+  - Buttons: `[Keep setlist copies]` (default, focused) / `[Update N copies]`
+  - Accept status (success): `Updated “<title>” in N setlists. Gig edits there
+    were overwritten.`
+  - Decline status (info): `Kept N setlist copies unchanged. Library “<title>”
+    saved.`
+
+  **Setlist-item → library** (after the setlist-item edit commits to the
+  setlist draft, before the library write):
+  - Heading: `Update the library song too?`
+  - Body: `You changed “<title>” in “<Setlist title>”. The Song Library still
+    has the old version. Overwriting the library changes every future setlist
+    that adds this song.`
+  - Buttons: `[Keep library unchanged]` (default) / `[Update library]`
+  - Accept: `Updated library “<title>”. Future setlists will use the new
+    version.`
+  - Decline: `Kept library “<title>” unchanged. Only “<Setlist title>” uses
+    the new version.`
+
+### Guards + focus (must-fix)
+
+- The offer **never appears** and follow-up writes **never run** while any of
+  these hold; the primary save succeeds and the status explains the deferral:
+  - export capture in flight (`captureGuard()`) → `Export in progress —
+    “<title>” saved here only. Re-apply the change after export if needed.`
+  - `backingUp` / `restoring` / `artistDeleting`, `libraryWritesInFlight > 0`,
+    `artistBusy` / `landingBusy`, or `artistLogoBusy` / `landingLogoBusy` →
+    `"..." saved here only. Finish the current library/artist request, then
+    re-edit to propagate.`
+  - Setlist→library direction blocked while any library inline editor is open
+    (including `retryPending` / `hiddenByFilter` / invalid fields). The
+    scope-switch dirty guard (`confirmDiscard`) takes precedence: never stack
+    the propagation modal on a discard confirm (order: save → propagation
+    modal → scope switch allowed). A pending propagation modal counts as
+    unsaved work for `beforeunload` (closing = Keep).
+- Trigger only from a visible, committed save (editor closed on success). If
+  the edited row is `hiddenByFilter` at save time, do **not** pop the modal:
+  `Saved “<title>” here only — clear search to review other copies.`
+- Focus: on open move focus to the heading (`tabindex="-1"`) or the default
+  Keep button; trap Tab; on close (either choice) return focus to the
+  originating Save/Edit control and announce via `setStatus()` (existing
+  live-region path). After accept, re-render through the same path
+  (`renderAll()` + logo refresh + `sheet.ts`) so preview/print/export agree —
+  the "auto reload into the setlist preview" is that re-render, not a scope
+  reload — and never leave focus inside a re-rendered-away node.
+
+### Sheet + print
+
+No structural change. The accepted write re-renders the preview/frames
+through `sheet.ts`; export raster warm-up needs no change (per-session warm-up
+stands).
+
+### Tests + QA
+
+- `npm run build` clean; `cargo test` green (no Rust change expected).
+- Manual QA: library→setlist accept (all in-scope copies update, preview
+  refreshes, accept status); library→setlist decline (copies byte-identical,
+  decline status); setlist→library accept/decline both ways; multi-setlist
+  naming + `+K more`; per-target failure and dirty-target skip reporting;
+  each guard deferral message above; hidden-by-filter save never pops the
+  modal; focus open/trap/return + Escape/Enter = Keep; 44px targets + visible
+  focus at full and narrowed widths; keyboard-only pass; backup/restore
+  round trip with diverged copies keeps the divergence; Unfiled and
+  cross-artist cases never offer.
+
+### Out of scope (stay open)
+
+Global/per-song auto-sync toggles, bulk "sync all songs" tool, cross-artist
+propagation, moving songs between artists, legacy-text fuzzy matching, changing
+the Feature 12 default to auto-sync, export/print layout changes.
+
+### Build order
+
+1. Match/scope lookup + custom modal + safe-default focus + strings + guard
+   matrix + per-target writes/reporting + preview re-render.
+2. QA + `SKILL.md` (Feature 12 copy-semantics note becomes opt-in offer) +
+   this file status + commit.
+
+## Feature 29: Per-setlist logo size (no shared artist size) — Todo
+
+Status: Todo, medium, builds on Features 19/25 and narrows Feature 27.
+From user feedback: logo size has no merit in the artists section — it differs
+per setlist. The artist record keeps the logo *image* (autoloads into its
+setlists when set); width and alignment become per-setlist display settings
+edited only in the setlist editor. UX-reviewed — the must-fix items below are
+part of the spec.
+
+Locked scope: **both** width **and** alignment go per-setlist (splitting only
+width would keep the shared-mutation surprise on the radios). Geometry always
+comes from `setlist.logo.width_mm` / `setlist.logo.alignment`; only the
+*file* resolves (own → artist → none). No "default size for new setlists" on
+the artist — new setlists keep the existing 40 mm / Center default.
+
+### Data model
+
+No new field, no schema bump, backup v1 envelope unchanged. `LogoConfig`
+struct, `Artist.logo` validation (10–80, plain name), `normalizeLogo`, and the
+`remove_logo` reference check are unchanged (`artist.file_name` still pins the
+file). `Artist.logo.width_mm` / `alignment` stay serialized but become
+render-dead (documented in `SKILL.md` at implementation; a future schema may
+retire them — explicitly not this slice).
+
+Migration (deterministic, idempotent, no marker flag — pin verbatim):
+`On first load after upgrade, for each setlist with no own logo whose artist
+has a logo: if the setlist's stored width/alignment are still the default
+(40 mm / Center), copy the artist's current width/alignment (clamped 10–80)
+into the setlist's display config; otherwise keep the setlist's stored values.
+Never copy again afterwards.` A setlist whose user deliberately chose 40/Center
+accepting the artist copy is harmless and stable — state that. Same-device
+backup round trips keep per-setlist sizes; new-device restore still shows the
+placeholder until re-import (v1 rule intact).
+
+### UI
+
+- Landing create + inline row Edit forms: keep name + logo upload + remove +
+  thumbnail only. Delete both width sliders and both alignment groups (no
+  disabled "preview size" slider — a disabled slider implies future function).
+- Setlist Logo fieldset: slider `input` and radio `change` **always** write
+  `current.logo.width_mm` / `current.logo.alignment` (clamped 10–80), then
+  `markDirty()` + `renderSheet()` — all three logo cases identically. Delete
+  `commitEffectiveArtistLogo*` and the `effectiveLogoCase() === "artist"`
+  branches. Upload-own-logo width/alignment adoption becomes a no-op by
+  construction (geometry already is the displayed geometry) — delete it; keep
+  the preview-local → `importLogo` → `file_name` assign → `markDirty` + status
+  flow. Remove-own-logo keeps the `pendingLogoRemovals` + `markDirty()` +
+  `refreshLogoIfChanged()` flow; the per-setlist size survives trivially.
+  Artist image swap later preserves per-setlist sizes; require
+  `refreshLogoIfChanged()` + `renderSheet()` + showing-line recompute on
+  artist `file_name` change (the surviving half of Feature 27).
+- Showing line (exact strings, adjust only quoted names):
+  - Own logo: `Setlist logo — size applies to this setlist only.`
+  - Artist image: `“<Name>” logo (from the artist) — size applies to this
+    setlist only.` ("from the artist" states provenance without implying a
+    live size link; never "linked"/"synced"/"connected".)
+  - None, artist in scope but artist has no logo: `No logo yet — add an image
+    above, or add one to “<Name>” and it will appear here.`
+  - None, unfiled / no artist: `No logo yet — add an image above.`
+- Guards: delete from the Logo path `effectiveLogoSaving`/`artistBusy`,
+  `artistLogoBusy`, backup/restore refusals, the artist-draft-open refusal,
+  revert closures, and every `applies to every setlist` string. Keep
+  `captureGuard()` on slider/radios/upload/remove (revert via
+  `renderLogoControls()`), the dirty indicator + scope-switch `confirmDiscard`
+  (logo edits now count as dirty — call it out), the `saveCurrent` failure
+  path (draft + values intact), and backend-unavailable handling. Slider/radio
+  produce no per-tick status (only `output` text + sheet update); save uses the
+  existing setlist-saved message; remove keeps `Logo removed — save to
+  apply.`; import keeps `Logo imported.` Shrink the backup/restore draft-guard
+  copy to "edit mode, typed name, or staged logo" (drop "or any
+  width/alignment change") for both edit and create guards.
+- Accessibility: slider + radios **always enabled** whenever a setlist draft is
+  open (including none-case — it sizes the future logo); only the export
+  capture temporarily reverts. Keep native `fieldset`/`legend`, `label
+  for="logo-width"` + `output`, native range + radios (no custom slider);
+  slider `input` updates `output` only (not live); announce via `setStatus()`
+  only on import/remove/save/guard refusal; showing line stays `role="note"`,
+  never live. No focus moves on slider/radio edits; upload/remove keep focus
+  on the invoking control. Keep 44px minimums; confirm `.logo-row` wraps so
+  nothing clips at narrow widths / 200% zoom. No new tokens; no sheet/print
+  CSS change; grayscale print/export untouched.
+- Interplay: land before or rebase Feature 27 onto this — 27 keeps its
+  cache-warm/re-resolve and QA gates 1–2/4–6, drops its item-3 `save_artist`
+  assertion in favor of the QA below. Feature 28 unchanged.
+
+### Sheet + print
+
+None. Preview, frames, print, and export consume the per-setlist geometry
+through the existing resolved-config path.
+
+### Tests + QA
+
+- `npm run build` clean; `cargo test` green (Rust validation-only; no new
+  bounds expected).
+- Manual QA (all gate the slice): two setlists of one artist diverge in
+  width/alignment independently; new setlist autoloads the artist image at
+  40 mm / Center; swapping the artist image preserves per-setlist sizes;
+  upload-own-logo seamless (geometry unchanged) and remove falls back to the
+  artist image at the setlist's own size; reload persists; dirty indicator +
+  scope-switch guard fire on logo-size edits; export PDF/PNG + `window.print()`
+  grayscale-correct with no CSP errors; backup round trip keeps per-setlist
+  sizes; landing artist forms show no width/alignment controls.
+
+### Out of scope (stay open)
+
+S/M/L sizing, vector/selectable PDF, logo bytes in backups, bulk resize tool,
+moving songs between artists, export/print layout changes.
+
+### Build order
+
+1. Per-setlist geometry + artist-form control removal + showing-line/guards/
+   statuses + migration rule + `SKILL.md` render-dead note.
+2. QA + this file status (incl. Feature 27 interplay note) + commit.
+
+## Feature 30: Artist-logo propagation offer + reset to artist logo — Todo
+
+Status: Todo, medium, builds on Features 27/28/29. Land **after** 29 (and the
+rebased 27 cache-warm half). From user feedback: changing the artist's logo
+image must not silently rewrite setlists; the setlist side stays silent-local;
+and a reset button restores the artist image after a delete or divergence.
+UX-reviewed — the must-fix items below are the spec (verdict: not writable
+without them).
+
+Locked model (c) — reject (a)/(b): the artist image is **live** unless a
+setlist carries its own logo. **Accept/follow = zero `save_setlist` writes**
+(only `save_artist`; followers resolve to the new file or placeholder
+automatically). **Keep = pin**: for each affected setlist set
+`setlist.logo.file_name = <old artist file_name>`, keep its own
+`width_mm`/`alignment` (Feature 29), `save_setlist` per target — display
+pixels literally unchanged. Rejected: (a) Accept-copies-new-file-as-own (every
+follower becomes pinned, so the *next* swap silently stops propagating); (b)
+keep-following flag (new boolean + serde/backup/migration for zero benefit —
+following is the default, pinning is already an own logo). Backup/restore and
+`remove_logo` stay safe (plain `file_name` values; backend skips deletion while
+referenced). No model/schema change; geometry stays per-setlist; artist
+width/alignment stay render-dead.
+
+Affected setlists (pin verbatim):
+`Affected = setlists where setlist.artist_id == <edited artist id> AND
+setlist.logo.file_name is None AND pre-save artist.logo.file_name is non-null
+(there is an old image to preserve/lose).` Never counted/offered/written:
+setlists with their own logo (every body string confirms they are untouched),
+other artists' setlists, Unfiled/dangling-id setlists, placeholder setlists
+when the artist had no logo. **Addition** (`None` → new file): no modal (new
+image where placeholder was is non-destructive) — silent success + status.
+Only change or removal of a non-null old file can trigger the modal. List up to
+3 names via `summarizeRecords(records, 3)` + `+K more`; no per-setlist picker.
+Fires from both landing create-form Save and inline-row Edit Save (same
+`save_artist` image path); artist-save failure/backend-unavailable → error
+status only, no modal, nothing snapshotted. Decline-snapshot failures continue
+per target with per-target reporting (same as Feature 28). The open setlist
+draft counts as a dirty-target skip with no exemption.
+
+### UI — reuse the Feature 28 modal pattern exactly
+
+One `role="dialog" aria-modal="true"` modal, background `inert`,
+landing-overlay dialog tokens only, 44px buttons, visible `:focus-visible`,
+motion limited to open/close opacity/transform with `prefers-reduced-motion`
+bypass. Two buttons only, both always enabled once shown. No "don't ask again".
+Per-edit only. Initial focus on **Keep**; Enter and Escape = Keep/dismiss;
+Use-new/Remove requires explicit Tab/click (the destructive path here is
+*following*). No backdrop close (or backdrop close = Keep). A pending modal
+counts as unsaved work for `beforeunload` (closing = Keep).
+
+Strings (adjust only quoted names/counts; one verb per action: Keep vs
+Use/Remove):
+
+**Change** (old file → new file, N affected):
+- Heading: `Use the new logo on N setlists?`
+- Body: `You changed the logo for “<Artist>”. N setlists still show the old
+  artist image: <A>, <B>[, +K more]. Setlists with their own logo are not
+  affected. New setlists for “<Artist>” will use the new logo either way.`
+- Buttons: `[Keep old image on N setlists]` (default, focused) /
+  `[Use new logo]`
+- Follow: `Updated the logo for “<Artist>”. N setlists now show the new logo.`
+- Keep: `Kept the old image on N setlists as their own logo. “<Artist>” uses
+  the new logo.`
+
+**Removal** (old file → none, N affected):
+- Heading: `Remove the logo from N setlists too?`
+- Body: `You removed the logo for “<Artist>”. N setlists still show the old
+  image: <A>, <B>[, +K more]. Setlists with their own logo are not affected.
+  Removing continues — those setlists will show “No logo yet”. Keeping
+  preserves the old image on those setlists as their own logo.`
+- Buttons: `[Keep old image on N setlists]` (default, focused) /
+  `[Remove from N setlists]`
+- Follow: `Removed the logo for “<Artist>”. N setlists now show “No logo
+  yet”.`
+- Keep: `Kept the old image on N setlists as their own logo. “<Artist>” has
+  no logo.`
+
+**Addition / zero affected**: no modal — `Updated the logo for “<Artist>”. N
+setlists now show it.` / `Updated the logo for “<Artist>”.` / `Removed the
+logo for “<Artist>”.` as applicable. Per-target: `Updated 2 of 3 —
+“<Setlist>” failed: <error>. Retry from that setlist.` and `Skipped
+“<Setlist>”: unsaved changes.` (Feature 28 strings verbatim).
+
+Guards (modal **never** appears, follow-up writes **never** run; artist save
+succeeds + status defers): export capture (`Export in progress — “<Artist>”
+saved here only. Re-apply the logo choice after export if needed.`);
+`backingUp`/`restoring`/`artistDeleting`, `libraryWritesInFlight > 0`,
+`artistBusy`/`landingBusy`, `artistLogoBusy`/`landingLogoBusy` (`“<Artist>”
+saved here only. Finish the current library/artist request, then re-edit to
+choose setlists.`); Unfiled/no-affected/addition (silent success); landing
+create-vs-edit colocation refusals (never queue a modal behind them).
+Dirty targets skip-and-report; never auto-save a dirty setlist to force a pin.
+
+Setlist side stays silent-local (locked): upload-own / Remove writes only
+`setlist.logo.file_name` on the open draft (dirty + Save), already guarded by
+dirty/`confirmDiscard`/scope-switch plus the import/remove statuses — no
+cross-record blast radius, no modal. Keep `Logo imported.`, `Logo removed —
+save to apply.`, no per-tick geometry statuses.
+
+**Reset to artist logo** button (all five pinned): label `Reset to artist
+logo` (reject `Use artist logo`); placed in the Logo `fieldset` next to Remove
+(`[Upload…] [Remove] [Reset to artist logo]`, same `.logo-row` wrap, 44px);
+native `disabled` (not `aria-disabled`) iff `setlist.logo.file_name != null AND
+artist.logo.file_name != null AND setlist.logo.file_name !=
+artist.logo.file_name` — disabled when already following, when no own logo to
+clear, or when the artist has no logo. Adjacent visible hint (never
+`title`-only): artist without logo → `No artist logo — add one to “<Name>”
+and it will appear here.`; already following → the Feature 29 showing line.
+Behavior: clears `setlist.logo.file_name` only (cancels any
+`pendingLogoRemovals` entry for the abandoned own file — never deletes a file
+still referenced elsewhere); never touches `width_mm`/`alignment`; `markDirty()`
++ `refreshLogoIfChanged()` + `renderSheet()` + showing-line recompute; Save
+persists. Focus stays on Reset; `Artist logo restored — save to apply.` then
+the saved message. Slider/radios stay always-enabled; `captureGuard()` reverts
+Reset during export. Native `<button type="button">`; showing line stays
+`role="note"`, announcements via `setStatus()` only.
+
+Focus/live-region: on open focus the heading (`tabindex="-1"`) or Keep;
+trap Tab; on close return focus to the originating artist Save/Edit control;
+`setStatus()` polite announcements only; trigger only from a visible committed
+artist save; re-render via `renderAll()` + logo refresh + `sheet.ts`, never
+leaving focus in a re-rendered-away node.
+
+### Sheet + print
+
+None. Follow/keep/reset flow through the existing resolved-config path;
+grayscale print/export untouched.
+
+### Tests + QA
+
+- `npm run build` clean; `cargo test` green (no Rust change expected).
+- Manual QA (all gate): change + Keep (old pixels preserved at per-setlist
+  sizes, own-logo file set, reload stable) vs Use-new (new image, sizes
+  preserved) with pinned statuses; removal Remove-from-N (`No logo yet` at own
+  sizes) vs Keep (old image as own logo); own-logo setlists byte-identical in
+  both paths; other-artist/Unfiled never offered; setlist-side upload/Remove
+  silent (no modal, dirty + save, statuses unchanged); Reset after Keep, after
+  Remove-own, and no-artist-logo disabled + hint (focus stays, save persists,
+  sizes survive, 44px + keyboard-only at full/narrow widths and 200% zoom);
+  reload persistence; export PDF/PNG + print grayscale with no CSP/blob
+  errors; same-device backup keeps follow-vs-pin; new-device restore shows
+  placeholder + re-import prompt (v1 rule).
+
+### Out of scope (stay open)
+
+Per-setlist subset picker, "don't ask again" / global auto-sync, cross-artist
+propagation, geometry changes, logo bytes in backups, export/print layout,
+new dialog tokens, model/schema changes.
+
+### Build order
+
+1. Follow-vs-pin writes + modal + strings + guards + Reset button + hint.
+2. QA + `SKILL.md` (resolve-vs-pin rule) + this file status + commit.
+
 ## Roadmap backlog (prioritized)
 
 - **P0 — Sheet correctness fixes (from real use)**: Features 10 (column widths
@@ -1445,6 +1935,13 @@ logo sizing instead of mm, selectable/vector PDF text, mobile, SQLite.
   export/scope locks, alignment binding, dangling-id resolver, unfiled
   guidance, backend small items — Done), and Feature 26 (UI polish + language
   pass — Done). The split-setlist helper stays open behind these.
+- **P1 — v0.3.2 slice (Todo)**: Feature 27 (artist-creation logo reaches the
+  setlist — bugfix, rebased onto 29), Feature 28 (opt-in library ⇄ setlist
+  song sync offer with safe-default custom modal), Feature 29 (per-setlist
+  logo size — artist keeps the image, geometry lives on the setlist), and
+  Feature 30 (artist-logo propagation offer with Keep-vs-follow + Reset to
+  artist logo; setlist side stays silent-local). The split-setlist helper
+  stays open behind these.
 - **P1 — Backup/restore**: Done (Feature 7). One versioned JSON envelope for
   the full library + setlists; logos are re-imported manually in v1.
   Feature 14 adds the `artists` array without a version bump.

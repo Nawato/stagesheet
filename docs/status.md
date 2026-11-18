@@ -163,6 +163,27 @@ commit as each change.
 
 ## Still missing (per plan)
 
+- Artist-creation logo bug (plan Feature 27, Todo): a logo uploaded during
+  artist creation does not reach the setlist — placeholder stays. Fix warms the
+  artists cache / thumbnail blob URL and re-resolves `resolveSetlistLogo()` on
+  artist save + scope entry; six QA gates in the plan.
+- Opt-in library ⇄ setlist song sync (plan Feature 28, Todo): after a library
+  or setlist-item song edit with matching in-scope `Song.id` copies, a custom
+  safe-default modal (Keep focused, Enter/Escape = Keep, no "don't ask again")
+  offers per-edit propagation with the plan's exact wording, guard matrix, and
+  per-target reporting; accepting re-renders the setlist preview automatically.
+- Per-setlist logo size (plan Feature 29, Todo): the artist record keeps the
+  logo image (autoloads when set); width + alignment live only on each setlist
+  and never write back to the artist. Artist forms lose size controls, the
+  showing line drops the "every setlist" warning, and upgrade migrates
+  default-only setlists once with no schema bump.
+- Artist-logo propagation + reset (plan Feature 30, Todo, UX-reviewed): an
+  artist image change/removal offers Keep-vs-follow per edit (Keep pins the
+  old file as each affected setlist's own logo; follow writes nothing and
+  followers resolve live; addition never prompts; own-logo/other-artist/
+  Unfiled setlists untouched), setlist-side upload/Remove stays silent-local,
+  and a `Reset to artist logo` button (native disabled + hint, size-preserving,
+  save to apply) restores the shared image after divergence.
 - Paginated split-setlist helper (move the second half of a setlist into a new
   one) as an alternative to multi-page mode.
 - Physical-paper QA on A4 (page count, header/footer per engine, legibility),
