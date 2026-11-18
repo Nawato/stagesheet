@@ -12,8 +12,8 @@ in `SKILL.md`; feature specs and the development plan live in `docs/plans/`.
    Tauri command `async` returning `Result<T, AppError>`, logos via `<img>`
    only.
 2. Feature specs in `docs/plans/upcoming-features.md` extend the contract;
-   never fork it. Plans and the README status lists are updated in the same
-   commit as the change they describe.
+   never fork it. Plans and the status list (`docs/status.md`) are updated in
+   the same commit as the change they describe.
 
 ## Gates
 

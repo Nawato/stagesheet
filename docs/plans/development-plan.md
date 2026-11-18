@@ -8,13 +8,14 @@ the earlier drafts that lived outside the repo (now removed).
 | --- | --- |
 | `docs/plans/development-plan.md` | Constraints, stack decisions, phases, QA strategy, risks (this file) |
 | `docs/plans/upcoming-features.md` | Per-feature specs and the prioritized backlog |
+| `docs/status.md` | Implemented-vs-missing feature status (mirrors the plans) |
 
 Maintenance rules:
 
 1. Plans are updated in the same commit as the change they describe. Never
    reference paths outside the repo.
-2. Phase/feature status must match reality. Update this file and the README
-   status list together.
+2. Phase/feature status must match reality. Update this file and
+   `docs/status.md` together.
 3. The serialized data contract lives in `SKILL.md`. Feature specs extend it;
    they never fork it, so there is only one contract to keep in sync.
 
