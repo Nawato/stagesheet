@@ -33,8 +33,8 @@ written (legacy `artist` text stays as a display fallback until adopted).
 Full specs lived here until the 2026-11 cleanup; the contract facts below are
 all mirrored in `SKILL.md`, which is now the single authority for shipped
 behavior. Features 12 (edit library songs), 14 (artist records with logos),
-17 (break seconds), and 18 (setlist Delete-clarity) are Done; their specs remain
-below as reference.
+15 (filter library by artist), 17 (break seconds), and 18 (setlist
+Delete-clarity) are Done; their specs remain below as reference.
 
 - **Validation hardening (with Feature 2)** — Done. `Setlist::validate()` walks
   every item. Bounds enforced in Rust: break `duration_secs` `0..=36000` (the
@@ -96,6 +96,12 @@ below as reference.
   `Song.artist_id` with name snapshot fallback; declared `Setlist.artist_id`
   for Feature 16; library Artists section and song dropdowns; additive
   schema-1 backup `artists` array. Renames never rewrite songs/setlists.
+- **Feature 15: Filter library by artist** — Done. View-only **Artist** select
+  (`All artists` default) with resolved song counts plus **No artist**;
+  combines with search, Has tuning, and sort. In-memory only: never dirties a
+  setlist, persists, or enters a backup. Counts and the predicate share
+  `libraryArtistBucket()`, so legacy text groups under its record and
+  unmatched text stays under All artists.
 
 ## Feature 12: Edit library songs — Done
 
@@ -276,21 +282,21 @@ an Artists section (logo thumbnails, resolved counts, one shared create/edit
 form with name + logo/width/alignment, confirmed delete), and both song forms
 use artist dropdowns with a "Keep text" option for unassigned legacy songs.
 Renaming never rewrites songs or setlists; `resolveArtistName()` drives library
-display/search/sort, `resolveArtistForSong()` drives counts and the future
-filter, and `resolveSetlistLogo()` holds the own-logo → artist-logo →
-placeholder chain for Feature 16. Delete nulls song/setlist ids through
-best-effort `save_*` loops, keeps snapshots, reports per-record failures, and
-only then deletes the record and attempts logo cleanup. Backups carry an
-additive schema-1 `artists` array and restore artists first, then songs, then
-setlists. Follow-up hardening: Back up/Restore treat edit mode, a typed artist
-name, or a changed logo/width/alignment as an artist draft and refuse with a
-titled message (a pristine empty form does not block), and Restore re-checks
-after reading the file; entering/cancelling edit updates `is-editing` and
-`aria-expanded` immediately; a pending logo import disables/rejects the artist
-Save and blocks backup/restore until it finishes; artist Delete refuses during a
-library song write or inline draft and locks library row actions while clearing
-references. Manual QA for the artist CRUD, logo chain, and backup round trip is
-listed below.
+display/search/sort, `resolveArtistForSong()` backs the resolved counts and the
+Feature 15 filter bucket, and `resolveSetlistLogo()` holds the own-logo →
+artist-logo → placeholder chain for Feature 16. Delete nulls song/setlist ids
+through best-effort `save_*` loops, keeps snapshots, reports per-record
+failures, and only then deletes the record and attempts logo cleanup. Backups
+carry an additive schema-1 `artists` array and restore artists first, then
+songs, then setlists. Follow-up hardening: Back up/Restore treat edit mode, a
+typed artist name, or a changed logo/width/alignment as an artist draft and
+refuse with a titled message (a pristine empty form does not block), and
+Restore re-checks after reading the file; entering/cancelling edit updates
+`is-editing` and `aria-expanded` immediately; a pending logo import
+disables/rejects the artist Save and blocks backup/restore until it finishes;
+artist Delete refuses during a library song write or inline draft and locks
+library row actions while clearing references. Manual QA for the artist CRUD,
+logo chain, and backup round trip is listed below.
 
 ### Data model
 
@@ -364,12 +370,34 @@ listed below.
 3. Backup `artists` array + restore ordering.
 4. QA + `SKILL.md` + this file status + commit.
 
-## Feature 15: Filter library by artist — Todo
+## Feature 15: Filter library by artist — Done
 
-Status: Todo, builds on Feature 14. Sort-by-artist (Feature 8) orders the
-list but cannot narrow it; bands with a multi-artist library cannot isolate
-one artist's songs. This is the in-memory, view-only filter; the persisted
+Status: Done, built on Feature 14. Sort-by-artist (Feature 8) orders the list
+but cannot narrow it; bands with a multi-artist library cannot isolate one
+artist's songs. This is the in-memory, view-only filter; the persisted
 per-setlist variant is Feature 16.
+
+### Shipped notes
+
+The library pane has an **Artist** select in `.library-controls` (`All artists`
+default) listing every live artist record with its resolved song count plus
+**No artist**. Filtering runs before the existing sort and combines with the
+instant search and **Has tuning**. `artistFilter: string | null` holds `null`
+(all), an artist id, or `"none"`; it lives only in memory, never marks a
+setlist dirty, and never enters the backup envelope. One shared
+`libraryArtistBucket()` helper feeds both the option counts and the predicate,
+using `resolveArtistForSong()` identity: id-backed songs count for their
+record, same-named legacy text counts for that record until adoption, and
+unmatched non-empty legacy text has no bucket (it stays under All artists and
+in search rather than being forced into No artist). Empty states name the
+active filter: `No songs by “<name>” match that search.` /
+`No songs by “<name>” yet.` (with `No songs without an artist …` for the
+No-artist bucket). The options rebuild on every library render, so
+add/edit/duplicate/delete/restore and artist create/rename/delete cannot leave
+stale labels or counts, and a deleted selected artist resets to All artists.
+The song-count badge still reports the total library size, and Feature 12's
+filter-hide cancellation, draft retention, save locking, focus, and row layout
+rules are unchanged.
 
 ### Data model
 
@@ -600,10 +628,10 @@ misread instead of adding new behavior.
   duplication; the remaining slice is a split-setlist helper (move second half
   to a new setlist) as an alternative to multi-page.
 - **P1 — Library/setlist tooling**: Features 12 (edit library songs), 14
-  (artist records + logos), 17 (break seconds), and 18 (delete clarity) are
-  Done. Feature 13 (duplicate setlist as preset base) remains independent and
-  Todo. Then the remaining artist chain in order: 15 (library artist filter) →
-  16 (setlist artist + per-artist picker + lock).
+  (artist records + logos), 15 (library artist filter), 17 (break seconds),
+  and 18 (delete clarity) are Done. Feature 13 (duplicate setlist as preset
+  base) remains independent and Todo. Feature 16 (setlist artist + per-artist
+  picker + lock) is the remaining artist-chain step and follows 15.
 - **P1 — Backup/restore**: Done (Feature 7). One versioned JSON envelope for
   the full library + setlists; logos are re-imported manually in v1.
   Feature 14 adds the `artists` array without a version bump.

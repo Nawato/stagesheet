@@ -118,7 +118,12 @@ Serde notes:
 - The artist list is frontend-sorted by name. Counts use resolved identity:
   id-backed songs count for their record, legacy-text songs count for a
   same-named record until adopted, and unmatched text stays uncounted. Search
-  and sort-by-artist use the same resolved display name.
+  and sort-by-artist use the same resolved display name. The Feature 15 library
+  artist filter shares that identity: `libraryArtistBucket()` returns a record
+  id, `"none"` for songs with no artist identity, or no bucket for unmatched
+  legacy text (which stays visible under All artists and in search). Its option
+  counts and predicate use the same helper; the filter itself is in-memory and
+  never persisted or backed up.
 - `Setlist.sheet_options` carries a field-level `#[serde(default)]`; the
   `SheetOptions` struct carries a **container-level** `#[serde(default)]` and a
   manual `Default` with every field `true`. So a missing field, a partial
@@ -159,8 +164,9 @@ Serde notes:
   `null` on load, adoption, and restore.
   `Artist` is mirrored in `types.ts`; `src/artists.ts` holds
   `resolveArtistName()` (display/search/sort), `resolveArtistForSong()` (counts
-  and the future library filter), and `resolveSetlistLogo()` (own logo → artist
-  logo → placeholder, reused by Feature 16).
+  and filter identity), `libraryArtistBucket()`/`matchesLibraryArtistFilter()`
+  (the view-only Feature 15 library filter), and `resolveSetlistLogo()` (own
+  logo → artist logo → placeholder, reused by Feature 16).
   `BreakItem.duration_secs` is the only written break length.
   `withBreakDefaults()`/`normalizeSetlistItems()` convert legacy backup JSON
   (`duration_mins` × 60, preferring `duration_secs`) and are applied on restore

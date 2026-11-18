@@ -2,7 +2,12 @@ import "./styles/app.css";
 import "./styles/print.css";
 
 import { api } from "./api";
-import { resolveArtistForSong, resolveArtistName } from "./artists";
+import {
+  libraryArtistBucket,
+  matchesLibraryArtistFilter,
+  NO_ARTIST_FILTER,
+  resolveArtistName,
+} from "./artists";
 import { exportBackup, readBackupFile } from "./backup";
 import { byId, el } from "./dom";
 import {
@@ -67,6 +72,12 @@ let statusTimer: number | undefined;
 let songSort: SongSortKey = "title";
 let tuningOnly = false;
 /**
+ * Library artist filter: `null` = all artists, an artist record id, or
+ * `NO_ARTIST_FILTER` for songs with no artist identity. View-only like the
+ * other controls: never persisted, never part of the backup envelope.
+ */
+let artistFilter: string | null = null;
+/**
  * Inline library editor state. At most one row editor is open at a time;
  * opening another row discards the previous draft, because nothing reaches the
  * cache until Save. The draft survives library re-renders (search, sort, add,
@@ -103,6 +114,9 @@ const artistThumbUrls = new Map<string, string>();
 
 /** Select value marking the legacy free-text artist option in the library editor. */
 const LEGACY_ARTIST_VALUE = "__legacy_artist__";
+
+/** Library artist-filter select value for "All artists" (`artistFilter === null`). */
+const ARTIST_FILTER_ALL = "";
 
 type SongSortKey = "title" | "artist" | "key" | "tuning";
 
@@ -213,6 +227,7 @@ const deleteSetlistButton = byId<HTMLButtonElement>("delete-setlist");
 
 const songSearch = byId<HTMLInputElement>("song-search");
 const songSortSelect = byId<HTMLSelectElement>("song-sort");
+const songArtistFilterSelect = byId<HTMLSelectElement>("song-artist-filter");
 const songTuningOnlyInput = byId<HTMLInputElement>("song-tuning-only");
 const songListEl = byId<HTMLUListElement>("song-list");
 const songCountEl = byId<HTMLSpanElement>("song-count");
@@ -334,6 +349,18 @@ function bindEvents(): void {
   songSearch.addEventListener("input", renderLibrary);
   songSortSelect.addEventListener("change", () => {
     songSort = isSongSortKey(songSortSelect.value) ? songSortSelect.value : "title";
+    renderLibrary();
+  });
+  songArtistFilterSelect.addEventListener("change", () => {
+    const value = songArtistFilterSelect.value;
+    if (value === ARTIST_FILTER_ALL) {
+      artistFilter = null;
+    } else if (value === NO_ARTIST_FILTER) {
+      artistFilter = NO_ARTIST_FILTER;
+    } else {
+      // Only live records are valid filter targets; anything else is stale.
+      artistFilter = artists.some((artist) => artist.id === value) ? value : null;
+    }
     renderLibrary();
   });
   songTuningOnlyInput.addEventListener("change", () => {
@@ -1293,8 +1320,14 @@ function renderPageModeControls(): void {
 }
 
 function renderLibrary(): void {
+  // Rebuild the artist options (labels and counts) on every library render, and
+  // drop a selection whose record was deleted or restored away. The other
+  // controls keep their state; only a stale artist id resets to All artists.
+  renderLibraryArtistFilter();
+
   const query = songSearch.value.trim().toLocaleLowerCase();
   const matching = songs
+    .filter((song) => matchesLibraryArtistFilter(song, artists, artistFilter))
     .filter((song) => {
       if (!query) return true;
       return [song.title, resolveArtistName(song, artists), song.key, song.tuning]
@@ -1333,7 +1366,74 @@ function renderLibrary(): void {
   songListEl.replaceChildren(fragment);
 }
 
+/**
+ * Fills the library artist filter from the current artist cache. Options list
+ * live records with resolved song counts plus No artist. The selected value is
+ * kept across re-renders; an id that no longer resolves falls back to All
+ * artists so no stale selection survives a delete/restore.
+ */
+function renderLibraryArtistFilter(): void {
+  if (
+    artistFilter !== null &&
+    artistFilter !== NO_ARTIST_FILTER &&
+    !artists.some((artist) => artist.id === artistFilter)
+  ) {
+    artistFilter = null;
+  }
+
+  const counts = libraryArtistCounts();
+  const fragment = document.createDocumentFragment();
+  fragment.append(artistOption(ARTIST_FILTER_ALL, "All artists"));
+  for (const artist of artists) {
+    fragment.append(
+      artistOption(
+        artist.id,
+        `${artist.name.trim() || "Untitled artist"} (${counts.get(artist.id) ?? 0})`,
+      ),
+    );
+  }
+  fragment.append(
+    artistOption(
+      NO_ARTIST_FILTER,
+      `No artist (${counts.get(NO_ARTIST_FILTER) ?? 0})`,
+    ),
+  );
+
+  songArtistFilterSelect.replaceChildren(fragment);
+  songArtistFilterSelect.value = artistFilter ?? ARTIST_FILTER_ALL;
+}
+
+/**
+ * Song counts per artist-filter bucket: live record ids plus `NO_ARTIST_FILTER`.
+ * Uses the same resolution helper as the filter predicate, so an option's count
+ * always matches the rows it shows. Unmatched legacy text has no bucket and
+ * stays under All artists only.
+ */
+function libraryArtistCounts(): Map<string, number> {
+  const counts = new Map<string, number>();
+  for (const song of songs) {
+    const bucket = libraryArtistBucket(song, artists);
+    if (bucket === null) continue;
+    counts.set(bucket, (counts.get(bucket) ?? 0) + 1);
+  }
+  return counts;
+}
+
 function libraryEmptyMessage(query: string): string {
+  if (artistFilter !== null) {
+    const count = libraryArtistCounts().get(artistFilter) ?? 0;
+    if (artistFilter === NO_ARTIST_FILTER) {
+      return count === 0
+        ? "No songs without an artist yet."
+        : "No songs without an artist match that search.";
+    }
+    const selected = artists.find((artist) => artist.id === artistFilter);
+    const name = selected?.name.trim() || "Untitled artist";
+    return count === 0
+      ? `No songs by “${name}” yet.`
+      : `No songs by “${name}” match that search.`;
+  }
+
   if (songs.length === 0) return "No songs yet. Add the first one below.";
   if (query) {
     return tuningOnly
@@ -3015,13 +3115,11 @@ function renderArtists(): void {
     return;
   }
 
-  // Counts use resolved identity: id-backed songs count for their record and
-  // legacy text counts for a same-named record until it is adopted.
-  const counts = new Map<string, number>();
-  for (const song of songs) {
-    const artist = resolveArtistForSong(song, artists);
-    if (artist) counts.set(artist.id, (counts.get(artist.id) ?? 0) + 1);
-  }
+  // Counts use resolved identity through the shared library-artist bucket, so
+  // the Artists section and the Feature 15 filter always agree. Id-backed songs
+  // count for their record and legacy text counts for a same-named record until
+  // it is adopted.
+  const counts = libraryArtistCounts();
 
   const locked = artistBusy || restoring || backingUp;
   const fragment = document.createDocumentFragment();

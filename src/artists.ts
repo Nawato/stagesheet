@@ -1,8 +1,10 @@
 /**
  * Shared artist-resolution helpers.
  *
- * Feature 14 resolves song display names and artist counts; Feature 16 reuses
- * `resolveSetlistLogo` for the setlist → artist → placeholder logo chain.
+ * Feature 14 resolves song display names and artist counts; Feature 15 groups
+ * songs into library artist-filter buckets with the same identity, and
+ * Feature 16 reuses `resolveSetlistLogo` for the setlist → artist →
+ * placeholder logo chain.
  */
 
 import type { Artist, LogoConfig, Setlist, Song } from "./types";
@@ -55,6 +57,41 @@ export function resolveArtistForSong(
   return (
     artists.find((artist) => artist.name.trim().toLocaleLowerCase() === text) ?? null
   );
+}
+
+/**
+ * Library artist-filter value for songs that have no artist identity at all:
+ * no record (by id or resolved name) and no legacy text.
+ */
+export const NO_ARTIST_FILTER = "none";
+
+/**
+ * The library artist-filter bucket a song belongs to: an artist record id,
+ * `NO_ARTIST_FILTER` when it has no artist identity, or `null` when it only
+ * carries unmatched legacy text.
+ *
+ * Counts and the filter predicate share this helper, so an option's count
+ * always equals the rows it shows. Unmatched non-empty legacy text is
+ * deliberately unbucketed: it stays visible under All artists (and search)
+ * instead of being forced into No artist.
+ */
+export function libraryArtistBucket(
+  song: Pick<Song, "artist" | "artist_id">,
+  artists: readonly Artist[],
+): string | null {
+  const record = resolveArtistForSong(song, artists);
+  if (record) return record.id;
+  return song.artist?.trim() ? null : NO_ARTIST_FILTER;
+}
+
+/** True when the library artist filter (null = all) shows this song. */
+export function matchesLibraryArtistFilter(
+  song: Pick<Song, "artist" | "artist_id">,
+  artists: readonly Artist[],
+  filter: string | null,
+): boolean {
+  if (filter === null) return true;
+  return libraryArtistBucket(song, artists) === filter;
 }
 
 /**

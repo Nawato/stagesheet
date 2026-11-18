@@ -130,13 +130,12 @@ harness were removed when the exporter shipped.
 - Sheet correctness fixes from real use: Feature 10 done (per-combination
   column widths + header alignment); Feature 11 done (paginated
   preview/print frames). Both outrank new tooling.
-- Library/setlist tooling slice: Feature 12 is Done, Feature 14 is Done,
-  Feature 17 is Done, Features 13, 15, and 16 are Todo, and Feature 18 is Done.
-  In-place library song editing, artist records + logos, and break-second
-  precision shipped; setlist duplication as a preset base and the remaining
-  artist-chain steps remain. Feature 13 is independent; 15 → 16 continue the
-  artist chain: 15 (library artist filter) → 16 (setlist artist + per-artist
-  picker + lock).
+- Library/setlist tooling slice: Features 12, 14, 15, 17, and 18 are Done;
+  Feature 13 (setlist duplication as a preset base) and Feature 16 (setlist
+  artist + per-artist picker + lock) remain Todo. In-place library song
+  editing, artist records + logos, the in-memory library artist filter, and
+  break-second precision shipped. Feature 13 is independent; Feature 16 is the
+  remaining artist-chain step after 15.
 - `tauri android init` / `ios init` on provisioned machines; native share.
 - Print QA on real A4 (checklist below), backup/restore, app versioning,
   signing/release automation (tracked in the roadmap, P3).
@@ -289,3 +288,20 @@ WebView2/WKWebView when available):**
   immediately; logo imports lock artist Save; artist delete refuses during
   library song writes/drafts and locks library rows while clearing references.
   Features 13, 15, and 16 remain Todo.
+- 2026-11-18: Feature 15 shipped (in-memory library artist filter). The
+  `.library-controls` row gained a labeled **Artist** select (`All artists`
+  default, 44px target, resolved counts in the option text) backed by
+  `artistFilter: string | null` (`null` = all, an artist id, or `"none"` for
+  No artist). It is view-only: never persisted, never dirties a setlist, and
+  never enters the backup envelope. `libraryArtistBucket()` shares
+  `resolveArtistForSong()` identity with the Artists counts, so id-backed and
+  same-named legacy-text songs group together, while unmatched non-empty legacy
+  text stays under All artists and in search. Filtering runs before the
+  existing sort and combines with instant search and Has tuning; empty states
+  name the active constraint (`No songs by “<name>” match that search.` /
+  `No songs by “<name>” yet.`, with No-artist equivalents). Options rebuild on
+  every library render, covering add/edit/duplicate/delete/restore and artist
+  create/rename/delete, and a deleted selection resets to All artists. Feature
+  12's draft retention, hidden-row cancellation, save locking, focus, and row
+  layout behavior is unchanged. No Rust, IPC, storage, or contract change.
+  Features 13 and 16 remain Todo; 16 follows.

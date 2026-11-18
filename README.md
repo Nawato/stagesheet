@@ -25,7 +25,7 @@ src/
   pages.ts           paginates the sheet into A4 frames for multiple-page mode
   types.ts           TypeScript mirror of the Rust IPC/JSON models
   api.ts             typed wrappers around the Tauri commands
-  artists.ts         artist display names, counts, and logo resolution helpers
+  artists.ts         artist display names, filter buckets/counts, logo resolution
   backup.ts          versioned one-file artist/song/setlist backup + restore
   logo.ts            reads stored logos from the app-data directory
   exporter.ts        PDF/PNG raster export + save/open flow
@@ -131,15 +131,19 @@ The library pane keeps reusable songs and offers instant search across title,
 artist, key, and tuning. Search matches the resolved artist name, so songs
 assigned to an artist record and older free-text songs filter identically. A
 view-only sort control orders the list by title (default), resolved artist name,
-key, or tuning; missing values sort last and ties fall back to title. The **Has
-tuning** checkbox narrows the list to songs with a tuning set and combines with
-the search query. Each row adds the song to the running order, duplicates it
-into the library under a new id with a `(copy)` suffix, or removes it after a
+key, or tuning; missing values sort last and ties fall back to title. An
+**Artist** select filters the list to one artist record, or to **No artist**
+for songs with no resolved artist identity, and combines with search, sort, and
+tuning. Its options carry resolved song counts; legacy text groups under a
+same-named record until adopted, while unmatched non-empty text stays under
+All artists and in search. **Has tuning** narrows the list to songs with a
+tuning set. Each row adds the song to the running order, duplicates it into the
+library under a new id with a `(copy)` suffix, or removes it after a
 confirmation. **Edit** opens an inline editor in the row with the same fields
 and validation as the add form; saving keeps the song's id and re-applies the
-current search, sort, and tuning filter, while saved setlists keep their own
-copies. Sorting and filtering never mark a setlist dirty or change the stored
-data.
+current search, sort, artist, and tuning filters, while saved setlists keep
+their own copies. Sorting and filtering never mark a setlist dirty or change
+the stored data, and the library badge always reports the total song count.
 
 ### Artists
 
@@ -249,11 +253,14 @@ change.
 - JSON storage + capability scoping + the full command list above.
 - Song library with instant search (title, resolved artist, key, tuning),
   view-only sort by title/resolved artist/key/tuning, a "Has tuning" filter,
-  one-click add, inline row editing with the add form's validation and field
-  limits (stable id, re-sorted and re-filtered after save), per-row duplicate
-  under a new id, and delete with confirmation. Free-text tuning (max 24 chars)
-  is part of search, the add form, the library editor, and each setlist song's
-  editor details.
+  and a view-only Artist filter (All artists / a record with its resolved song
+  count / No artist) that combines with search, tuning, and sort. The filter
+  uses the same resolved identity as the Artists section, keeps the total song
+  badge, and names the active constraint in empty states. One-click add, inline
+  row editing with the add form's validation and field limits (stable id,
+  re-sorted and re-filtered after save), per-row duplicate under a new id, and
+  delete with confirmation. Free-text tuning (max 24 chars) is part of search,
+  the add form, the library editor, and each setlist song's editor details.
 - Managed artist records (name + logo) in the library pane with logo
   thumbnails, resolved song counts, an inline create/edit form using the setlist
   logo controls, and confirmed delete. Songs reference artists by id while
@@ -326,10 +333,11 @@ change.
 
 ### Still missing (per plan)
 
-- Remaining artist-chain tooling: Feature 15 (in-memory library artist filter)
-  and Feature 16 (setlist artist, per-artist setlist picker, and toggleable add
-  lock). Their data fields and logo-resolution helper groundwork ship with
-  Feature 14. Setlist duplication (Feature 13) remains Todo.
+- Remaining artist-chain tooling: Feature 16 (setlist artist, per-artist
+  setlist picker, and toggleable add lock). Its `Setlist.artist_id` field and
+  `resolveSetlistLogo` groundwork shipped with Feature 14, and the in-memory
+  library artist filter (Feature 15) is already in place. Setlist duplication
+  (Feature 13) remains Todo.
 - Paginated split-setlist helper (duplicate setlist, move second half) as an
   alternative to multi-page mode.
 - Physical-paper QA on A4 (page count, header/footer per engine, legibility),
