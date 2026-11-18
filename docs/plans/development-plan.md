@@ -130,12 +130,12 @@ harness were removed when the exporter shipped.
 - Sheet correctness fixes from real use: Feature 10 done (per-combination
   column widths + header alignment); Feature 11 done (paginated
   preview/print frames). Both outrank new tooling.
-- Library/setlist tooling slice: Features 12, 14, 15, 16, 17, and 18 are Done;
-  Feature 13 (setlist duplication as a preset base) remains Todo. In-place
-  library song editing, artist records + logos, the in-memory library artist
-  filter, the setlist artist + per-artist picker + library lock, and
-  break-second precision shipped. Feature 13 is independent and will copy the
-  setlist artist.
+- Library/setlist tooling slice: Features 12, 13, 14, 15, 16, 17, and 18 are
+  Done. In-place library song editing, setlist duplication as a preset base,
+  artist records + logos, the in-memory library artist filter, the setlist
+  artist + per-artist picker + library lock, and break-second precision
+  shipped. Duplication copies the setlist artist and shares the logo file.
+  The only remaining overflow tool is the split-setlist helper.
 - `tauri android init` / `ios init` on provisioned machines; native share.
 - Print QA on real A4 (checklist below), backup/restore, app versioning,
   signing/release automation (tracked in the roadmap, P3).
@@ -164,9 +164,9 @@ manual by design. Feature 18 has landed with its manual QA (button location
 at full and narrowed widths, confirm for persisted/draft setlists, cancel
 keeps everything, post-delete selection + logo cleanup). The library/setlist
 tooling specs carry their manual QA matrices (edit validation + id stability,
-duplicate fidelity, break conversion, artist CRUD + adoption, filter
-combinations, lock gating + backup round trip); harness coverage follows the
-same pattern once built.
+song + setlist duplicate fidelity, break conversion, artist CRUD + adoption,
+filter combinations, lock gating + backup round trip); harness coverage
+follows the same pattern once built.
 
 **Print QA checklist (manual, real A4, per engine — WebKitGTK now;
 WebView2/WKWebView when available):**
@@ -323,3 +323,19 @@ WebView2/WKWebView when available):**
   stays 1, and the Feature 14 Rust tests already cover with/without the field,
   legacy loading, and dangling ids. Feature 13 remains Todo and will copy
   `artist_id`.
+- 2026-11-18: Feature 13 shipped (duplicate setlist as a preset base). The
+  header gained **Duplicate** beside **Delete** (44px `btn`, `type="button"`);
+  it saves a dirty editor first like Print, aborts with the save error or the
+  standard backend-unavailable message, and writes a new `Setlist` through
+  `save_setlist`. `cloneSetlist()` deep-copies items (song snapshot ids stay
+  values), venue, date, logo config, `sheet_options`, `page_mode`, and
+  `artist_id`; the logo `file_name` is shared. Titles use
+  `X` → `X (copy)` → `X (copy 2)`: the source is trimmed, an existing suffix is
+  stripped, and a blank title falls back to `Untitled setlist`; candidates
+  compare trimmed, case-insensitively over stored setlist titles. Success
+  selects the clean copy in the header (even outside the per-artist filter) and
+  reports `Duplicated “<title>” as “<copy title>”.` No confirmation was added.
+  Shared-logo deletion needs no new code: `deleteCurrent` (and `remove_logo`)
+  skip files still referenced by another setlist. No Rust, IPC, storage,
+  backup-schema, sheet/colgroup/frame/print-CSS, raster, CSP, or capability
+  change. The split-setlist helper remains the open overflow item.

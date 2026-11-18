@@ -240,6 +240,7 @@ const exportPdfButton = byId<HTMLButtonElement>("export-pdf");
 const exportPngButton = byId<HTMLButtonElement>("export-png");
 const exportOpenAfterInput = byId<HTMLInputElement>("export-open-after");
 const deleteSetlistButton = byId<HTMLButtonElement>("delete-setlist");
+const duplicateSetlistButton = byId<HTMLButtonElement>("duplicate-setlist");
 
 const songSearch = byId<HTMLInputElement>("song-search");
 const songSortSelect = byId<HTMLSelectElement>("song-sort");
@@ -340,6 +341,9 @@ function bindEvents(): void {
   });
   deleteSetlistButton.addEventListener("click", () => {
     void deleteCurrent();
+  });
+  duplicateSetlistButton.addEventListener("click", () => {
+    void duplicateCurrent();
   });
   setlistArtistFilterSelect.addEventListener("change", () => {
     const value = setlistArtistFilterSelect.value;
@@ -882,6 +886,89 @@ async function deleteCurrent(): Promise<void> {
   if (backendAvailable && !dirty) {
     await loadLogoForCurrent();
   }
+}
+
+let duplicating = false;
+
+/**
+ * Duplicates the current setlist as a preset base under a fresh id. A dirty
+ * editor is saved first (the Print/Backup rule), so the copy is made from the
+ * persisted state; the source is never mutated and a failure leaves the editor
+ * and cache where they were.
+ */
+async function duplicateCurrent(): Promise<void> {
+  if (!current || duplicating) return;
+  if (!ensureBackend()) return;
+
+  duplicating = true;
+  duplicateSetlistButton.disabled = true;
+
+  try {
+    if (dirty) {
+      const saved = await saveCurrent();
+      if (!saved) return;
+    }
+    if (!current) return;
+
+    const sourceTitle = current.title.trim() || "Untitled setlist";
+    const now = new Date().toISOString();
+    // `cloneSetlist` deep-copies items, logo config, sheet options, page mode,
+    // and artist id. Song snapshot ids stay as values, not references.
+    const copy = cloneSetlist(current);
+    copy.id = newId();
+    copy.title = duplicateSetlistTitle(sourceTitle);
+    copy.created_at = now;
+    copy.updated_at = now;
+
+    try {
+      const saved = await api.saveSetlist(copy);
+      // Keep the cache and editor copies separate, as saveCurrent does.
+      const cached = cloneSetlist(saved);
+      const existingIndex = setlists.findIndex((setlist) => setlist.id === saved.id);
+      if (existingIndex >= 0) {
+        setlists[existingIndex] = cached;
+      } else {
+        setlists.push(cached);
+      }
+      sortSetlists();
+      current = cloneSetlist(cached);
+      dirty = false;
+      dirtyIndicator.hidden = true;
+
+      renderAll();
+      // The copy shares the logo file, so the existing preview stays valid.
+      void refreshLogoIfChanged();
+      fitPreview();
+      setStatus(`Duplicated “${sourceTitle}” as “${saved.title}”.`, "success");
+    } catch (error) {
+      setStatus(`Could not duplicate setlist: ${describeError(error)}`, "error");
+    }
+  } finally {
+    duplicating = false;
+    duplicateSetlistButton.disabled = false;
+  }
+}
+
+/**
+ * `Setlist` → `Setlist (copy)`, incrementing the suffix instead of stacking
+ * copies. The source is trimmed before the suffix is stripped, so
+ * `X (copy) ` and ` X (copy)` continue the chain as `X (copy 2)`; a blank
+ * title falls back to `Untitled setlist`. Mirrors `duplicateSongTitle`'s suffix
+ * stripping, but setlist titles compare trimmed and case-insensitively.
+ */
+function duplicateSetlistTitle(title: string): string {
+  const trimmed = title.trim() || "Untitled setlist";
+  const base =
+    trimmed.replace(/\s+\(copy(?: \d+)?\)$/i, "").trim() || "Untitled setlist";
+  const used = new Set(setlists.map((setlist) => setlist.title.trim().toLocaleLowerCase()));
+
+  let candidate = `${base} (copy)`;
+  let index = 2;
+  while (used.has(candidate.trim().toLocaleLowerCase())) {
+    candidate = `${base} (copy ${index})`;
+    index += 1;
+  }
+  return candidate;
 }
 
 async function printCurrent(): Promise<void> {

@@ -301,6 +301,13 @@ change.
   in preview, print, and export. Delete/Discard sits next to Save in the header
   actions (away from Add break) and keeps the existing confirmation for saved
   setlists and unsaved drafts.
+- **Duplicate** sits beside **Delete** and turns the current setlist into a
+  preset base: a dirty editor is saved first, then a deep copy is written under
+  a fresh id and fresh timestamps. Venue, date, items, logo config (the file
+  name is shared, never copied), sheet options, page mode, and the setlist
+  artist are copied; the clean copy becomes current. Titles follow
+  `X` → `X (copy)` → `X (copy 2)` without stacking suffixes, and deleting one
+  copy keeps a logo the other still references.
 - Per-artist setlist picker in the header (`All artists` default; **New**
   pre-assigns the picked artist) and an editor-only library lock: the current
   setlist's artist forces the library artist filter, narrows adds to matching
@@ -363,10 +370,8 @@ change.
 
 ### Still missing (per plan)
 
-- Setlist duplication as a preset base (Feature 13), including copying the
-  setlist artist. It remains independent and Todo.
-- Paginated split-setlist helper (duplicate setlist, move second half) as an
-  alternative to multi-page mode.
+- Paginated split-setlist helper (move the second half of a setlist into a new
+  one) as an alternative to multi-page mode.
 - Physical-paper QA on A4 (page count, header/footer per engine, legibility),
   plus cross-engine (WebView2/WKWebView) export checks. Single-page native
   print relies on engine `thead`/`tfoot` repetition (WebKit bug 17205);

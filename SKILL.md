@@ -118,8 +118,22 @@ Serde notes:
   editor and header picker, and the setlist remains saveable. Assigning or
   clearing A is a normal setlist edit (dirty + persisted on save). The
   lock/add-gate it drives is UI-only and adds no printed markup; A can change
-  the sheet only through the logo chain. The planned setlist duplication
-  (Feature 13) copies the field.
+  the sheet only through the logo chain. Setlist duplication (Feature 13)
+  copies the field.
+- Setlist duplication (Feature 13) is frontend-only through `save_setlist`: the
+  new `Setlist` gets a fresh UUID and fresh `created_at`/`updated_at`, while
+  `items` are deep-copied values (song snapshot ids are kept) and `venue`,
+  `date`, `logo` config, `sheet_options`, `page_mode`, and `artist_id` are
+  copied. The logo `file_name` is shared, not copied; `remove_logo` already
+  keeps a file while any setlist or artist references it. Titles follow
+  `X` → `X (copy)` → `X (copy 2)`: the source is trimmed, an existing suffix is
+  stripped, the base is trimmed again, and a blank title falls back to
+  `Untitled setlist`; candidates compare trimmed and case-insensitively over
+  stored setlist titles. A dirty editor saves first (the Print/Backup rule);
+  save failures abort the duplicate and leave the cache/editor on the source.
+  Success selects the clean copy in the header even when the artist filter
+  excludes it. No sheet, `<colgroup>`, frame, print-CSS, raster, or layout
+  change is involved.
 - The artist list is frontend-sorted by name. Counts use resolved identity:
   id-backed songs count for their record, legacy-text songs count for a
   same-named record until adopted, and unmatched text stays uncounted. Search

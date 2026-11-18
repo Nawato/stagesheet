@@ -32,10 +32,10 @@ written (legacy `artist` text stays as a display fallback until adopted).
 
 Full specs lived here until the 2026-11 cleanup; the contract facts below are
 all mirrored in `SKILL.md`, which is now the single authority for shipped
-behavior. Features 12 (edit library songs), 14 (artist records with logos),
-15 (filter library by artist), 16 (setlist artist + lock), 17 (break seconds),
-and 18 (setlist Delete-clarity) are Done; their specs remain below as
-reference.
+behavior. Features 12 (edit library songs), 13 (duplicate setlist as preset
+base), 14 (artist records with logos), 15 (filter library by artist), 16
+(setlist artist + lock), 17 (break seconds), and 18 (setlist Delete-clarity)
+are Done; their specs remain below as reference.
 
 - **Validation hardening (with Feature 2)** — Done. `Setlist::validate()` walks
   every item. Bounds enforced in Rust: break `duration_secs` `0..=36000` (the
@@ -219,11 +219,32 @@ field is the record dropdown described there.)
 1. Inline editor + `save_song` wiring + re-render.
 2. QA + this file status + commit.
 
-## Feature 13: Duplicate setlist as preset base — Todo
+## Feature 13: Duplicate setlist as preset base — Done
 
-Status: Todo. Starting a new gig from last month's running order today means
+Status: Done. Starting a new gig from last month's running order today means
 rebuilding it song by song. Duplicating a setlist under a fresh id gives a
 "base preset" to rename and reshape.
+
+### Shipped notes
+
+**Duplicate** sits beside **Delete** in the header actions. It writes a new
+`Setlist` through `save_setlist` with a fresh UUID and fresh timestamps,
+reusing `cloneSetlist()` so items, logo config, `sheet_options`, `page_mode`,
+`artist_id`, venue, and date are deep-copied. Item `Song` snapshots keep their
+song ids because they are values; the logo `file_name` is shared, not copied.
+A dirty editor saves first (the Print/Backup rule) and aborts with the save
+error; an unavailable backend uses the standard message. The title follows
+`X` → `X (copy)` → `X (copy 2)`: the source is trimmed, then an existing
+suffix is stripped and the base is trimmed again; a blank title falls back to
+`Untitled setlist`, candidates compare trimmed and case-insensitively over
+stored setlist titles, and the status uses the normalized source title.
+Success selects the clean copy in the header (it stays available even when the
+header artist filter excludes it) and reports
+`Duplicated “<title>” as “<copy title>”.` No confirmation was added. QA note
+for the shared logo: deleting either copy is already safe because
+`deleteCurrent` only calls `remove_logo` after confirming no remaining setlist
+references the file (and the backend repeats that check), so the survivor keeps
+its logo; no new cleanup behavior was needed.
 
 ### Data model
 
@@ -241,9 +262,10 @@ the file, so sharing is safe. Title follows the library pattern
 - **Duplicate** button next to **Delete** in its Feature 18 location
   (away from Add Break), same sizing. No confirmation (non-destructive,
   mirrors Duplicate song).
-- If the editor is dirty, save first — same rule as Print/Backup/Export — so
+- If the editor is dirty, save first — same rule as Print/Backup — so
   the preset is the saved state; if the save fails, abort with the save error.
-  Backend unavailable aborts with the standard message.
+  Backend unavailable aborts with the standard message. (Export is intentionally
+  different: it captures the live editor state without saving.)
 - On success the new copy becomes the current setlist (clean, not dirty) and
   the status line confirms `Duplicated “<title>” as “<copy title>”.`
 - Deleting one copy never removes a logo still referenced by the other (already
@@ -547,8 +569,7 @@ print-CSS, raster, or layout change; the exporter only gains the resolved
   edit. Artist delete with a dirty setlist draft: cached S assigned A but the
   draft changed to B keeps B; cached S assigned B but the draft changed to A
   clears A and unlocks. Both must refresh the editor select, header picker,
-  lock, summary, and logo fallback. Feature 13's future duplicate will copy
-  the value.
+  lock, summary, and logo fallback. Feature 13's duplicate copies the value.
 
 ### Build order
 
@@ -672,14 +693,15 @@ misread instead of adding new behavior.
 - **P0 — PNG/PDF export + print**: Feature 6 done. Physical-paper QA and
   cross-engine checks remain in Phase 6.
 - **P0 — Overflow tooling for the single-A4 cap**: Feature 5 shipped
-  (multi-page mode + sub-70% legibility nudge). Feature 13 adds setlist
-  duplication; the remaining slice is a split-setlist helper (move second half
-  to a new setlist) as an alternative to multi-page.
-- **P1 — Library/setlist tooling**: Features 12 (edit library songs), 14
-  (artist records + logos), 15 (library artist filter), 16 (setlist artist +
-  per-artist picker + lock), 17 (break seconds), and 18 (delete clarity) are
-  Done. Feature 13 (duplicate setlist as preset base) remains independent and
-  Todo; it will copy `Setlist.artist_id`.
+  (multi-page mode + sub-70% legibility nudge). Feature 13 shipped setlist
+  duplication as a preset base; the remaining slice stays open: a
+  split-setlist helper (move second half to a new setlist) as an alternative to
+  multi-page.
+- **P1 — Library/setlist tooling**: Features 12 (edit library songs), 13
+  (duplicate setlist as preset base), 14 (artist records + logos), 15 (library
+  artist filter), 16 (setlist artist + per-artist picker + lock), 17 (break
+  seconds), and 18 (delete clarity) are Done. Setlist duplication copies
+  `Setlist.artist_id` and shares the logo file.
 - **P1 — Backup/restore**: Done (Feature 7). One versioned JSON envelope for
   the full library + setlists; logos are re-imported manually in v1.
   Feature 14 adds the `artists` array without a version bump.
