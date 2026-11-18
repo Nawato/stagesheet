@@ -133,8 +133,6 @@ let artistLogoRequestId = 0;
 let artistLogoPreviewFailed = false;
 /** True while an artist create/update/delete request is in flight. */
 let artistBusy = false;
-/** True while the Logo width slider is saving an artist logo width. */
-let effectiveLogoSaving = false;
 /** True while an artist logo upload/import is in flight. */
 let artistLogoBusy = false;
 /** True while deleteArtist clears song/setlist references. */
@@ -146,6 +144,13 @@ const artistThumbUrls = new Map<string, string>();
 const UNFILED_SCOPE = "__unfiled__";
 /** Picker value reopening the landing page without changing the scope. */
 const LANDING_PICKER_VALUE = "__landing__";
+/**
+ * UI-level one-time guard for Feature 29's logo-geometry upgrade. This is not
+ * part of the data model, storage, or backup envelope: it only records that
+ * the legacy setlists have been checked once, so a setlist the user later
+ * leaves at 40/Center is never migrated again.
+ */
+const LOGO_GEOMETRY_MIGRATION_KEY = "stagesheet.logoGeometryMigrated";
 
 /** Select value marking the legacy free-text artist option in the library editor. */
 const LEGACY_ARTIST_VALUE = "__legacy_artist__";
@@ -497,39 +502,29 @@ function bindEvents(): void {
     void handleLogoFile();
   });
   logoRemoveButton.addEventListener("click", handleLogoRemove);
+  // Feature 29: the slider and radios always edit the setlist draft's own
+  // geometry, whichever file the resolution chain displays. `input` updates
+  // the output text and the sheet; no per-tick status.
   logoWidthInput.addEventListener("input", () => {
-    if (!current || captureGuard()) return;
-    const width = clamp(
+    if (!current) return;
+    if (captureGuard()) {
+      renderLogoControls();
+      return;
+    }
+    current.logo.width_mm = clamp(
       Number(logoWidthInput.value),
       LOGO_MIN_WIDTH_MM,
       LOGO_MAX_WIDTH_MM,
     );
-    // Artist-logo path: live-update the label only; the `change` handler
-    // commits via `save_artist` without dirtying the setlist. Own and
-    // placeholder paths keep today's input-driven `setlist.logo` behavior.
-    if (effectiveLogoCase() === "artist") {
-      logoWidthOutput.textContent = `${Math.round(width)} mm`;
-      return;
-    }
-    current.logo.width_mm = width;
     logoWidthOutput.textContent = `${Math.round(current.logo.width_mm)} mm`;
     markDirty();
     renderSheet();
-  });
-  logoWidthInput.addEventListener("change", () => {
-    if (!current || captureGuard()) return;
-    if (effectiveLogoCase() !== "artist") return;
-    void commitEffectiveArtistLogoWidth();
   });
   for (const radio of alignmentRadios) {
     radio.addEventListener("change", () => {
       if (!current || !radio.checked || !isLogoAlignment(radio.value)) return;
       if (captureGuard()) {
         renderLogoControls();
-        return;
-      }
-      if (effectiveLogoCase() === "artist") {
-        void commitEffectiveArtistLogoAlignment(radio.value);
         return;
       }
       current.logo.alignment = radio.value;
@@ -614,7 +609,9 @@ async function init(): Promise<void> {
   applyPrintPlatformClass();
   logoWidthInput.min = String(LOGO_MIN_WIDTH_MM);
   logoWidthInput.max = String(LOGO_MAX_WIDTH_MM);
-  bindEvents();
+  // Gate the static editor before the first await: the Feature 29 migration
+  // can spend time in backend saves, and nothing in the shell is bound yet.
+  showStartupGate();
 
   try {
     const [loadedSongs, loadedArtists, loadedSetlists] = await Promise.all([
@@ -625,6 +622,7 @@ async function init(): Promise<void> {
     adoptLoadedState(loadedSongs, loadedArtists, loadedSetlists);
   } catch (error) {
     backendAvailable = false;
+    landingVisible = false;
     current = createDraft();
     dirty = true;
     setStatus(
@@ -634,12 +632,19 @@ async function init(): Promise<void> {
   }
 
   if (backendAvailable) {
+    // Feature 29: one deterministic startup pass over pre-upgrade setlists,
+    // after the caches are adopted and only while the backend is available.
+    await migrateDefaultSetlistLogoGeometry();
     // Feature 20: startup always lands on artist selection first. The scope is
     // session-only, so a fresh launch never resumes a previous artist.
     activeArtistId = null;
     landingVisible = true;
     landingShowCreate = false;
   }
+  // Bind only after startup adopted (and migrated) the records: the migration
+  // awaits backend saves, and live handlers during that window could overwrite
+  // an in-flight edit with the migration's stale snapshot.
+  bindEvents();
   renderAll();
   if (backendAvailable && !dirty) {
     await loadLogoForCurrent();
@@ -742,6 +747,117 @@ function adoptLoadedState(
   const next = preferred ?? inScope[0];
   current = next ? cloneSetlist(next) : blankDraftForScope();
   dirty = !next;
+}
+
+/**
+ * Feature 29 startup migration (deterministic, idempotent, no schema/model
+ * marker, no schema bump). Pinned rule: for every setlist with **no own logo**
+ * whose live artist has a logo, copy the artist's current width (clamped
+ * 10–80) and alignment into the setlist's stored logo config — but only while
+ * the setlist's stored geometry is still exactly the default (`40` mm and
+ * `Center`). Runs on the first startup after the upgrade, after the caches are
+ * adopted.
+ *
+ * "First startup" is recorded by a UI-level localStorage guard
+ * (`LOGO_GEOMETRY_MIGRATION_KEY`), not by a model field or backup/schema flag.
+ * That keeps the upgrade one-time: a setlist the user later deliberately leaves
+ * at 40/Center, a newly created setlist, and a restored 40/Center record are
+ * not re-adopted. The guard also stores the ids of records whose save failed,
+ * so later starts retry only those records instead of reopening the whole
+ * pass. If localStorage is unavailable the pass simply re-runs next start (the
+ * rule is idempotent and only touches default-valued records).
+ *
+ * Setlists with an own logo, an artist without a logo, a dangling artist id,
+ * or a non-default geometry keep their stored values untouched. Saves go
+ * through the normal `api.saveSetlist` (these setlists are filed — the live
+ * artist exists) and never report a status message.
+ */
+async function migrateDefaultSetlistLogoGeometry(): Promise<void> {
+  if (!backendAvailable) return;
+
+  const state = readLogoGeometryMigrationState();
+  if (state.done && state.failed.length === 0) return;
+  // A completed pass only retries its recorded failures; new/reset 40/Center
+  // setlists are never migrated again.
+  const retryIds = state.done ? new Set(state.failed) : null;
+
+  const failures = new Set<string>();
+  for (const setlist of [...setlists]) {
+    if (retryIds && !retryIds.has(setlist.id)) continue;
+    if (setlist.logo.file_name) continue;
+    if (setlist.logo.width_mm !== DEFAULT_LOGO_WIDTH_MM) continue;
+    if (setlist.logo.alignment !== "Center") continue;
+
+    const artist = findArtistById(artists, normalizeArtistId(setlist.artist_id));
+    if (!artist?.logo.file_name) continue;
+
+    const migratedLogo = {
+      ...setlist.logo,
+      width_mm: clamp(artist.logo.width_mm, LOGO_MIN_WIDTH_MM, LOGO_MAX_WIDTH_MM),
+      alignment: artist.logo.alignment,
+    };
+    // The artist may itself sit at the default; the copy would be a no-op, so
+    // leave the record (and the storage write) alone.
+    if (
+      migratedLogo.width_mm === setlist.logo.width_mm &&
+      migratedLogo.alignment === setlist.logo.alignment
+    ) {
+      continue;
+    }
+
+    const migrated: Setlist = { ...setlist, logo: migratedLogo };
+
+    try {
+      const saved = await api.saveSetlist(migrated);
+      const index = setlists.findIndex((entry) => entry.id === saved.id);
+      if (index >= 0) setlists[index] = cloneSetlist(saved);
+      // Never replace a draft the user could have started editing; at startup
+      // this is the clean adopted copy, but keep the guard local like the
+      // artist-delete loop.
+      if (current?.id === saved.id && !dirty) current = cloneSetlist(saved);
+    } catch {
+      // Leave the stored geometry untouched; only this id is retried next
+      // start. No status line.
+      failures.add(setlist.id);
+    }
+  }
+
+  writeLogoGeometryMigrationState({ done: true, failed: [...failures] });
+
+  // The normal save bumps `updated_at`; keep the in-memory order consistent
+  // with what the next load will show.
+  sortSetlists();
+}
+
+interface LogoGeometryMigrationState {
+  /** True once the first post-upgrade pass completed. */
+  done: boolean;
+  /** Setlists whose save failed; retried on later starts. */
+  failed: string[];
+}
+
+/** Reads the one-time Feature 29 migration guard (fresh state when unavailable). */
+function readLogoGeometryMigrationState(): LogoGeometryMigrationState {
+  try {
+    const raw = localStorage.getItem(LOGO_GEOMETRY_MIGRATION_KEY);
+    if (!raw) return { done: false, failed: [] };
+    const parsed = JSON.parse(raw) as Partial<LogoGeometryMigrationState> | null;
+    const failed = Array.isArray(parsed?.failed)
+      ? parsed.failed.filter((id): id is string => typeof id === "string")
+      : [];
+    return { done: parsed?.done === true, failed };
+  } catch {
+    return { done: false, failed: [] };
+  }
+}
+
+/** Records the one-time Feature 29 migration guard; best-effort only. */
+function writeLogoGeometryMigrationState(state: LogoGeometryMigrationState): void {
+  try {
+    localStorage.setItem(LOGO_GEOMETRY_MIGRATION_KEY, JSON.stringify(state));
+  } catch {
+    // Storage unavailable: the next start re-checks default-valued records.
+  }
 }
 
 /**
@@ -1151,6 +1267,9 @@ function syncCaptureLock(locked: boolean): void {
   for (const radio of alignmentRadios) radio.disabled = locked;
   for (const [, input] of sheetOptionInputs) input.disabled = locked;
   for (const radio of pageModeRadios) radio.disabled = locked;
+  // Unconditionally re-enabling Remove would contradict its own-logo
+  // precondition (Feature 29); re-render its state from the draft.
+  if (!locked) renderLogoControls();
 }
 
 async function printCurrent(): Promise<void> {
@@ -1208,8 +1327,8 @@ async function exportCurrent(format: ExportFormat): Promise<void> {
     const outcome = await exportSetlist({
       sheet,
       setlist: snapshot,
-      // Same resolution chain as the preview; the exporter only needs the
-      // stored file name and printed width.
+      // Same file resolution as the preview; the exporter needs the stored
+      // file name plus the setlist's printed width/alignment.
       logo: resolveSetlistLogo(snapshot, artists),
       format,
       openAfterExport: exportOpenAfterInput.checked,
@@ -1279,8 +1398,6 @@ function artistFormHasDraft(): boolean {
   if (state.mode === "edit") return true;
   if (state.name.trim()) return true;
   if (state.logo.file_name) return true;
-  if (state.logo.width_mm !== DEFAULT_LOGO_WIDTH_MM) return true;
-  if (state.logo.alignment !== "Center") return true;
   if (state.transientLogos.size > 0) return true;
   return false;
 }
@@ -1288,10 +1405,11 @@ function artistFormHasDraft(): boolean {
 /**
  * Backup/restore refuse the landing artist-edit draft too: the form is not
  * persisted until Save, so a snapshot must not silently omit a typed name or
- * changed logo. Reopening the landing screen (Choose artist…) shows the draft
- * again. The landing create form gets the same treatment: a typed name or
- * staged logo blocks the snapshot while its request or logo import is in
- * flight.
+ * staged logo (Feature 29 dropped the artist width/alignment checks — those
+ * values are render-dead). Reopening the landing screen (Choose artist…) shows
+ * the draft again. The landing create form gets the same treatment: a typed
+ * name or staged logo blocks the snapshot while its request or logo import is
+ * in flight.
  */
 function libraryDraftGuard(action: "backing up" | "restoring"): string | null {
   if (artistBusy || landingBusy) {
@@ -1959,22 +2077,21 @@ function renderMeta(): void {
 function renderLogoControls(): void {
   if (!current) return;
 
-  // Feature 19 + 25: the width slider and the alignment radios follow the
-  // displayed logo (own → artist → placeholder). The artist path shows the
-  // artist's width/alignment; own and placeholder paths show the setlist's
-  // own config (pre-sizing the next own logo when nothing is displayed yet).
-  const logoCase = effectiveLogoCase();
-  const effective = resolveSetlistLogo(current, artists);
-  const sliderWidth =
-    logoCase === "artist" ? effective.width_mm : current.logo.width_mm;
-  logoWidthInput.value = String(sliderWidth);
-  logoWidthOutput.textContent = `${Math.round(sliderWidth)} mm`;
+  // Feature 29: width and alignment always edit this setlist draft's own logo
+  // config, whatever file the resolution chain shows (own → artist → none).
+  // With no logo displayed the controls pre-size the next own logo; they stay
+  // enabled whenever a draft is open except during the export capture.
+  const width = clamp(current.logo.width_mm, LOGO_MIN_WIDTH_MM, LOGO_MAX_WIDTH_MM);
+  logoWidthInput.value = String(width);
+  logoWidthOutput.textContent = `${Math.round(width)} mm`;
   // Only the setlist's own logo can be removed here; an artist logo shown via
-  // the resolution chain is not a setlist logo.
-  logoRemoveButton.disabled = !current.logo.file_name && !logoPreviewIsLocal;
+  // the resolution chain is not a setlist logo. A local upload preview counts
+  // as the setlist's own logo for the Remove control.
+  logoRemoveButton.disabled =
+    exporting || (!current.logo.file_name && !logoPreviewIsLocal);
 
   for (const radio of alignmentRadios) {
-    radio.checked = radio.value === effective.alignment;
+    radio.checked = radio.value === current.logo.alignment;
   }
 
   renderLogoShowing();
@@ -1989,15 +2106,15 @@ function effectiveLogoCase(): "own" | "artist" | "none" {
   return "none";
 }
 
-/** The live artist record behind the artist-logo path, if any. */
+/** The live artist record behind a setlist with no own logo, if any. */
 function effectiveLogoArtist(): Artist | null {
   if (!current || current.logo.file_name) return null;
   return findArtistById(artists, normalizeArtistId(current.artist_id));
 }
 
 /**
- * Visible showing line so the width/alignment target is unambiguous. Names
- * both controls' target in every resolution case.
+ * Visible showing line naming the image source and the per-setlist size target
+ * (Feature 29). Stays `role="note"`, never live.
  */
 function renderLogoShowing(): void {
   if (!current) {
@@ -2006,15 +2123,26 @@ function renderLogoShowing(): void {
   }
   const logoCase = effectiveLogoCase();
   if (logoCase === "own") {
-    logoShowingEl.textContent = "Setlist logo — width and alignment apply here";
+    logoShowingEl.textContent = "Setlist logo — size applies to this setlist only.";
+    return;
+  }
+  // A fresh upload shows before its stored file name exists (import in flight
+  // or backend unavailable); the fieldset already displays it, so never claim
+  // "No logo yet" for it.
+  if (logoPreviewIsLocal) {
+    logoShowingEl.textContent = "Setlist logo — size applies to this setlist only.";
     return;
   }
   const artist = effectiveLogoArtist();
   if (logoCase === "artist" && artist) {
-    logoShowingEl.textContent = `${artistLabel(artist)} logo (artist) — width and alignment update every setlist using it`;
+    logoShowingEl.textContent = `“${artistLabel(artist)}” logo (from the artist) — size applies to this setlist only.`;
     return;
   }
-  logoShowingEl.textContent = "No logo yet — width and alignment will apply to the next own logo";
+  if (artist) {
+    logoShowingEl.textContent = `No logo yet — add an image above, or add one to “${artistLabel(artist)}” and it will appear here.`;
+    return;
+  }
+  logoShowingEl.textContent = "No logo yet — add an image above.";
 }
 
 function renderSheetOptions(): void {
@@ -2667,9 +2795,9 @@ function renderSheet(): void {
   // source, but the frame stack is what the preview and print show.
   sheetFrame.classList.toggle("is-framed", multi);
 
-  // Resolve the same logo chain everywhere: own logo → artist logo →
-  // placeholder. The sheet only reads `logo` for the header; no print markup
-  // or layout changes.
+  // Resolve the same logo file chain everywhere (own → artist → none); the
+  // width/alignment in the resolved config are always this setlist's. The
+  // sheet only reads `logo` for the header; no print markup or layout changes.
   renderSetlistSheet(
     sheet,
     { ...current, logo: resolveSetlistLogo(current, artists) },
@@ -3911,10 +4039,12 @@ function buildArtistThumb(artist: Artist): HTMLSpanElement {  const thumb = el("
 }
 
 /**
- * Enters inline edit mode on the landing card with the artist's name and
- * current logo settings. The draft lives in `artistFormState` while the card
- * rebuilds around it; entering a scope or closing the landing page keeps the
- * draft (backup/restore name the landing screen until it is resolved).
+ * Enters inline edit mode on the landing card with the artist's name and logo
+ * image. The stored width/alignment ride along in `artistFormState.logo`
+ * untouched but are not exposed (Feature 29). The draft lives in
+ * `artistFormState` while the card rebuilds around it; entering a scope or
+ * closing the landing page keeps the draft (backup/restore name the landing
+ * screen until it is resolved).
  */
 function startArtistEdit(artistId: string): void {
   if (artistBusy || artistDeleting || landingBusy) {
@@ -4175,9 +4305,9 @@ async function handleArtistSubmit(event: SubmitEvent): Promise<void> {
     renderFileUnder();
     renderLogoControls();
     renderLibrary();
-    // A rename can change legacy-text identity and counts; a logo edit changes
-    // this setlist's resolved logo width/alignment even when the file stays the
-    // same, so always re-render the sheet before refreshing the resolved file.
+    // A rename can change legacy-text identity and counts; a logo edit can
+    // change the resolved file shown by setlists without their own logo, so
+    // always re-render the sheet before refreshing the resolved file.
     renderSummary();
     renderSheet();
     renderLanding();
@@ -4562,6 +4692,23 @@ function syncLandingInert(): void {
   }
 }
 
+/**
+ * First-paint gate for startup: shows a busy landing dialog and marks the
+ * header/workspace inert before the initial fetch and the Feature 29 migration
+ * run. Nothing in the shell is bound yet, so the static editor must never look
+ * clickable during that window.
+ */
+function showStartupGate(): void {
+  landingVisible = true;
+  landingOverlay.hidden = false;
+  landingCard.setAttribute("aria-busy", "true");
+  landingCard.replaceChildren(
+    landingHeading("Preparing your library…"),
+    landingSub("Loading artists, songs, and setlists."),
+  );
+  syncLandingInert();
+}
+
 function renderLanding(): void {
   // Stash the create-form name before the rebuild: cancel/delete/save paths
   // below rebuild the card, and the typed-but-unsubmitted name must survive.
@@ -4570,6 +4717,7 @@ function renderLanding(): void {
     landingCreateNameDraft = liveNameInput.value;
   }
   landingOverlay.hidden = !landingVisible;
+  landingCard.removeAttribute("aria-busy");
   syncLandingInert();
   if (!landingVisible) return;
 
@@ -4760,10 +4908,12 @@ function syncLandingManagementButtons(): void {
 }
 
 /**
- * Inline artist-edit form on the landing card: the same name/logo/width/
- * alignment fields and validation as the retired library-pane form. Values
- * live in `artistFormState`, so card rebuilds (logo imports, busy locks)
- * never reset partially typed fields.
+ * Inline artist-edit form on the landing card: name, logo upload/remove, and
+ * preview, with the shared artist validation. Width and alignment are
+ * per-setlist display settings (Feature 29) and have no controls here; the
+ * stored geometry is preserved untouched through `artistFormState.logo`.
+ * Values live in `artistFormState`, so card rebuilds (logo imports, busy
+ * locks) never reset partially typed fields.
  */
 function buildLandingArtistEditForm(artist: Artist): HTMLFormElement {
   const state = artistFormState;
@@ -4808,44 +4958,6 @@ function buildLandingArtistEditForm(artist: Artist): HTMLFormElement {
   fileField.append(fileInput);
   form.append(fileField);
 
-  const logoRow = el("div", "logo-row");
-  const widthField = el("div", "field field-grow");
-  const widthLabel = document.createElement("label");
-  widthLabel.htmlFor = "artist-edit-logo-width";
-  const widthText = el("span", "field-label", "Width ");
-  const widthOutput = document.createElement("output");
-  widthOutput.id = "artist-edit-logo-width-value";
-  widthOutput.textContent = `${Math.round(state.logo.width_mm)} mm`;
-  widthLabel.append(widthText, widthOutput);
-  const widthInput = document.createElement("input");
-  widthInput.id = "artist-edit-logo-width";
-  widthInput.type = "range";
-  widthInput.min = String(LOGO_MIN_WIDTH_MM);
-  widthInput.max = String(LOGO_MAX_WIDTH_MM);
-  widthInput.step = "1";
-  widthInput.value = String(state.logo.width_mm);
-  widthField.append(widthLabel, widthInput);
-  const alignmentField = el("div", "field");
-  const alignmentLabel = el("span", "field-label", "Alignment");
-  alignmentLabel.id = "artist-edit-logo-alignment-label";
-  const segmented = el("div", "segmented");
-  segmented.setAttribute("role", "radiogroup");
-  segmented.setAttribute("aria-labelledby", "artist-edit-logo-alignment-label");
-  const alignments: LogoAlignment[] = ["Left", "Center", "Right"];
-  for (const value of alignments) {
-    const option = document.createElement("label");
-    const radio = document.createElement("input");
-    radio.type = "radio";
-    radio.name = "artist-edit-logo-alignment";
-    radio.value = value;
-    radio.checked = value === state.logo.alignment;
-    option.append(radio, el("span", undefined, value));
-    segmented.append(option);
-  }
-  alignmentField.append(alignmentLabel, segmented);
-  logoRow.append(widthField, alignmentField);
-  form.append(logoRow);
-
   const actions = el("div", "artist-form-actions");
   const cancelButton = el("button", "btn btn-small", "Cancel");
   cancelButton.type = "button";
@@ -4872,20 +4984,6 @@ function buildLandingArtistEditForm(artist: Artist): HTMLFormElement {
     void handleArtistLogoFile();
   });
   removeButton.addEventListener("click", handleArtistLogoRemove);
-  widthInput.addEventListener("input", () => {
-    artistFormState.logo.width_mm = clamp(
-      Number(widthInput.value),
-      LOGO_MIN_WIDTH_MM,
-      LOGO_MAX_WIDTH_MM,
-    );
-    widthOutput.textContent = `${Math.round(artistFormState.logo.width_mm)} mm`;
-  });
-  for (const radio of segmented.querySelectorAll<HTMLInputElement>('input[type="radio"]')) {
-    radio.addEventListener("change", () => {
-      if (!radio.checked || !isLogoAlignment(radio.value)) return;
-      artistFormState.logo.alignment = radio.value;
-    });
-  }
   form.addEventListener("submit", (event) => {
     void handleArtistSubmit(event);
   });
@@ -4919,9 +5017,10 @@ function buildLandingUnfiledRow(count: number): HTMLLIElement {
 }
 
 /**
- * Landing-page artist creation: name plus the same logo upload/width/alignment
- * controls and validation as the artist edit form. Creating enters the new
- * artist's scope immediately.
+ * Landing-page artist creation: name plus logo upload/remove and preview, with
+ * the shared artist validation. Width and alignment are per-setlist display
+ * settings (Feature 29), so the form has no size controls and a new artist
+ * saves the defaults. Creating enters the new artist's scope immediately.
  */
 function buildLandingCreateForm(): HTMLFormElement {
   const form = el("form", "landing-form");
@@ -4943,6 +5042,14 @@ function buildLandingCreateForm(): HTMLFormElement {
   preview.setAttribute("aria-hidden", "true");
   refreshLandingLogoPreview(preview);
 
+  const removeButton = el("button", "btn btn-small btn-danger", "Remove logo");
+  removeButton.type = "button";
+  removeButton.id = "landing-logo-remove";
+  removeButton.disabled = !landingLogoFile || landingBusy || landingLogoBusy;
+  removeButton.addEventListener("click", handleLandingLogoRemove);
+  const previewRow = el("div", "artist-logo-preview-row");
+  previewRow.append(preview, removeButton);
+
   const fileId = "landing-logo-file";
   const fileLabel = document.createElement("label");
   fileLabel.className = "field";
@@ -4952,49 +5059,6 @@ function buildLandingCreateForm(): HTMLFormElement {
   fileInput.type = "file";
   fileInput.accept = "image/png,image/jpeg,image/svg+xml";
   fileLabel.append(fileInput);
-
-  const widthId = "landing-logo-width";
-  const widthLabel = document.createElement("label");
-  widthLabel.className = "field field-grow";
-  const widthText = document.createElement("span");
-  widthText.className = "field-label";
-  widthText.append("Width ");
-  const widthOutput = document.createElement("output");
-  widthOutput.id = `${widthId}-value`;
-  widthOutput.textContent = `${DEFAULT_LOGO_WIDTH_MM} mm`;
-  widthText.append(widthOutput);
-  const widthInput = document.createElement("input");
-  widthInput.id = widthId;
-  widthInput.type = "range";
-  widthInput.min = String(LOGO_MIN_WIDTH_MM);
-  widthInput.max = String(LOGO_MAX_WIDTH_MM);
-  widthInput.step = "1";
-  widthInput.value = String(DEFAULT_LOGO_WIDTH_MM);
-  widthInput.addEventListener("input", () => {
-    widthOutput.textContent = `${Math.round(clamp(Number(widthInput.value), LOGO_MIN_WIDTH_MM, LOGO_MAX_WIDTH_MM))} mm`;
-  });
-  widthLabel.append(widthText, widthInput);
-
-  const alignmentGroup = document.createElement("div");
-  alignmentGroup.className = "field";
-  const alignmentLabel = el("span", "field-label", "Alignment");
-  alignmentLabel.id = "landing-logo-alignment-label";
-  const segmented = el("div", "segmented");
-  segmented.setAttribute("role", "radiogroup");
-  segmented.setAttribute("aria-labelledby", "landing-logo-alignment-label");
-  const alignments: LogoAlignment[] = ["Left", "Center", "Right"];
-  for (const value of alignments) {
-    const option = document.createElement("label");
-    const radio = document.createElement("input");
-    radio.type = "radio";
-    radio.name = "landing-logo-alignment";
-    radio.value = value;
-    radio.checked = value === "Center";
-    const text = el("span", undefined, value);
-    option.append(radio, text);
-    segmented.append(option);
-  }
-  alignmentGroup.append(alignmentLabel, segmented);
 
   const submit = el("button", "btn btn-primary", "Create artist");
   submit.type = "submit";
@@ -5009,11 +5073,18 @@ function buildLandingCreateForm(): HTMLFormElement {
 
   form.addEventListener("submit", (event) => {
     event.preventDefault();
-    void handleLandingCreate(form, nameInput, widthInput, submit);
+    void handleLandingCreate(nameInput, submit);
   });
 
-  form.append(nameLabel, preview, fileLabel, widthLabel, alignmentGroup, submit);
+  form.append(nameLabel, previewRow, fileLabel, submit);
   return form;
+}
+
+/** Keeps the create-form Remove button aligned with the staged logo/busy state. */
+function syncLandingCreateLogoControls(): void {
+  const button = document.getElementById("landing-logo-remove");
+  if (!(button instanceof HTMLButtonElement)) return;
+  button.disabled = !landingLogoFile || landingBusy || landingLogoBusy;
 }
 
 function refreshLandingLogoPreview(preview: HTMLElement): void {
@@ -5061,6 +5132,7 @@ async function handleLandingLogoFile(fileInput: HTMLInputElement, preview: HTMLE
   if (!ensureBackend()) return;
 
   landingLogoBusy = true;
+  syncLandingCreateLogoControls();
   setStatus(`Importing artist logo “${file.name}”…`);
   try {
     const bytes = new Uint8Array(await file.arrayBuffer());
@@ -5073,13 +5145,34 @@ async function handleLandingLogoFile(fileInput: HTMLInputElement, preview: HTMLE
     setStatus(`Could not import artist logo: ${describeError(error)}`, "error");
   } finally {
     landingLogoBusy = false;
+    syncLandingCreateLogoControls();
   }
 }
 
+/**
+ * Clears the staged create-form logo. The imported draft file is unreferenced,
+ * so it is deleted immediately and dropped from the transient cleanup set; the
+ * form returns to "No logo" without needing a rebuild.
+ */
+function handleLandingLogoRemove(): void {
+  if (landingBusy || landingLogoBusy) return;
+  const fileName = landingLogoFile;
+  if (!fileName) return;
+
+  const removeButton = document.getElementById("landing-logo-remove");
+  const hadFocus = document.activeElement === removeButton;
+  landingLogoFile = null;
+  landingTransientLogos.delete(fileName);
+  void api.removeLogo(fileName).catch(() => undefined);
+  const preview = landingCard.querySelector<HTMLElement>(".landing-logo-preview");
+  if (preview) refreshLandingLogoPreview(preview);
+  syncLandingCreateLogoControls();
+  if (hadFocus) document.getElementById("landing-logo-file")?.focus();
+  setStatus("Artist logo removed.");
+}
+
 async function handleLandingCreate(
-  form: HTMLFormElement,
   nameInput: HTMLInputElement,
-  widthInput: HTMLInputElement,
   submit: HTMLButtonElement,
 ): Promise<void> {
   if (landingBusy) return;
@@ -5102,13 +5195,10 @@ async function handleLandingCreate(
   }
   markFieldInvalid(nameInput, false);
 
-  const checked = form.querySelector<HTMLInputElement>('input[name="landing-logo-alignment"]:checked');
-  const alignment: LogoAlignment =
-    checked && isLogoAlignment(checked.value) ? checked.value : "Center";
-
   landingBusy = true;
   submit.disabled = true;
   syncLandingManagementButtons();
+  syncLandingCreateLogoControls();
   setStatus(`Creating artist “${name}”…`);
 
   try {
@@ -5117,8 +5207,10 @@ async function handleLandingCreate(
       name,
       logo: {
         file_name: landingLogoFile,
-        width_mm: clamp(Number(widthInput.value), LOGO_MIN_WIDTH_MM, LOGO_MAX_WIDTH_MM),
-        alignment,
+        // Feature 29: artist geometry is render-dead; new artists keep the
+        // defaults and every setlist sizes the shared image independently.
+        width_mm: DEFAULT_LOGO_WIDTH_MM,
+        alignment: "Center",
       },
     });
     artists.push(saved);
@@ -5137,6 +5229,7 @@ async function handleLandingCreate(
     landingBusy = false;
     submit.disabled = false;
     syncLandingManagementButtons();
+    syncLandingCreateLogoControls();
   }
 }
 
@@ -5222,169 +5315,14 @@ async function maybeOfferUnfiledAssignment(scope: Artist): Promise<void> {
 // Logo
 // ---------------------------------------------------------------------------
 
-/**
- * Commits a width/alignment patch to the displayed artist logo via
- * `save_artist` (Features 19 + 25: both controls bind the effective logo).
- * Only runs on `change` (release) so dragging never spams `save_artist`;
- * at most one save is in flight at a time. The setlist itself is never
- * dirtied: the artist record is what changed. Refusals and failures revert
- * the control and report through the status line.
- */
-async function commitEffectiveArtistLogo(
-  patch: { width_mm?: number; alignment?: LogoAlignment },
-  revert: () => void,
-  summary: string,
-): Promise<void> {
-  if (!current) return;
-  if (effectiveLogoCase() !== "artist") {
-    renderLogoControls();
-    return;
-  }
-  const artist = effectiveLogoArtist();
-  if (!artist) {
-    renderLogoControls();
-    return;
-  }
-
-  // Reuse the Feature 14 artist-edit guards: refuse while a backup/restore,
-  // export capture, or artist-logo import is in flight, while another artist
-  // save runs, or while an artist draft for this artist is open.
-  if (effectiveLogoSaving || artistBusy) {
-    revert();
-    setStatus("Wait for the current artist request to finish before changing the logo.", "info");
-    return;
-  }
-  if (artistLogoBusy) {
-    revert();
-    setStatus("Wait for the artist logo import to finish before changing the logo.", "info");
-    return;
-  }
-  if (backingUp || restoring) {
-    revert();
-    setStatus(
-      backingUp
-        ? "Backup in progress — wait for it to finish before changing the logo."
-        : "Restore in progress — wait for it to finish before changing the logo.",
-      "info",
-    );
-    return;
-  }
-  if (exporting) {
-    revert();
-    setStatus("Export in progress — wait for it to finish before changing the logo.", "info");
-    return;
-  }
-  if (artistFormState.mode === "edit" && artistFormState.artistId === artist.id) {
-    revert();
-    setStatus(
-      `Artist draft open — save or cancel the edit for “${artistLabel(artist)}” before changing the logo.`,
-      "error",
-    );
-    return;
-  }
-  if (!ensureBackend()) {
-    revert();
-    return;
-  }
-
-  effectiveLogoSaving = true;
-  artistBusy = true;
-  logoWidthInput.disabled = true;
-  for (const radio of alignmentRadios) radio.disabled = true;
-  setStatus(`Saving ${summary} for “${artistLabel(artist)}”…`);
-
-  try {
-    const updated: Artist = {
-      ...artist,
-      logo: { ...artist.logo, ...patch },
-    };
-    const saved = await api.saveArtist(updated);
-    const index = artists.findIndex((entry) => entry.id === saved.id);
-    if (index >= 0) {
-      artists[index] = saved;
-    } else {
-      artists.push(saved);
-      artists.sort((left, right) => left.name.localeCompare(right.name));
-    }
-    renderLogoControls();
-    renderSheet();
-    setStatus(
-      `Updated ${summary} for “${artistLabel(saved)}” — applies to every setlist showing that artist's logo.`,
-      "success",
-    );
-  } catch (error) {
-    revert();
-    renderSheet();
-    setStatus(`Could not save ${summary}: ${describeError(error)}`, "error");
-  } finally {
-    effectiveLogoSaving = false;
-    artistBusy = false;
-    logoWidthInput.disabled = false;
-    for (const radio of alignmentRadios) radio.disabled = false;
-  }
-}
-
-/**
- * Commits the Logo width slider for the artist-logo path (Feature 19).
- * Own and placeholder paths stay input-driven on `setlist.logo` (see the
- * `input` handler); the artist path updates the label live and commits here.
- */
-async function commitEffectiveArtistLogoWidth(): Promise<void> {
-  if (!current) return;
-  if (effectiveLogoCase() !== "artist") {
-    renderLogoControls();
-    return;
-  }
-  const artist = effectiveLogoArtist();
-  if (!artist) {
-    renderLogoControls();
-    return;
-  }
-
-  const previousWidth = artist.logo.width_mm;
-  const desiredWidth = clamp(
-    Number(logoWidthInput.value),
-    LOGO_MIN_WIDTH_MM,
-    LOGO_MAX_WIDTH_MM,
-  );
-  if (desiredWidth === previousWidth) {
-    renderLogoControls();
-    return;
-  }
-
-  const revert = (): void => {
-    logoWidthInput.value = String(previousWidth);
-    logoWidthOutput.textContent = `${Math.round(previousWidth)} mm`;
-  };
-  await commitEffectiveArtistLogo(
-    { width_mm: desiredWidth },
-    revert,
-    `logo width to ${Math.round(desiredWidth)} mm`,
-  );
-}
-
-/** Commits an alignment radio change to the displayed artist logo (Feature 25). */
-async function commitEffectiveArtistLogoAlignment(alignment: LogoAlignment): Promise<void> {
-  const artist = effectiveLogoArtist();
-  if (!artist) {
-    renderLogoControls();
-    return;
-  }
-  const previous = artist.logo.alignment;
-  if (previous === alignment) {
-    renderLogoControls();
-    return;
-  }
-  const revert = (): void => {
-    for (const radio of alignmentRadios) radio.checked = radio.value === previous;
-  };
-  await commitEffectiveArtistLogo({ alignment }, revert, `logo alignment to ${alignment}`);
-}
-
 async function handleLogoFile(): Promise<void> {
   const file = logoFileInput.files?.[0];
   logoFileInput.value = "";
-  if (!file || !current || captureGuard()) return;
+  if (!file || !current) return;
+  if (captureGuard()) {
+    renderLogoControls();
+    return;
+  }
 
   const allowed = ["image/png", "image/jpeg", "image/svg+xml"];
   if (!allowed.includes(file.type) && !/\.(png|jpe?g|svg)$/i.test(file.name)) {
@@ -5406,17 +5344,6 @@ async function handleLogoFile(): Promise<void> {
   }
 
   const setlist = current;
-  // Feature 19: adopt the currently displayed logo's size/alignment so the
-  // replacement appears exactly where and how large the previous logo was.
-  // Own → no-op; artist → copies the artist width/alignment; neither →
-  // no-op (the slider already pre-sized the next own logo).
-  const displayed = resolveSetlistLogo(setlist, artists);
-  setlist.logo.width_mm = clamp(
-    displayed.width_mm,
-    LOGO_MIN_WIDTH_MM,
-    LOGO_MAX_WIDTH_MM,
-  );
-  setlist.logo.alignment = displayed.alignment;
   const previewUrl = URL.createObjectURL(file);
   const previousFileName = setlist.logo.file_name;
   setLogoPreview(previewUrl);
@@ -5451,7 +5378,11 @@ async function handleLogoFile(): Promise<void> {
 }
 
 function handleLogoRemove(): void {
-  if (!current || captureGuard()) return;
+  if (!current) return;
+  if (captureGuard()) {
+    renderLogoControls();
+    return;
+  }
 
   const fileName = current.logo.file_name;
   if (!fileName && !logoPreviewIsLocal) return;
@@ -5466,8 +5397,12 @@ function handleLogoRemove(): void {
   setLogoPreview(null);
   renderLogoControls();
   markDirty();
-  // With no own logo the preview may now fall back to the artist's logo.
+  // With no own logo the preview may now fall back to the artist's logo at the
+  // setlist's own width/alignment (Feature 29); the per-setlist size survives.
   void refreshLogoIfChanged();
+  // Remove disables itself once there is no own logo; leaving focus on the
+  // disabled button would drop it to <body>. Move it to the upload control.
+  logoFileInput.focus();
   setStatus(fileName ? "Logo removed — save to apply." : "Logo removed.");
 }
 
@@ -5484,7 +5419,7 @@ async function cleanupPendingLogoRemovals(): Promise<void> {
   }
 }
 
-/** The logo actually shown: setlist own → artist → placeholder config. */
+/** The logo file actually shown (own → artist → none) with setlist geometry. */
 function resolvedSetlistLogo(): LogoConfig | null {
   return current ? resolveSetlistLogo(current, artists) : null;
 }

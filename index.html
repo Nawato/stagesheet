@@ -217,11 +217,11 @@
                 <label for="logo-width">
                   Width <output id="logo-width-value" for="logo-width">40 mm</output>
                 </label>
-                <input id="logo-width" type="range" min="10" max="80" step="1" value="40" />
+                <input id="logo-width" type="range" min="10" max="80" step="1" value="40" aria-describedby="logo-showing" />
               </div>
               <div class="field">
                 <span class="field-label" id="logo-alignment-label">Alignment</span>
-                <div class="segmented" role="radiogroup" aria-labelledby="logo-alignment-label">
+                <div class="segmented" role="radiogroup" aria-labelledby="logo-alignment-label" aria-describedby="logo-showing">
                   <label>
                     <input type="radio" name="logo-alignment" value="Left" />
                     <span>Left</span>
@@ -237,7 +237,7 @@
                 </div>
               </div>
             </div>
-            <p id="logo-showing" class="logo-showing" role="note">No logo yet</p>
+            <p id="logo-showing" class="logo-showing" role="note">No logo yet — add an image above.</p>
             <label class="check">
               <input id="logo-grayscale" type="checkbox" checked />
               Grayscale logo in preview

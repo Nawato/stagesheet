@@ -3,10 +3,11 @@
  *
  * Feature 14 resolves song display names and artist counts; Feature 20 reuses
  * the same resolved identity for scope membership and the Unfiled bucket, and
- * Feature 16 reuses `resolveSetlistLogo` for the setlist → artist →
- * placeholder logo chain. (The retired library Artist filter and Artists
- * section took their buckets through this module; both are gone since
- * Features 20 and 23.)
+ * Feature 16 reuses `resolveSetlistLogo` for the setlist → artist logo-file
+ * chain. Since Feature 29 that helper resolves only the logo *file*; width and
+ * alignment always come from the setlist's own config. (The retired library
+ * Artist filter and Artists section took their buckets through this module;
+ * both are gone since Features 20 and 23.)
  */
 
 import type { Artist, LogoConfig, Setlist, Song } from "./types";
@@ -70,10 +71,14 @@ export function resolveArtistForSong(
 }
 
 /**
- * Setlist logo resolution chain: the setlist's own logo when set, otherwise its
- * artist's logo when set, otherwise the setlist's placeholder config (`null`
- * file name). Stored for Feature 16's preview/print/export wiring; Feature 14
- * does not change the sheet or print path.
+ * Setlist logo resolution: resolves only the **file** through the chain — the
+ * setlist's own logo when set, otherwise its artist's logo when set, otherwise
+ * none (a `null` file name). Width and alignment are never resolved through
+ * the chain (Feature 29): geometry always comes from `setlist.logo`, so two
+ * setlists of one artist can size and align the same image independently.
+ *
+ * The resolved config feeds preview, print, and export through the normal
+ * `sheet.ts` path; it is not persisted.
  */
 export function resolveSetlistLogo(
   setlist: Pick<Setlist, "logo" | "artist_id">,
@@ -82,7 +87,9 @@ export function resolveSetlistLogo(
   if (setlist.logo.file_name) return setlist.logo;
 
   const artist = findArtistById(artists, setlist.artist_id);
-  if (artist?.logo.file_name) return artist.logo;
-
-  return setlist.logo;
+  return {
+    file_name: artist?.logo.file_name ?? null,
+    width_mm: setlist.logo.width_mm,
+    alignment: setlist.logo.alignment,
+  };
 }

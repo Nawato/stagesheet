@@ -25,8 +25,9 @@ commit as each change.
   is part of search, the add form, the library editor, and each setlist song's
   editor details.
 - Managed artist records (name + logo) with logo
-  thumbnails, resolved song counts, an inline create/edit form with the setlist
-  logo controls on the landing screen, and confirmed delete. Songs reference artists by id while
+  thumbnails, resolved song counts, an inline create/edit form for the name plus
+  logo upload/remove/preview on the landing screen (no size controls — width and
+  alignment are per-setlist), and confirmed delete. Songs reference artists by id while
   keeping a name snapshot; renaming updates display without rewriting songs or
   setlists, deleting clears references best-effort and reports failures (the
   confirm names the unfiled consequence), and
@@ -39,14 +40,14 @@ commit as each change.
   length, comment), up/down + drag reorder, inline BPM/key/tuning editing,
   Comment fields for songs and breaks (max 140 chars) that render on the sheet,
   a `File under…` select while the setlist is unfiled, and logo upload with
-  width/alignment controls. Oversized raster logos are downscaled on import;
-  SVG logos stay vector. The logo chain is setlist own → artist → placeholder
-  in preview, print, and export, and the Logo width slider edits the
-  displayed logo: own/placeholder paths stay input-driven on the setlist
-  config, the artist path commits the shared artist width on release without
-  dirtying the setlist, uploads adopt the displayed size/alignment, removal
-  falls back to the artist logo, and a `Setlist logo` / `<name> logo
-  (artist)` / `No logo yet` line names the target. Delete/Discard sits next to Save in the header
+  per-setlist width/alignment controls. Oversized raster logos are downscaled on import;
+  SVG logos stay vector. The logo chain resolves only the image (setlist own →
+  artist → none) in preview, print, and export; width and
+  alignment always come from the setlist's own config, so the Logo slider and
+  radios edit this setlist (10–80 mm) in every case and mark it dirty.
+  Uploads keep the displayed geometry, removal falls back to the artist image
+  at that size, and a `Setlist logo` / `<name> logo (from the artist)` /
+  `No logo yet` line names the source without a shared-size claim. Delete/Discard sits next to Save in the header
   actions (away from Add break) and keeps the existing confirmation for saved
   setlists and unsaved drafts.
 - **Duplicate** sits beside **New** and turns the current setlist into a
@@ -57,7 +58,7 @@ commit as each change.
   `X` → `X (copy)` → `X (copy 2)` without stacking suffixes, and deleting one
   copy keeps a logo the other still references.
 - Per-artist workspace scoping with a landing page for artist
-  creation/selection/management (name + logo + width/alignment, or a selection
+  creation/selection/management (name + logo image, or a selection
   list with thumbnails and song/setlist counts plus per-row Edit/Delete and
   an Unfiled entry — the library-pane Artists section is retired). The header artist
   picker is the scope switcher (artist entries plus `Unfiled (N)`, dirty-guard
@@ -132,9 +133,8 @@ commit as each change.
 - v0.3.0 review hardening: an export capture snapshots the editor state and
   locks item editing, meta inputs, and scope switching until it restores;
   scope switches refuse during backup/restore (and vice versa); the Logo
-  alignment radios bind the displayed logo like the width slider (artist path
-  commits via `save_artist`, the showing line names the width and alignment
-  target); a dangling artist id resolves as unfiled with no legacy-text
+  alignment radios joined the width slider on the displayed logo (both now
+  edit per-setlist geometry — Feature 29); a dangling artist id resolves as unfiled with no legacy-text
   fallback for songs and setlists alike (the landing assign offer lists only
   true-`None` records); backup/print/duplicate auto-save failures on the
   artist check name the filing next step; New in the Unfiled scope keeps an
@@ -161,22 +161,35 @@ commit as each change.
   the glossary. Out of scope as specced: undo, S/M/L sizing, vector PDF,
   mobile, SQLite.
 
+- Per-setlist logo size (Feature 29): the artist record keeps the logo image
+  only — artist `width_mm`/`alignment` stay serialized but are render-dead, and
+  the landing create/edit forms show name + upload/remove/preview with no size
+  controls (new artists save 40 mm / Center; edits preserve stored geometry).
+  `resolveSetlistLogo()` resolves only the file (own → artist → none), while
+  width and alignment always come from `setlist.logo`; the Logo slider/radios
+  edit the draft in every case (clamped 10–80, dirty + sheet re-render), upload
+  keeps the geometry, and removal falls back to the artist image at the
+  setlist's size. The showing line names provenance without a shared-size
+  claim, and a silent first-startup migration copies a live artist's
+  width/alignment into logo-less setlists still at exactly 40 mm / Center,
+  guarded once by a UI-level localStorage key that also records failed ids for
+  targeted retries (no schema/model marker, schema bump, or status message).
+  New/reset 40 mm / Center setlists keep their value while that key exists. Out
+  of scope as specced: S/M/L sizing, bulk resize, logo bytes in backups,
+  export/print layout changes.
+
 ## Still missing (per plan)
 
 - Artist-creation logo bug (plan Feature 27, Todo): a logo uploaded during
   artist creation does not reach the setlist — placeholder stays. Fix warms the
   artists cache / thumbnail blob URL and re-resolves `resolveSetlistLogo()` on
-  artist save + scope entry; six QA gates in the plan.
+  artist save + scope entry; all six QA gates apply, with gate 3 rebased onto
+  per-setlist geometry (Feature 29 retired the `save_artist` size path).
 - Opt-in library ⇄ setlist song sync (plan Feature 28, Todo): after a library
   or setlist-item song edit with matching in-scope `Song.id` copies, a custom
   safe-default modal (Keep focused, Enter/Escape = Keep, no "don't ask again")
   offers per-edit propagation with the plan's exact wording, guard matrix, and
   per-target reporting; accepting re-renders the setlist preview automatically.
-- Per-setlist logo size (plan Feature 29, Todo): the artist record keeps the
-  logo image (autoloads when set); width + alignment live only on each setlist
-  and never write back to the artist. Artist forms lose size controls, the
-  showing line drops the "every setlist" warning, and upgrade migrates
-  default-only setlists once with no schema bump.
 - Artist-logo propagation + reset (plan Feature 30, Todo, UX-reviewed): an
   artist image change/removal offers Keep-vs-follow per edit (Keep pins the
   old file as each affected setlist's own logo; follow writes nothing and

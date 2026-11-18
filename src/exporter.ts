@@ -59,8 +59,9 @@ export interface ExportRequest {
   sheet: HTMLElement;
   setlist: Setlist;
   /**
-   * Resolved logo (setlist own → artist → placeholder). Defaults to the
-   * setlist's own config for callers that do not resolve the chain.
+   * Resolved logo file (setlist own → artist → none) paired with the setlist's
+   * width/alignment. Defaults to the setlist's own config for callers that do
+   * not resolve the file chain.
    */
   logo?: LogoConfig;
   format: ExportFormat;

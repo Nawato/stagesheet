@@ -10,7 +10,8 @@ export type LogoAlignment = "Left" | "Center" | "Right";
 export interface LogoConfig {
   /** Plain file name inside `<appDataDir>/stagesheet/logos/`, or null. */
   file_name: string | null;
-  /** Printed width in millimetres, constrained to 10..=80 by the backend. */
+  /** Display width in millimetres, constrained to 10..=80 by the backend.
+   * Setlist geometry is live; the artist copy is render-dead (Feature 29). */
   width_mm: number;
   alignment: LogoAlignment;
 }
@@ -42,7 +43,7 @@ export interface Artist {
   id: string;
   /** Display name; trimmed, non-empty (enforced by Rust on save). */
   name: string;
-  /** Same logo rules and shared `logos/` pool as setlists. */
+  /** Same file pool/rules as setlists; width/alignment are render-dead (Feature 29). */
   logo: LogoConfig;
 }
 

@@ -131,7 +131,8 @@ the aspect ratio preserved (PNG stays PNG, JPEG stays JPEG at quality 85); SVGs 
 stored byte-for-byte and stay vector. Setlists and artists share this logo pool.
 Removing a logo skips files still referenced by a setlist or artist record. A
 setlist shows its own logo when set, otherwise its artist's logo, otherwise the
-placeholder; preview, print, and export all use that same chain.
+placeholder; preview, print, and export all use that same file chain, while
+width and alignment always come from the setlist's own config.
 
 ## Song library
 
@@ -154,12 +155,12 @@ on the landing page.
 
 ### Artists
 
-The same pane has an **Artists** section with logo thumbnails and resolved song
-counts. **New artist** takes a name and the same logo upload, width, and
-alignment controls as a setlist; each row's Edit action reuses that form for
-name and logo changes, and Delete confirms first. Renaming never rewrites songs
-or setlists: they reference the record by id, and the record name wins in the
-library display, search, and sort. In the Unfiled scope, song add/edit forms
+The landing screen lists each artist with a logo thumbnail and resolved song
+counts. Creating an artist takes a name and a logo image; each row's Edit action
+reuses that form for name and logo changes, and Delete confirms first. Renaming
+never rewrites songs or setlists: they reference the record by id, and the
+record name wins in the library display, search, and sort. In the Unfiled scope,
+song add/edit forms
 offer **No artist** plus every record so songs can be filed on save, and
 legacy free-text songs get a "Keep text" option until they are adopted; in an
 artist scope the artist is automatic on add and read-only in the row editor. Deleting an artist clears referencing `artist_id` values best-effort,
@@ -173,7 +174,7 @@ cleared.
 ### Artist scope and the library
 
 StageSheet is artist-first: a landing page gates startup — create the first
-artist (name plus logo upload/width/alignment), or pick one from the selection
+artist (name plus logo upload/remove and preview), or pick one from the selection
 list with song/setlist counts, plus an **Unfiled** entry when records have no
 artist. It reopens later via **Choose artist…** in the header picker.
 
@@ -209,8 +210,8 @@ human-readable JSON file:
 ```
 
 The envelope includes every current field (song and setlist artist references,
-tuning, sheet options, page mode, labels, comments, and logo
-width/alignment). Break lengths
+tuning, sheet options, page mode, labels, comments, setlist logo geometry, and
+artist logo file names). Break lengths
 are written as `duration_secs`; schema-1 backups from older builds may still
 carry `duration_mins` and are converted × 60 on restore. Restore is
 frontend-only: it reads the file through the dialog-scoped `fs` permission,
@@ -226,7 +227,7 @@ StageSheet" message instead of being partially imported.
 Restore overwrites existing artists, songs, and setlists with the same IDs and
 does not delete anything else. Malformed records are skipped and reported with
 counts. Back up and Restore require open library drafts and non-pristine artist
-forms (edit mode, a typed name, or a changed logo/width/alignment) to be saved
+forms (edit mode, a typed name, or a staged logo) to be saved
 or cancelled first. Both refuse while any library/artist write or artist logo
 import is in flight, and Restore re-checks the guard after reading the file.
 Back up locks library row actions, the Add submit, artist rows, and the artist

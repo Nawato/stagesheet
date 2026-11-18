@@ -597,9 +597,10 @@ input[type="file"]::file-selector-button {
 
 /* -------------------------------------------------------------------------
    Artist management on the landing screen (Feature 23)
-   The create/edit form keeps the same name/logo/width/alignment controls;
-   only its host moved (out of the library pane). `.artist-thumb` is shared
-   with the landing rows; the row/list pane styles are retired.
+   The create/edit form keeps only the name plus logo upload/remove/preview;
+   width and alignment are per-setlist settings (Feature 29). Only its host
+   moved (out of the library pane). `.artist-thumb` is shared with the landing
+   rows; the row/list pane styles are retired.
    ------------------------------------------------------------------------- */
 
 .artist-thumb {
@@ -896,6 +897,7 @@ input[type="file"]::file-selector-button {
   margin: 0;
   color: var(--ink-soft);
   font-size: 12px;
+  overflow-wrap: anywhere;
 }
 
 .logo-row {

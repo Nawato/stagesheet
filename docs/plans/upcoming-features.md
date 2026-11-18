@@ -712,6 +712,10 @@ the setlist's stale width instead of the size the user just had on screen.
 
 ### Shipped notes
 
+> Superseded in part by **Feature 29**: width/alignment now always edit
+> `setlist.logo`; the artist-path `save_artist` commit described below is
+> retired. The displayed-file resolution and per-setlist size control remain.
+
 The slider follows the displayed logo: own and placeholder paths stay
 `input`-driven on `setlist.logo.width_mm` (placeholder pre-sizes the next
 own logo), while the artist path updates the label on `input` and commits
@@ -1231,6 +1235,10 @@ as one hardening slice because they share the same guard/message code.
 
 ### Shipped notes
 
+> Superseded in part by **Feature 29**: the alignment radios no longer bind
+> `save_artist`; width and alignment always edit the setlist's own config, so
+> the shared-size status/revert path described below is retired.
+
 - **Export capture lock**: `exportCurrent` snapshots the editor state
   (`cloneSetlist(current)`) before the raster and locks item editing
   (running-order buttons, drag reorder, all inline song/break field edits),
@@ -1419,20 +1427,23 @@ logo sizing instead of mm, selectable/vector PDF text, mobile, SQLite.
 
 ## Feature 27: Artist-creation logo reaches the setlist (bugfix) — Todo
 
-Status: Todo, small, builds on Features 14/16/19/20/23/25. From user feedback:
+Status: Todo, small, builds on Features 14/20/23/29 (rebased onto the
+per-setlist logo model). From user feedback:
 a logo uploaded during artist creation does not show in the setlist afterwards —
 the new setlist shows the placeholder and the Logo fieldset sticks on the
 `No logo yet` path.
 
 Context: the landing create form stages the upload in `landingLogoFile` /
-transient-logo tracking, `save_artist` persists `logo.file_name` + width +
-alignment, then `enterScope()` runs. The display resolves through
-`resolveSetlistLogo()` (own → artist → placeholder, `src/artists.ts`), with
-blob URLs for preview and export-only data URLs (`logo.ts` / `exporter.ts`).
-Suspected cause per UX review: the record saves the file name but the artists
-cache / thumbnail blob URL is not warmed and the setlist preview is not
-re-resolved after scope entry, so the fieldset showing line, slider, and
-`<img>` stay on the placeholder path.
+transient-logo tracking, `save_artist` persists `logo.file_name`, then
+`enterScope()` runs. The display resolves through `resolveSetlistLogo()` (own
+file → artist file → none, `src/artists.ts`); width/alignment always come from
+the setlist (Feature 29). Blob URLs feed the preview; export uses data URLs
+(`logo.ts` / `exporter.ts`). Suspected cause per UX review: the record saves the
+file name but the artists cache / thumbnail blob URL is not warmed and the
+setlist preview is not re-resolved after scope entry — and `enterScope()` /
+`switchScope()` skip `loadLogoForCurrent()` whenever the selected draft is dirty
+(a brand-new setlist is always dirty), so the fieldset showing line and `<img>`
+stay on the placeholder path.
 
 ### Data model
 
@@ -1448,15 +1459,16 @@ shared `logos/` pool (`import_logo` / `remove_logo`) are unchanged.
   current draft plus landing thumbnails **before** `renderAll()`.
 - `enterScope()` / `switchScope()` must await the logo load for the new scope
   (`loadLogoForCurrent()` / `refreshLogoIfChanged()` equivalent, same as the
-  delete/duplicate paths) after the scope is set — never rely on the stale
-  preview `<img>`.
+  delete/duplicate paths) after the scope is set — **including dirty blank
+  drafts** — never rely on the stale preview `<img>`. The same rule covers
+  startup when no setlist is selected and `deleteCurrent()`'s blank draft.
 - The Logo fieldset showing line plus width slider / alignment radios recompute
-  from the resolved config (own → artist → placeholder). The Feature 19/25
-  binding stays: own/placeholder paths edit `setlist.logo` input-driven;
-  the artist path commits via `save_artist` on `change` without dirtying the
-  setlist, with revert-on-refusal/failure and the shared-size status. The
-  showing line must read `<name> logo (artist)` with the matching width and
-  alignment once the fix lands.
+  from the resolved file and the setlist's per-setlist geometry (Feature 29:
+  own → artist → none for the file; `setlist.logo` for width/alignment). The
+  slider/radios always edit `setlist.logo`; there is no `save_artist` geometry
+  path. Once the fix lands, the showing line must read
+  `“<name>” logo (from the artist) — size applies to this setlist only.` with
+  the setlist's matching width/alignment.
 - Constraints intact: logos render only via `<img src>` (blob/data URLs, never
   inline SVG); no widening of `$APPDATA/stagesheet/**`; no CSP change; the
   preview-blob vs export-data-URL split (`storedLogoDataUrl()`) stays.
@@ -1469,17 +1481,19 @@ print/export).
 
 ### Tests + QA (all six gate the fix)
 
-1. Create artist with logo (upload + non-default width/alignment) → enter scope
-   → New setlist shows the **artist logo** at that width/alignment; the showing
-   line reads `<name> logo (artist)` with matching width/alignment.
-2. In-scope setlist: upload an own logo → adopts the displayed width/alignment
-   (seamless swap); remove it → falls back to the artist logo automatically, no
-   placeholder flash after reload.
-3. Width slider + alignment radios on the artist path persist via `save_artist`
-   without dirtying the setlist; reload keeps them; refusal/failure reverts
-   the control with the existing status.
+1. Create artist with logo → enter scope → New setlist shows the **artist logo**
+   at the setlist's default 40 mm / Center; the showing line reads
+   `“<name>” logo (from the artist) — size applies to this setlist only.`
+   with matching width/alignment.
+2. In-scope setlist: upload an own logo → keeps the displayed geometry;
+   remove it → falls back to the artist logo automatically, no placeholder
+   flash after reload.
+3. Width slider + alignment radios on the artist-image path persist through the
+   setlist Save (dirty + reload keeps them) and never write the artist record;
+   the artist's stored geometry stays unchanged.
 4. Placeholder path unchanged: artist with no logo + setlist with no logo →
-   `No logo yet`, slider pre-sizes the next own logo.
+   `No logo yet — add an image above, or add one to “<Name>” and it will appear
+   here.`; the slider pre-sizes the next own logo.
 5. Export (PDF/PNG) and `window.print()` from the new setlist include the logo,
    grayscale-forced, with no CSP console errors and no blob-URL fetch.
 6. Backup on the same device round-trips `file_name`/width/alignment; a
@@ -1639,9 +1653,9 @@ the Feature 12 default to auto-sync, export/print layout changes.
 2. QA + `SKILL.md` (Feature 12 copy-semantics note becomes opt-in offer) +
    this file status + commit.
 
-## Feature 29: Per-setlist logo size (no shared artist size) — Todo
+## Feature 29: Per-setlist logo size (no shared artist size) — Done
 
-Status: Todo, medium, builds on Features 19/25 and narrows Feature 27.
+Status: Done, medium, builds on Features 19/25 and narrows Feature 27.
 From user feedback: logo size has no merit in the artists section — it differs
 per setlist. The artist record keeps the logo *image* (autoloads into its
 setlists when set); width and alignment become per-setlist display settings
@@ -1654,6 +1668,69 @@ comes from `setlist.logo.width_mm` / `setlist.logo.alignment`; only the
 *file* resolves (own → artist → none). No "default size for new setlists" on
 the artist — new setlists keep the existing 40 mm / Center default.
 
+### Shipped notes
+
+- Artist records keep only the logo **image**. Landing create saves
+  `width_mm: 40` / `alignment: "Center"`; inline Edit preserves the record's
+  stored geometry untouched but exposes no controls. Both forms show name +
+  upload + remove + preview only (no disabled size slider). Artist
+  width/alignment stay serialized and validated yet are render-dead.
+- `resolveSetlistLogo()` resolves only the file (own → artist → none) and
+  pairs it with `setlist.logo`'s width/alignment. The setlist Logo slider
+  `input` and alignment radio `change` always write the draft (clamped
+  10–80), `markDirty()`, and `renderSheet()` — all three logo cases
+  identically. Logo geometry now dirties the setlist like any other edit
+  (`confirmDiscard` covers scope switches); no per-tick status is emitted.
+  `commitEffectiveArtistLogo*`, `effectiveLogoSaving`, the artist
+  case branches, revert closures, artist-draft/backup/import refusals, and
+  every "applies to every setlist" string are deleted. `captureGuard()` still
+  guards slider/radios/upload/remove and reverts through
+  `renderLogoControls()`; `syncCaptureLock(false)` re-renders the Remove
+  state after unlocking.
+- Upload-own-logo geometry adoption is gone (the geometry already is the
+  displayed geometry); preview-local → `importLogo` → `file_name` →
+  `markDirty()` + sheet + `Logo imported.` stays, including the failed-import
+  fallback. Remove keeps `pendingLogoRemovals` + `markDirty()` +
+  `refreshLogoIfChanged()` and the per-setlist size survives. Removing moves
+  focus to the upload control instead of letting the now-disabled button drop
+  focus to `<body>`. The landing create form also has a **Remove logo** control
+  (staged file deleted immediately because no record references it yet).
+- Showing line: `Setlist logo — size applies to this setlist only.`;
+  `“<Name>” logo (from the artist) — size applies to this setlist only.`;
+  `No logo yet — add an image above, or add one to “<Name>” and it will appear
+  here.` (live artist without a logo); `No logo yet — add an image above.`
+  (no live artist, dangling id, or Unfiled). `role="note"`, never live.
+- Migration is one silent first-startup pass after the caches are adopted,
+  skipped when the backend is unavailable: for each setlist with no own logo
+  whose live artist has a logo, copy the artist's clamped width/alignment into
+  the setlist and persist through normal `save_setlist` — but only while the
+  stored geometry is still exactly 40 mm / Center. A UI-level localStorage
+  guard (`stagesheet.logoGeometryMigrated`) records the completed pass and the
+  ids whose save failed; later starts retry only those ids, never the whole
+  pass. It is not a model/schema/backup flag; no schema bump or status message.
+  Interpretation pinned: a **pre-upgrade** setlist deliberately left at
+  40/Center while its artist uses another size adopts the artist size once on
+  the first start (display geometry only, then stable). On that device while
+  the key exists, new setlists, later resets to 40/Center, duplicates, and
+  restored 40/Center records keep 40 mm / Center.
+- Backup/restore draft guard is exactly "edit mode, typed name, or staged
+  logo"; the artist width/alignment checks are dropped.
+- Feature 27 interplay: 27 keeps its cache-warm/re-resolve half and all six QA
+  gates; gate 3 is rebased onto per-setlist geometry (Save + reload, no
+  `save_artist` geometry write). Feature 28 unchanged.
+- Gates: `npm run build` and `cargo test` pass; no Rust/model/serde/IPC/
+  storage/schema/backup-envelope, CSP, or fs-capability change.
+
+Reviewed 2026-11-19: UX/UI designer, frontend developer, software architect
+(Rust/Tauri reviewer trimmed — frontend/docs-only diff). Applied: startup gate
+before adoption/migration and event binding after it, one-time localStorage
+migration guard with failed-id retries, create-form **Remove logo**, focus
+handoff after setlist Remove, slider/radiogroup `aria-describedby`, showing-line
+wrap, and the Feature 27/30 spec rebases/cleanup ordering. Waived: extra
+no-logo hint (pinned strings only), legacy out-of-range geometry clamping
+(save-only validation policy), first-launch setlist picker reorder (normal
+`updated_at` bump), and an artist-form "size moved" hint (forms stay minimal).
+
 ### Data model
 
 No new field, no schema bump, backup v1 envelope unchanged. `LogoConfig`
@@ -1663,15 +1740,17 @@ file). `Artist.logo.width_mm` / `alignment` stay serialized but become
 render-dead (documented in `SKILL.md` at implementation; a future schema may
 retire them — explicitly not this slice).
 
-Migration (deterministic, idempotent, no marker flag — pin verbatim):
+Migration (deterministic, idempotent, no schema/model marker — pin verbatim):
 `On first load after upgrade, for each setlist with no own logo whose artist
 has a logo: if the setlist's stored width/alignment are still the default
 (40 mm / Center), copy the artist's current width/alignment (clamped 10–80)
 into the setlist's display config; otherwise keep the setlist's stored values.
-Never copy again afterwards.` A setlist whose user deliberately chose 40/Center
-accepting the artist copy is harmless and stable — state that. Same-device
-backup round trips keep per-setlist sizes; new-device restore still shows the
-placeholder until re-import (v1 rule intact).
+Never copy again afterwards.` The one-time guard is a UI-level localStorage key,
+not a field in `Setlist`/`Artist` or the backup envelope. A pre-upgrade setlist
+whose user deliberately chose 40/Center accepting the artist copy is harmless
+and stable after that single pass. Same-device backup round trips keep
+per-setlist sizes; new-device restore still shows the placeholder until
+re-import (v1 rule intact).
 
 ### UI
 
@@ -1792,6 +1871,17 @@ status only, no modal, nothing snapshotted. Decline-snapshot failures continue
 per target with per-target reporting (same as Feature 28). The open setlist
 draft counts as a dirty-target skip with no exemption.
 
+**Cleanup ordering (must-fix)**: the current landing save path calls
+`remove_logo` on the replaced `originalLogo` immediately after `save_artist`
+returns. Feature 30's Keep choice pins that same old file onto affected
+setlists *after* the save, so the early cleanup would delete it first and every
+pin would point at a missing file. Defer the replaced/removed artist file's
+`remove_logo` call (and thumbnail prune) until the follow-vs-pin choice has
+completed: Follow/Removal may then remove it (the backend still skips any file
+a setlist or artist references), Keep pins first so the reference check keeps
+it. A failed pin write must leave the old file in place and be reported per
+target; never delete it speculatively.
+
 ### UI — reuse the Feature 28 modal pattern exactly
 
 One `role="dialog" aria-modal="true"` modal, background `inert`,
@@ -1865,7 +1955,10 @@ Behavior: clears `setlist.logo.file_name` only (cancels any
 `pendingLogoRemovals` entry for the abandoned own file — never deletes a file
 still referenced elsewhere); never touches `width_mm`/`alignment`; `markDirty()`
 + `refreshLogoIfChanged()` + `renderSheet()` + showing-line recompute; Save
-persists. Focus stays on Reset; `Artist logo restored — save to apply.` then
+persists. Focus stays on Reset while it remains enabled; once a successful
+Reset disables it (no own logo left), move focus to the upload control like
+Feature 29's Remove rule instead of dropping focus to `<body>`.
+`Artist logo restored — save to apply.` then
 the saved message. Slider/radios stay always-enabled; `captureGuard()` reverts
 Reset during export. Native `<button type="button">`; showing line stays
 `role="note"`, announcements via `setStatus()` only.
@@ -1935,13 +2028,13 @@ new dialog tokens, model/schema changes.
   export/scope locks, alignment binding, dangling-id resolver, unfiled
   guidance, backend small items — Done), and Feature 26 (UI polish + language
   pass — Done). The split-setlist helper stays open behind these.
-- **P1 — v0.3.2 slice (Todo)**: Feature 27 (artist-creation logo reaches the
-  setlist — bugfix, rebased onto 29), Feature 28 (opt-in library ⇄ setlist
-  song sync offer with safe-default custom modal), Feature 29 (per-setlist
-  logo size — artist keeps the image, geometry lives on the setlist), and
-  Feature 30 (artist-logo propagation offer with Keep-vs-follow + Reset to
-  artist logo; setlist side stays silent-local). The split-setlist helper
-  stays open behind these.
+- **P1 — v0.3.2 slice (In progress)**: Feature 27 (artist-creation logo
+  reaches the setlist — bugfix, rebased onto 29), Feature 28 (opt-in library ⇄
+  setlist song sync offer with safe-default custom modal), Feature 29
+  (per-setlist logo size — artist keeps the image, geometry lives on the
+  setlist — Done), and Feature 30 (artist-logo propagation offer with
+  Keep-vs-follow + Reset to artist logo; setlist side stays silent-local). The
+  split-setlist helper stays open behind these.
 - **P1 — Backup/restore**: Done (Feature 7). One versioned JSON envelope for
   the full library + setlists; logos are re-imported manually in v1.
   Feature 14 adds the `artists` array without a version bump.

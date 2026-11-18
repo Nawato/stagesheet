@@ -15,7 +15,10 @@ editing models, storage, IPC, or the printable sheet.
 3. Duration is computed in Rust, never only in the UI:
    `sum(song.duration_secs or 0) + sum(break.duration_secs)`.
 4. All storage lives under `<app_data_dir>/stagesheet/`; the frontend `fs` capability
-   is scoped to `$APPDATA/stagesheet/**`. Do not widen it.
+   is scoped to `$APPDATA/stagesheet/**`. Do not widen it. The only device-local
+   UI state outside it is the Feature 29 one-time logo-geometry upgrade guard in
+   `localStorage` (`stagesheet.logoGeometryMigrated`): it is not user data, never
+   enters the backup envelope, and the backend never reads it.
 5. Every Tauri command is `async` and returns `Result<T, AppError>`.
 6. Logos are rendered only via `<img src>` (blob/data URLs). Never inline SVG
    markup into the DOM: stored SVGs may contain scripts, and `<img>` is the
@@ -28,14 +31,14 @@ pub enum LogoAlignment { Left, Center, Right } // Center is the default
 
 pub struct LogoConfig {
     pub file_name: Option<String>, // plain name inside <app_data>/stagesheet/logos/
-    pub width_mm: f32,             // 10.0..=80.0
+    pub width_mm: f32,             // 10.0..=80.0 (per-setlist display geometry)
     pub alignment: LogoAlignment,
 }
 
 pub struct Artist {
     pub id: uuid::Uuid,
     pub name: String,          // trimmed, non-empty
-    pub logo: LogoConfig,      // same rules/pool as setlists
+    pub logo: LogoConfig,      // file shared with setlists; width/alignment render-dead
 }
 
 pub struct Song {
@@ -75,7 +78,7 @@ pub struct Setlist {
     pub venue: Option<String>,
     pub date: Option<chrono::NaiveDate>, // "YYYY-MM-DD"
     pub items: Vec<SetlistItem>,
-    pub logo: LogoConfig,            // serde alias: logo_config
+    pub logo: LogoConfig,            // serde alias: logo_config; per-setlist geometry
     pub sheet_options: SheetOptions, // missing in old files -> all true
     pub page_mode: PageMode,         // missing in old files -> Single
     pub artist_id: Option<uuid::Uuid>, // setlist's own artist; missing -> None = unlocked
@@ -102,9 +105,27 @@ Serde notes:
 - `Artist.name` is trimmed in both directions; a whitespace-only name loads as
   an empty string and fails `Artist::validate()` on its next save (clear artist
   name error). There is deliberately no invented maximum length.
-- `Artist.logo` shares `LogoConfig` and therefore every setlist logo rule: plain
-  file name, 10..=80 mm, same alignment enum. Missing logo objects default to
-  **no file / 40 mm / Center**.
+- `Artist.logo` shares `LogoConfig`'s storage, validation, and file pool (plain
+  file name, 10..=80 mm, same alignment enum; missing logo objects default to
+  **no file / 40 mm / Center**), but since Feature 29 only `file_name` is live.
+  Artist `width_mm`/`alignment` stay serialized and validated yet are
+  **render-dead**: the setlist editor never writes them, and no setlist path
+  calls `save_artist` for geometry (artist saves still round-trip the stored
+  values). Width and alignment
+  always come from `setlist.logo.width_mm` / `setlist.logo.alignment`, so two
+  setlists of one artist size the same image independently. New setlists start
+  at 40 mm / Center. On the first startup after the upgrade, a deterministic
+  migration copies the live artist's width (clamped 10–80) and alignment into
+  each logo-less setlist whose live artist has a logo and whose stored geometry
+  is still exactly 40 mm / Center; the copy is persisted through
+  `save_setlist`. A UI-level localStorage guard
+  (`stagesheet.logoGeometryMigrated`) records the completed pass and the ids
+  whose save failed, so it does not reopen the whole pass and only retries
+  those failures; on that device while the key exists, new/reset 40 mm /
+  Center setlists keep their value (no schema/model marker, no schema bump).
+  A pre-upgrade setlist deliberately left at 40/Center while its artist uses
+  another size adopts the artist size once on that first start — accepted,
+  harmless, then stable.
 - `Song.artist` stays the display snapshot and legacy free-text field.
   `Song.artist_id` (Feature 14) carries the artist record reference and
   `#[serde(default)]` keeps old songs loading with `None`. Since Feature 20,
@@ -186,15 +207,16 @@ Serde notes:
   retired; the add-gate refusal stays only as a defensive guard for
   stale-cache edges, and the summary keeps `· N not by <artist>` for legacy
   leftovers. A dangling setlist artist id resolves as unfiled in the UI.
-  Feature 19's width slider works unchanged inside a scope
-  (the artist logo is the active artist's).
+  Feature 19's width slider and alignment radios edit the setlist draft's own
+  geometry in every scope (Feature 29), never the artist record.
 - The landing page (`#landing-overlay`, chrome only — never sheet markup or
   print CSS) gates the workspace: it shows on startup whenever no artist is
   selected for the session, and reopens later via the header picker. No
-  artists yet → create first (name + logo upload/width/alignment + the artist
+  artists yet → create first (name + logo upload/remove + preview + the artist
   form validation). Artists exist → selection list with logo thumbnails and
-  song/setlist counts, per-row **Edit** (the same name/logo/width/alignment
-  form and validation, inline on the landing card) and **Delete** (the same
+  song/setlist counts, per-row **Edit** (the same name/logo upload/remove/
+  preview form and validation, inline on the landing card, preserving the
+  record's stored width/alignment untouched) and **Delete** (the same
   confirm with the unfiled consequence and the same guards), a New artist
   affordance, and an Unfiled entry when
   unfiled records exist. After entering an artist, truly unfiled records (a
@@ -248,8 +270,8 @@ Serde notes:
   `Artist` is mirrored in `types.ts`; `src/artists.ts` holds
   `resolveArtistName()` (display/search/sort), `resolveArtistForSong()`
   (resolved counts, scope identity, and the Unfiled bucket), and
-  `resolveSetlistLogo()` (own logo → artist logo → placeholder, used by
-  preview, print, and export). Unfiled scope
+  `resolveSetlistLogo()` (own file → artist file → none, with geometry always
+  from `setlist.logo`; used by preview, print, and export). Unfiled scope
   membership resolves through `resolveArtistForSong()` directly.
   `BreakItem.duration_secs` is the only written break length.
   `withBreakDefaults()`/`normalizeSetlistItems()` convert legacy backup JSON
@@ -321,21 +343,27 @@ model fields are snake_case.
   (all four info columns, 6/50/9/10/9/16). Every preset sums to 100%. The
   `<colgroup>` is the only width source — never add `th` width rules — and the
   numeric header/body cells share right alignment and 1.5 mm horizontal padding.
-- The brand logo resolves as setlist's own `logo` when `file_name` is set,
-  otherwise its artist's `logo` when set, otherwise the setlist placeholder
-  config. `resolveSetlistLogo()` is the single helper for preview, print, and
-  export; the resolved `LogoConfig` supplies the file name, width, and
-  alignment. The Logo fieldset width slider and alignment radios edit that
-  effective logo: own
-  logo and placeholder paths edit `setlist.logo` input-driven (the
-  placeholder pre-sizes the next own logo); the artist path commits
-  `artist.logo.width_mm` / `artist.logo.alignment` via `save_artist` on
-  `change` (release) without
-  dirtying the setlist, guarded like an artist edit and reverting the control
-  on refusal or failure. Uploading an own logo adopts the displayed width/alignment for
-  a seamless swap; removing it falls back to the artist logo automatically.
-  A `Setlist logo` / `<name> logo (artist)` / `No logo yet` showing line names
-  the width **and** alignment target. No column, frame, print-CSS, or raster change is involved.
+- The brand logo resolves **only its file** through the chain: setlist's own
+  `logo.file_name` when set, otherwise its artist's `logo.file_name` when set,
+  otherwise none. `resolveSetlistLogo()` is the single helper for preview,
+  print, and export, and it always pairs the resolved file with the setlist's
+  own `logo.width_mm` / `logo.alignment` (Feature 29) — artist geometry is
+  render-dead. The Logo fieldset width slider and alignment radios therefore
+  edit `setlist.logo` in every case: `input`/`change` clamp width to 10–80 mm,
+  write the draft, `markDirty()`, and `renderSheet()`. The no-logo case
+  pre-sizes the next own logo; the controls stay enabled whenever a draft is
+  open, and only the export capture temporarily disables/reverts them
+  (`captureGuard()` reverts via `renderLogoControls()`). There is no
+  setlist → artist geometry write, no revert closure, and no artist-draft/
+  backup/import refusal here. Uploading an own logo keeps the setlist's current
+  geometry (no adoption step); removing it falls back to the artist image at
+  that same size. Showing-line strings (adjust only names):
+  `Setlist logo — size applies to this setlist only.`;
+  `“<Name>” logo (from the artist) — size applies to this setlist only.`;
+  `No logo yet — add an image above, or add one to “<Name>” and it will appear
+  here.`; and `No logo yet — add an image above.` (no live artist, dangling id,
+  or Unfiled). The line stays `role="note"`, never live. No column, frame,
+  print-CSS, or raster change is involved.
 - `<thead>` carries the logo/title/venue/date header and column labels; `<tfoot>`
   carries the footer. Both are marked as table header/footer groups
   (`display: table-header-group` / `table-footer-group`). Chromium-based engines
@@ -408,9 +436,9 @@ model fields are snake_case.
   fetch and WebKitGTK was unreliable even when allowed. `storedLogoDataUrl()` in
   `logo.ts` base64-encodes the same scoped `readFile` bytes; the live preview
   keeps blob URLs. Never widen the CSP or the fs capability for export. The
-  exporter receives the resolved setlist → artist `LogoConfig`, so the export
-  data-URL and printed width match the preview; its raster/grayscale logic is
-  unchanged.
+  exporter receives the resolved logo file plus the setlist's geometry, so the
+  export data-URL, printed width, and alignment match the preview; its
+  raster/grayscale logic is unchanged.
 - Warm up the raster pipeline once per session with a throwaway `toCanvas`; the
   first WebKitGTK capture can drop the logo even when the live `<img>` is
   complete. Export always forces the logo to grayscale, regardless of the
@@ -489,9 +517,9 @@ model fields are snake_case.
   confirms before writing and reloads all three caches (artists, songs,
   setlists) afterwards.
 - Backup/restore guards: an inline library song draft (including a failed one),
-  a non-pristine landing artist-edit draft (edit mode, typed name, or any
-  logo/width/alignment change — reopen the landing screen via Choose artist…
-  to resolve it), a landing create-form draft (typed name or staged logo), and
+  a non-pristine landing artist-edit draft (edit mode, typed name, or staged
+  logo — reopen the landing screen via Choose artist… to resolve it), a
+  landing create-form draft (typed name or staged logo), and
   any in-flight library/artist write or artist/landing logo import all
   refuse with a titled status message. Restore re-checks the guard after reading
   the file. Back up locks
@@ -508,11 +536,12 @@ model fields are snake_case.
   finishes; entering/cancelling artist edit mode re-renders the landing row's
   `is-editing`/`aria-expanded` state immediately and returns focus to its
   Edit button.
-- Logos are **not embedded in v1**. Setlist and artist `logo.file_name`, width,
-  and alignment stay in the envelope, so a same-device restore keeps working; on
-  a new device the file is absent, the preview shows the logo placeholder, and
-  the logo must be re-imported manually. Embedding bytes is a future envelope
-  version.
+- Logos are **not embedded in v1**. Setlist `logo` (file name plus the
+  per-setlist width/alignment) and artist `logo.file_name` (artist width/
+  alignment stay serialized but render-dead) remain in the envelope, so a
+  same-device restore keeps working; on a new device the file is absent, the
+  preview shows the logo placeholder, and the logo must be re-imported
+  manually. Embedding bytes is a future envelope version.
 
 ## Tests that must stay green
 
