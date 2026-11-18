@@ -7,7 +7,13 @@
  */
 
 import { el } from "./dom";
-import { formatDuration, formatGigDate, formatRuntime, setlistDurationSecs } from "./format";
+import {
+  formatBreakDuration,
+  formatDuration,
+  formatGigDate,
+  formatRuntime,
+  setlistDurationSecs,
+} from "./format";
 import { withSheetDefaults } from "./types";
 import type { LogoAlignment, Setlist, Song } from "./types";
 
@@ -136,7 +142,7 @@ export function renderSetlistSheet(
       } else {
         tbody.append(
           buildBreakRow(
-            item.Break.duration_mins,
+            item.Break.duration_secs,
             item.Break.note,
             item.Break.label,
             columnCount,
@@ -255,7 +261,7 @@ function buildSongRow(
 }
 
 function buildBreakRow(
-  durationMins: number,
+  durationSecs: number,
   note: string | null,
   label: string | null | undefined,
   columnCount: number,
@@ -267,11 +273,11 @@ function buildBreakRow(
 
   // The duration is structural and always renders. There is no separate label
   // toggle, so the Comment toggle gates both the label and the comment; with
-  // it off the row is just `N min`.
+  // it off the row is just `N min` / `N sec`.
   const labelText = showComment ? breakLabelText(label) : null;
   const commentText = showComment ? breakCommentText(note) : null;
   if (labelText) cellNode.append(el("span", "break-label", labelText));
-  cellNode.append(el("span", "break-duration tabular", `${durationMins} min`));
+  cellNode.append(el("span", "break-duration tabular", formatBreakDuration(durationSecs)));
   if (commentText) cellNode.append(el("span", "break-note", commentText));
 
   row.append(cellNode);

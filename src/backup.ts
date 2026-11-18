@@ -24,7 +24,12 @@ import { open, save } from "@tauri-apps/plugin-dialog";
 import { readFile, writeFile } from "@tauri-apps/plugin-fs";
 import { downloadDir, join } from "@tauri-apps/api/path";
 
-import { DEFAULT_LOGO_WIDTH_MM, withPageModeDefaults, withSheetDefaults } from "./types";
+import {
+  DEFAULT_LOGO_WIDTH_MM,
+  withBreakDefaults,
+  withPageModeDefaults,
+  withSheetDefaults,
+} from "./types";
 import type {
   BreakItem,
   LogoAlignment,
@@ -291,21 +296,21 @@ function normalizeItem(value: unknown): SetlistItem {
 function normalizeBreak(value: unknown): BreakItem {
   if (!isRecord(value)) throw new Error("break must be an object");
 
-  const duration = value.duration_mins;
-  if (
-    typeof duration !== "number" ||
-    !Number.isInteger(duration) ||
-    duration < 0 ||
-    duration > 0xffffffff
-  ) {
-    throw new Error("invalid duration_mins");
+  // Schema-1 backups written by older builds carry legacy `duration_mins`;
+  // current builds write `duration_secs`. The shared normalizer prefers seconds
+  // and converts minutes × 60, exactly like the Rust serde migration.
+  const durationSecs = optionalInteger(value.duration_secs, 0xffffffff, "duration_secs");
+  const durationMins = optionalInteger(value.duration_mins, 0xffffffff, "duration_mins");
+  if (durationSecs === null && durationMins === null) {
+    throw new Error("missing break duration");
   }
 
-  return {
-    duration_mins: duration,
+  return withBreakDefaults({
+    duration_secs: durationSecs,
+    duration_mins: durationMins,
     note: optionalText(value.note),
     label: optionalText(value.label),
-  };
+  });
 }
 
 function normalizeLogo(value: Record<string, unknown>): LogoConfig {

@@ -29,7 +29,8 @@ export interface Song {
 
 /** The `Break` payload of a setlist item. */
 export interface BreakItem {
-  duration_mins: number;
+  /** Break length in seconds, 0..=MAX_BREAK_SECS. */
+  duration_secs: number;
   note: string | null;
   /** Optional heading such as `Intermission`; `null`/missing renders `Break`. */
   label?: string | null;
@@ -37,6 +38,45 @@ export interface BreakItem {
 
 /** Serde's default externally tagged enum representation. */
 export type SetlistItem = { Song: Song } | { Break: BreakItem };
+
+/**
+ * Raw break payload as found in older setlist files and backups, before
+ * Feature 17 renamed `duration_mins` to `duration_secs`.
+ */
+export interface RawBreakItem {
+  duration_secs?: number | null;
+  duration_mins?: number | null;
+  note?: string | null;
+  label?: string | null;
+}
+
+/**
+ * Normalizes a break payload that bypassed Rust serde (backup restore).
+ * `duration_secs` wins; legacy `duration_mins` is converted × 60 with the same
+ * u32 saturation the Rust migration uses, so an oversized old value still
+ * loads and fails validation on save instead of disappearing at load time.
+ */
+export function withBreakDefaults(raw: RawBreakItem): BreakItem {
+  const durationSecs =
+    raw.duration_secs ??
+    (raw.duration_mins != null ? Math.min(raw.duration_mins * 60, 0xffffffff) : null);
+  if (durationSecs === null) {
+    throw new Error("missing break duration");
+  }
+
+  return {
+    duration_secs: durationSecs,
+    note: raw.note ?? null,
+    label: raw.label ?? null,
+  };
+}
+
+/** Applies `withBreakDefaults` to every break in a setlist item list. */
+export function normalizeSetlistItems(items: readonly SetlistItem[]): SetlistItem[] {
+  return items.map((item) =>
+    "Break" in item ? { Break: withBreakDefaults(item.Break) } : item,
+  );
+}
 
 /** Which optional blocks the printable sheet shows. Mirrors `SheetOptions`. */
 export interface SheetOptions {
@@ -109,6 +149,6 @@ export const LOGO_MAX_WIDTH_MM = 80;
 export const DEFAULT_LOGO_WIDTH_MM = 40;
 
 /** Mirrors the Rust validation bounds in `models.rs`. */
-export const MAX_BREAK_MINS = 600;
+export const MAX_BREAK_SECS = 36_000;
 export const MAX_BREAK_LABEL_CHARS = 24;
 export const MAX_COMMENT_CHARS = 140;

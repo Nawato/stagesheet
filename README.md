@@ -151,12 +151,15 @@ human-readable JSON file:
 ```
 
 The envelope includes every current field (tuning, sheet options, page mode,
-labels, comments, and logo width/alignment). Restore is frontend-only: it reads
-the file through the dialog-scoped `fs` permission, validates the envelope, and
-re-saves each record through `save_song` / `save_setlist`, so Rust validation
-and serde defaults remain the authority. Older schema versions are migrated
-before saving; a `schema_version` newer than the build supports is rejected with
-a clear "update StageSheet" message instead of being partially imported.
+labels, comments, and logo width/alignment). Break lengths are written as
+`duration_secs`; schema-1 backups from older builds may still carry
+`duration_mins` and are converted × 60 on restore. Restore is frontend-only: it
+reads the file through the dialog-scoped `fs` permission, validates the
+envelope, and re-saves each record through `save_song` / `save_setlist`, so Rust
+validation and serde defaults remain the authority. Older schema versions are
+migrated before saving; a `schema_version` newer than the build supports is
+rejected with a clear "update StageSheet" message instead of being partially
+imported.
 
 Restore overwrites existing songs and setlists with the same IDs and does not
 delete anything else. Malformed records are skipped and reported with counts.
@@ -220,8 +223,8 @@ change.
   and re-filtered after save), per-row duplicate under a new id, and delete with
   confirmation. Free-text tuning (max 24 chars) is part of search, the add form,
   the library editor, and each setlist song's editor details.
-- Setlist editor: title/venue/date, break insertion (custom label, length in
-  minutes, comment), up/down + drag reorder, inline BPM/key/tuning editing,
+- Setlist editor: title/venue/date, break insertion (custom label, `mm:ss`
+  length, comment), up/down + drag reorder, inline BPM/key/tuning editing,
   Comment fields for songs and breaks (max 140 chars) that render on the sheet,
   and logo upload with width/alignment controls. Oversized raster logos are
   downscaled on import; SVG logos stay vector. Delete/Discard sits next to Save
@@ -233,9 +236,12 @@ change.
   `<colgroup>` as the only width source, so the header stays aligned with the
   body in every toggle combination. Title/venue/date and song titles always
   print; the Time column can be hidden, while break durations always render.
-- Validation hardening on save: break length `0..=600`, break label ≤ 24 chars,
-  and song/break comments ≤ 140 chars (after trim). Old files still load; their
-  next save reports the violation instead of truncating.
+- Validation hardening on save: break length `0..=36000` seconds (the old
+  600-minute cap, entered as `mm:ss`), break label ≤ 24 chars, and song/break
+  comments ≤ 140 chars (after trim). Break durations render as `11 sec`,
+  `10 min`, or `1 min 5 sec` via one shared helper. Old files still load; their
+  next save reports the violation instead of truncating. Legacy minute-only
+  break JSON loads as × 60 seconds and is re-saved in the seconds shape.
 - A4 black-on-white preview with `@page` and `break-inside: avoid` for rows.
   In multiple-page mode every printed page carries its own cloned header and
   footer (paginated frames), so repetition no longer depends on the engine's
@@ -281,10 +287,9 @@ change.
 
 ### Still missing (per plan)
 
-- Planned library/setlist tooling (Features 13–17, Todo): setlist duplication as
+- Planned library/setlist tooling (Features 13–16, Todo): setlist duplication as
   a preset base, managed artists (name + logo) with record-based library filter
-  and per-artist setlist picker + lock, and break durations with second
-  precision.
+  and per-artist setlist picker + lock.
 - Paginated split-setlist helper (duplicate setlist, move second half) as an
   alternative to multi-page mode.
 - Physical-paper QA on A4 (page count, header/footer per engine, legibility),

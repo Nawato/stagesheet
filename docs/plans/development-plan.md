@@ -130,11 +130,12 @@ harness were removed when the exporter shipped.
 - Sheet correctness fixes from real use: Feature 10 done (per-combination
   column widths + header alignment); Feature 11 done (paginated
   preview/print frames). Both outrank new tooling.
-- Library/setlist tooling slice: Feature 12 is Done; Features 13–17 are Todo,
-  Feature 18 is Done. In-place library song editing shipped; setlist duplication
-  as a preset base and break seconds remain. Features 13 and 17 are independent;
-  14 → 15 → 16 form the artist chain: 14 (artist records + logos) → 15 (library
-  artist filter) → 16 (setlist artist + per-artist picker + lock).
+- Library/setlist tooling slice: Feature 12 is Done, Feature 17 is Done,
+  Features 13–16 are Todo, and Feature 18 is Done. In-place library song
+  editing and break-second precision shipped; setlist duplication as a preset
+  base and the artist chain remain. Feature 13 is independent; 14 → 15 → 16
+  form the artist chain: 14 (artist records + logos) → 15 (library artist
+  filter) → 16 (setlist artist + per-artist picker + lock).
 - `tauri android init` / `ios init` on provisioned machines; native share.
 - Print QA on real A4 (checklist below), backup/restore, app versioning,
   signing/release automation (tracked in the roadmap, P3).
@@ -260,3 +261,15 @@ WebView2/WKWebView when available):**
   selection are restored, with outside focus cancelling any deferred restore. No
   Rust, IPC, storage, backup-file format, or contract change. Features 13–17
   remain Todo.
+- 2026-11-18: Feature 17 shipped (break lengths in seconds). `Break.duration_secs`
+  replaces `duration_mins` with a serialized-seconds-only shape; deserialization
+  still accepts legacy minute JSON × 60 (seconds win when both exist, u32
+  saturation keeps oversized old values loadable) and the frontend normalizer
+  does the same for backup restore. Validation stays save-only at
+  `0..=36000` seconds. The editor uses an `mm:ss` field (`maxlength` 6) with
+  the song-duration invalid/status pattern and Save commits valid field text
+  before re-checking the rendered fields (including Ctrl/Cmd+S while the field
+  still has focus); the sheet, editor meta, preview, print, and export share
+  `formatBreakDuration` (`11 sec` / `10 min` / `1 min 5 sec`). Totals keep
+  `formatRuntime`. No print/export structure change. Features 13–16 remain
+  Todo; 14 → 15 → 16 stay the artist chain.

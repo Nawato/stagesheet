@@ -6,6 +6,7 @@ import { exportBackup, readBackupFile } from "./backup";
 import { byId, el } from "./dom";
 import {
   durationInputValue,
+  formatBreakDuration,
   formatDuration,
   formatRuntime,
   parseDuration,
@@ -24,8 +25,9 @@ import {
   LOGO_MAX_WIDTH_MM,
   LOGO_MIN_WIDTH_MM,
   MAX_BREAK_LABEL_CHARS,
-  MAX_BREAK_MINS,
+  MAX_BREAK_SECS,
   MAX_COMMENT_CHARS,
+  normalizeSetlistItems,
   withPageModeDefaults,
   withSheetDefaults,
 } from "./types";
@@ -416,7 +418,7 @@ function createDraft(): Setlist {
 function cloneSetlist(setlist: Setlist): Setlist {
   return {
     ...setlist,
-    items: setlist.items.map((item) =>
+    items: normalizeSetlistItems(setlist.items).map((item) =>
       "Song" in item ? { Song: { ...item.Song } } : { Break: { ...item.Break } },
     ),
     logo: { ...setlist.logo },
@@ -440,6 +442,7 @@ function adoptLoadedState(
   pendingLibraryEditorFocus = null;
   setlists = loadedSetlists.map((setlist) => ({
     ...setlist,
+    items: normalizeSetlistItems(setlist.items),
     sheet_options: withSheetDefaults(setlist.sheet_options),
     page_mode: withPageModeDefaults(setlist.page_mode),
   }));
@@ -505,6 +508,60 @@ async function saveCurrent(): Promise<boolean> {
     return false;
   }
   titleInput.value = current.title;
+
+  // Commit every rendered break field before the backend call. `change` does
+  // not fire for Ctrl/Cmd+S while the field still has focus, so validating only
+  // the raw text would save the previous model value.
+  const breakDurationInputs = Array.from(
+    itemList.querySelectorAll<HTMLInputElement>('input[data-field="break-duration"]'),
+  );
+  for (const input of breakDurationInputs) {
+    const row = input.closest<HTMLElement>(".item-row");
+    const index = Number(row?.dataset.index);
+    const item = Number.isInteger(index) ? current.items[index] : undefined;
+    if (!item || !("Break" in item)) {
+      setStatus(
+        "Could not find the break for this duration field. Reopen the setlist and try again.",
+        "error",
+      );
+      return false;
+    }
+
+    const committed = commitBreakDurationInput(input, item.Break);
+    if (!committed.ok) {
+      const details = input.closest("details");
+      if (details) details.open = true;
+      input.focus();
+      setStatus(committed.error, "error");
+      return false;
+    }
+
+    // The save-path commit bypasses the field's `change` handler, so reflect a
+    // real edit in the dirty state and sheet immediately. A later invalid field
+    // must not leave an earlier valid commit looking clean or unrendered.
+    if (committed.changed) {
+      markDirty();
+      renderSheet();
+    }
+  }
+
+  // The editor rejects invalid input as it is typed; this guards values loaded
+  // from older files (or set programmatically) before the backend sees them.
+  // Rust validation remains the authority.
+  const invalidBreak = current.items.find(
+    (item) =>
+      "Break" in item &&
+      (!Number.isInteger(item.Break.duration_secs) ||
+        item.Break.duration_secs < 0 ||
+        item.Break.duration_secs > MAX_BREAK_SECS),
+  );
+  if (invalidBreak) {
+    setStatus(
+      `Break durations must be between 0:00 and 600:00 (${MAX_BREAK_SECS} seconds). Fix the break length before saving.`,
+      "error",
+    );
+    return false;
+  }
 
   try {
     const saved = await api.saveSetlist(current);
@@ -1348,12 +1405,7 @@ function buildBreakItem(breakItem: BreakItem, index: number): HTMLLIElement {
   };
 
   const refreshMeta = (): void => {
-    metaNode.textContent = [
-      `${breakItem.duration_mins} min`,
-      breakItem.note?.trim(),
-    ]
-      .filter((part): part is string => Boolean(part))
-      .join(" · ");
+    updateBreakMeta(metaNode, breakItem);
   };
   refreshMeta();
 
@@ -1371,15 +1423,21 @@ function buildBreakItem(breakItem: BreakItem, index: number): HTMLLIElement {
     renderSheet();
   });
 
-  const minutesField = numberField("Minutes", breakItem.duration_mins, 0, MAX_BREAK_MINS);
-  minutesField.input.dataset.field = "break-minutes";
-  minutesField.input.addEventListener("change", () => {
-    const value = minutesField.input.valueAsNumber;
-    breakItem.duration_mins = Number.isFinite(value)
-      ? clamp(Math.round(value), 0, MAX_BREAK_MINS)
-      : 0;
-    minutesField.input.value = String(breakItem.duration_mins);
-    refreshMeta();
+  const durationField = textField(
+    "Duration",
+    durationInputValue(breakItem.duration_secs),
+    "10:00",
+  );
+  durationField.input.dataset.field = "break-duration";
+  // Fits the longest valid value, `600:00` (36000 seconds).
+  durationField.input.maxLength = 6;
+  durationField.input.addEventListener("change", () => {
+    const committed = commitBreakDurationInput(durationField.input, breakItem);
+    if (!committed.ok) {
+      setStatus(committed.error, "error");
+      return;
+    }
+
     markDirty();
     renderSheet();
   });
@@ -1393,7 +1451,7 @@ function buildBreakItem(breakItem: BreakItem, index: number): HTMLLIElement {
     renderSheet();
   });
 
-  fields.append(labelField.element, minutesField.element, noteField.element);
+  fields.append(labelField.element, durationField.element, noteField.element);
   details.append(fields);
   main.append(details);
 
@@ -1404,6 +1462,82 @@ function buildBreakItem(breakItem: BreakItem, index: number): HTMLLIElement {
 /** Custom break heading, falling back to the generic `Break`. */
 function breakHeading(label: string | null | undefined): string {
   return label?.trim() || "Break";
+}
+
+/**
+ * Break fields share song-duration parsing, but stay `mm:ss`: no hour part and
+ * no seconds value of 60 or more (`99:99` is a typo, not 100 minutes 39 s).
+ */
+function parseBreakDuration(value: string): number | null {
+  const trimmed = value.trim();
+  const parsed = parseDuration(trimmed);
+  if (parsed === null) return null;
+
+  const parts = trimmed.split(":");
+  if (parts.length > 2 || parts.some((part) => !/^\d+$/.test(part))) {
+    return null;
+  }
+  if (parts.length === 2 && Number(parts[1]) >= 60) {
+    return null;
+  }
+
+  return parsed;
+}
+
+/** Refreshes the break row subtitle from the model item. */
+function updateBreakMeta(metaNode: HTMLElement, breakItem: BreakItem): void {
+  metaNode.textContent = [
+    formatBreakDuration(breakItem.duration_secs),
+    breakItem.note?.trim(),
+  ]
+    .filter((part): part is string => Boolean(part))
+    .join(" · ");
+}
+
+type BreakDurationCommit =
+  | { ok: true; changed: boolean }
+  | { ok: false; error: string };
+
+/**
+ * Validates the rendered break field and commits its seconds to the model.
+ *
+ * Used by both the field's `change` handler and the pre-save pass, so a
+ * Ctrl/Cmd+S with the field still focused cannot save a stale duration. Invalid
+ * input marks the field and leaves the model untouched; valid input also
+ * normalizes the field text and refreshes the row subtitle.
+ */
+function commitBreakDurationInput(
+  input: HTMLInputElement,
+  breakItem: BreakItem,
+): BreakDurationCommit {
+  const parsed = parseBreakDuration(input.value.trim());
+  if (parsed === null) {
+    markFieldInvalid(input, true);
+    return {
+      ok: false,
+      error:
+        "Break duration must use mm:ss between 0:00 and 600:00; blank is not allowed.",
+    };
+  }
+  if (parsed > MAX_BREAK_SECS) {
+    markFieldInvalid(input, true);
+    return {
+      ok: false,
+      error: "Break duration must be at most 600:00 (10 hours).",
+    };
+  }
+
+  markFieldInvalid(input, false);
+  const changed = breakItem.duration_secs !== parsed;
+  breakItem.duration_secs = parsed;
+  input.value = durationInputValue(parsed);
+
+  const metaNode = input
+    .closest<HTMLElement>(".item-row")
+    ?.querySelector<HTMLElement>(".item-sub");
+  if (metaNode) updateBreakMeta(metaNode, breakItem);
+
+  return { ok: true, changed };
 }
 
 function buildItemLead(label: string): HTMLSpanElement {
@@ -1711,18 +1845,20 @@ function removeItem(index: number): void {
 function addBreak(): void {
   if (!current) return;
 
-  current.items.push({ Break: { duration_mins: 10, note: null, label: null } });
+  current.items.push({ Break: { duration_secs: 600, note: null, label: null } });
   markDirty();
   renderItems();
   renderSheet();
 
   const lastRow = itemList.lastElementChild;
-  const minutes = lastRow?.querySelector<HTMLInputElement>('input[data-field="break-minutes"]');
-  if (minutes) {
+  const duration = lastRow?.querySelector<HTMLInputElement>(
+    'input[data-field="break-duration"]',
+  );
+  if (duration) {
     const details = lastRow?.querySelector("details");
     if (details) details.open = true;
-    minutes.focus();
-    minutes.select();
+    duration.focus();
+    duration.select();
   }
 }
 

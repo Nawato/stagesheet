@@ -30,6 +30,28 @@ export function formatRuntime(totalSecs: number): string {
   return rest === 0 ? `${hours} h` : `${hours} h ${rest} min`;
 }
 
+/**
+ * Break length for the sheet, editor meta, preview, print, and export.
+ *
+ * Under a minute keeps second precision (`11 sec`); whole minutes stay exactly
+ * as before (`10 min`); mixed values show both (`1 min 5 sec`). Totals keep
+ * using `formatRuntime`.
+ */
+export function formatBreakDuration(totalSecs: number | null | undefined): string {
+  if (totalSecs == null || !Number.isFinite(totalSecs) || totalSecs < 0) {
+    return "—";
+  }
+
+  const secs = Math.round(totalSecs);
+  const minutes = Math.floor(secs / 60);
+  const rest = secs % 60;
+  if (minutes === 0) {
+    return `${secs} sec`;
+  }
+
+  return rest === 0 ? `${minutes} min` : `${minutes} min ${rest} sec`;
+}
+
 /** Parses `m:ss`, `h:mm:ss`, or plain seconds. Returns null for empty input. */
 export function parseDuration(value: string): number | null {
   const trimmed = value.trim();
@@ -71,7 +93,7 @@ export function durationInputValue(totalSecs: number | null): string {
 
 export function setlistDurationSecs(setlist: Setlist): number {
   return setlist.items.reduce((total, item) => {
-    return total + ("Song" in item ? (item.Song.duration_secs ?? 0) : item.Break.duration_mins * 60);
+    return total + ("Song" in item ? (item.Song.duration_secs ?? 0) : item.Break.duration_secs);
   }, 0);
 }
 

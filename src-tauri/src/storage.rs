@@ -473,7 +473,7 @@ mod tests {
         setlist.items = vec![
             SetlistItem::Song(opener),
             SetlistItem::Break {
-                duration_mins: 10,
+                duration_secs: 600,
                 note: Some("Tune down".into()),
                 label: Some("Intermission".into()),
             },
@@ -535,7 +535,7 @@ mod tests {
 
         let mut setlist = Setlist::new("Gig");
         setlist.items.push(SetlistItem::Break {
-            duration_mins: crate::models::MAX_BREAK_MINS + 1,
+            duration_secs: crate::models::MAX_BREAK_SECS + 1,
             note: None,
             label: None,
         });
@@ -544,7 +544,8 @@ mod tests {
             Err(AppError::InvalidInput(message)) if message.contains("break length")
         ));
 
-        // Simulate a file written before validation hardening: it must load.
+        // Simulate a file written before validation hardening and Feature 17:
+        // a legacy minute-only break must still load.
         let id = Uuid::new_v4();
         let legacy = serde_json::json!({
             "id": id,
@@ -573,11 +574,59 @@ mod tests {
         .expect("write legacy setlist");
 
         let loaded = storage.get_setlist(id).await.expect("legacy setlist loads");
+        assert_eq!(loaded.total_duration_secs(), u64::from(u32::MAX));
         assert!(loaded.validate().is_err(), "next save must fail");
         assert!(matches!(
             storage.save_setlist(&loaded).await,
             Err(AppError::InvalidInput(_))
         ));
+    }
+
+    #[tokio::test]
+    async fn legacy_minute_break_loads_and_saves_as_seconds() {
+        let (_dir, storage) = storage();
+        let id = Uuid::new_v4();
+        let legacy = serde_json::json!({
+            "id": id,
+            "title": "Legacy gig",
+            "items": [{
+                "Break": {
+                    "duration_mins": 10,
+                    "note": "Tune down",
+                    "label": "Intermission",
+                }
+            }],
+            "logo": {
+                "file_name": null,
+                "width_mm": 40.0,
+                "alignment": "Center",
+            },
+        });
+
+        let path = storage.setlist_path(id);
+        tokio::fs::create_dir_all(storage.setlists_dir())
+            .await
+            .expect("create setlists dir");
+        tokio::fs::write(
+            &path,
+            serde_json::to_vec(&legacy).expect("serialize legacy"),
+        )
+        .await
+        .expect("write legacy setlist");
+
+        let loaded = storage.get_setlist(id).await.expect("legacy setlist loads");
+        assert_eq!(loaded.total_duration_secs(), 600);
+        assert_eq!(storage.setlist_duration(id).await.expect("duration"), 600);
+
+        storage.save_setlist(&loaded).await.expect("resave");
+        let raw = tokio::fs::read_to_string(&path)
+            .await
+            .expect("read resaved setlist");
+        assert!(raw.contains("\"duration_secs\": 600"));
+        assert!(
+            !raw.contains("duration_mins"),
+            "the legacy field must not be persisted again"
+        );
     }
 
     #[tokio::test]

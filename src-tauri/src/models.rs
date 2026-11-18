@@ -34,11 +34,14 @@ pub const MAX_BREAK_LABEL_CHARS: usize = 24;
 /// so one verbose comment must not blow the single-A4 budget.
 pub const MAX_COMMENT_CHARS: usize = 140;
 
-/// Largest accepted break length, in minutes.
+/// Largest accepted break length, in seconds (600 minutes).
 ///
 /// Enforced in `validate()` rather than by the integer type so old files with
 /// oversized values still load and only fail on their next save.
-pub const MAX_BREAK_MINS: u32 = 600;
+pub const MAX_BREAK_SECS: u32 = 36_000;
+
+/// Multiplier used to migrate the pre-Feature-17 minute-only break payload.
+const LEGACY_BREAK_MINS_TO_SECS: u32 = 60;
 
 /// Horizontal placement of the band logo in the printed sheet.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize)]
@@ -218,35 +221,90 @@ where
 }
 
 /// One entry in a setlist: either a song or a timed break.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+///
+/// Serialization stays serde's default externally tagged form. Deserialization
+/// is implemented manually so the pre-Feature-17 break payload (`duration_mins`)
+/// still loads: `duration_secs` wins when present, otherwise minutes are
+/// multiplied by 60. Missing durations in malformed JSON are rejected, exactly
+/// as the old required `duration_mins` field was.
+#[derive(Debug, Clone, PartialEq, Serialize)]
 pub enum SetlistItem {
     Song(Song),
     Break {
-        /// Break length in minutes; `0..=MAX_BREAK_MINS`, checked in `validate()`.
-        duration_mins: u32,
+        /// Break length in seconds; `0..=MAX_BREAK_SECS`, checked in `validate()`.
+        ///
+        /// Seconds keep short breaks (e.g. 11 s) exact; the sheet and editor
+        /// format them for display.
+        duration_secs: u32,
         /// Free-text comment shown inline after the length.
-        #[serde(default)]
         note: Option<String>,
         /// Optional custom heading, e.g. `Intermission` or `Encore`.
         ///
         /// `None` renders as `Break` in the UI. Stored trimmed, and
         /// whitespace-only values load as `None`.
-        #[serde(
-            default,
-            deserialize_with = "deserialize_trimmed_text",
-            serialize_with = "serialize_trimmed_text"
-        )]
+        #[serde(serialize_with = "serialize_trimmed_text")]
         label: Option<String>,
     },
 }
 
+/// Wire shape used to read `SetlistItem`, including the legacy break payload.
+#[derive(Deserialize)]
+enum SetlistItemWire {
+    Song(Song),
+    Break(BreakWire),
+}
+
+/// Break payload that accepts both `duration_secs` and legacy `duration_mins`.
+#[derive(Deserialize)]
+struct BreakWire {
+    #[serde(default)]
+    duration_secs: Option<u32>,
+    #[serde(default)]
+    duration_mins: Option<u32>,
+    #[serde(default)]
+    note: Option<String>,
+    #[serde(default, deserialize_with = "deserialize_trimmed_text")]
+    label: Option<String>,
+}
+
+impl<'de> Deserialize<'de> for SetlistItem {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        match SetlistItemWire::deserialize(deserializer)? {
+            SetlistItemWire::Song(song) => Ok(Self::Song(song)),
+            SetlistItemWire::Break(wire) => {
+                let duration_secs = match (wire.duration_secs, wire.duration_mins) {
+                    // Seconds are authoritative when both fields exist.
+                    (Some(secs), _) => secs,
+                    // Saturate so any old u32-sized minute value still parses;
+                    // validation then rejects it on the next save.
+                    (None, Some(mins)) => mins.saturating_mul(LEGACY_BREAK_MINS_TO_SECS),
+                    (None, None) => {
+                        return Err(serde::de::Error::custom(
+                            "break duration is missing (expected duration_secs, or legacy duration_mins)",
+                        ));
+                    }
+                };
+
+                Ok(Self::Break {
+                    duration_secs,
+                    note: wire.note,
+                    label: wire.label,
+                })
+            }
+        }
+    }
+}
+
 impl SetlistItem {
     /// Contribution to the setlist duration. Songs without a duration count as
-    /// zero seconds; breaks are stored in minutes.
+    /// zero seconds; breaks already store seconds.
     pub fn duration_secs(&self) -> u64 {
         match self {
             Self::Song(song) => u64::from(song.duration_secs.unwrap_or(0)),
-            Self::Break { duration_mins, .. } => u64::from(*duration_mins) * 60,
+            Self::Break { duration_secs, .. } => u64::from(*duration_secs),
         }
     }
 
@@ -265,13 +323,13 @@ impl SetlistItem {
         match self {
             Self::Song(song) => song.validate(),
             Self::Break {
-                duration_mins,
+                duration_secs,
                 note,
                 label,
             } => {
-                if *duration_mins > MAX_BREAK_MINS {
+                if *duration_secs > MAX_BREAK_SECS {
                     return Err(format!(
-                        "break length must be between 0 and {MAX_BREAK_MINS} minutes"
+                        "break length must be between 0 and {MAX_BREAK_SECS} seconds (600 minutes)"
                     ));
                 }
 
@@ -480,7 +538,7 @@ mod tests {
         setlist.items = vec![
             SetlistItem::Song(song("Opener", Some(180))),
             SetlistItem::Break {
-                duration_mins: 10,
+                duration_secs: 600,
                 note: Some("Tune down".into()),
                 label: Some("Intermission".into()),
             },
@@ -795,7 +853,7 @@ mod tests {
     #[test]
     fn break_label_round_trips_and_old_json_defaults_to_none() {
         let with_label = SetlistItem::Break {
-            duration_mins: 15,
+            duration_secs: 900,
             note: Some("Change strings".into()),
             label: Some("Encore".into()),
         };
@@ -820,7 +878,7 @@ mod tests {
     #[test]
     fn break_label_is_trimmed_and_blank_becomes_none() {
         let padded: SetlistItem = serde_json::from_str(
-            r#"{"Break":{"duration_mins":10,"note":null,"label":"  Encore  "}}"#,
+            r#"{"Break":{"duration_secs":600,"note":null,"label":"  Encore  "}}"#,
         )
         .expect("padded label parses");
         match &padded {
@@ -829,7 +887,7 @@ mod tests {
         }
 
         let blank: SetlistItem =
-            serde_json::from_str(r#"{"Break":{"duration_mins":10,"note":null,"label":"   "}}"#)
+            serde_json::from_str(r#"{"Break":{"duration_secs":600,"note":null,"label":"   "}}"#)
                 .expect("blank label parses");
         match &blank {
             SetlistItem::Break { label, .. } => assert_eq!(*label, None),
@@ -837,7 +895,7 @@ mod tests {
         }
 
         let serialized = serde_json::to_value(SetlistItem::Break {
-            duration_mins: 10,
+            duration_secs: 600,
             note: None,
             label: Some("  Intermission  ".into()),
         })
@@ -848,32 +906,45 @@ mod tests {
         );
 
         let empty = serde_json::to_value(SetlistItem::Break {
-            duration_mins: 10,
+            duration_secs: 600,
             note: None,
             label: Some(String::new()),
         })
         .expect("serialize empty label");
         assert_eq!(empty["Break"]["label"], serde_json::Value::Null);
+
+        // Comments are deliberately not rewritten by serde (only the editor
+        // trims them), unlike the label above.
+        let padded_note: SetlistItem = serde_json::from_str(
+            r#"{"Break":{"duration_secs":600,"note":"  Tune down  ","label":null}}"#,
+        )
+        .expect("padded note parses");
+        match &padded_note {
+            SetlistItem::Break { note, .. } => {
+                assert_eq!(note.as_deref(), Some("  Tune down  "))
+            }
+            SetlistItem::Song(_) => panic!("expected a break"),
+        }
     }
 
     #[test]
     fn validation_bounds_break_label_after_trimming() {
         let valid = SetlistItem::Break {
-            duration_mins: 10,
+            duration_secs: 600,
             note: None,
             label: Some("x".repeat(MAX_BREAK_LABEL_CHARS)),
         };
         assert!(valid.validate().is_ok(), "the limit itself is allowed");
 
         let padded = SetlistItem::Break {
-            duration_mins: 10,
+            duration_secs: 600,
             note: None,
             label: Some(format!("  {}  ", "x".repeat(MAX_BREAK_LABEL_CHARS))),
         };
         assert!(padded.validate().is_ok(), "padding must not count");
 
         let too_long = SetlistItem::Break {
-            duration_mins: 10,
+            duration_secs: 600,
             note: None,
             label: Some("x".repeat(MAX_BREAK_LABEL_CHARS + 1)),
         };
@@ -888,36 +959,139 @@ mod tests {
     }
 
     #[test]
-    fn validation_bounds_break_duration() {
-        for minutes in [0, 1, MAX_BREAK_MINS] {
+    fn validation_bounds_break_duration_in_seconds() {
+        for secs in [0, 1, 11, MAX_BREAK_SECS] {
             let item = SetlistItem::Break {
-                duration_mins: minutes,
+                duration_secs: secs,
                 note: None,
                 label: None,
             };
-            assert!(item.validate().is_ok(), "{minutes} minutes is allowed");
+            assert!(item.validate().is_ok(), "{secs} seconds is allowed");
         }
 
-        for minutes in [MAX_BREAK_MINS + 1, u32::MAX] {
+        for secs in [MAX_BREAK_SECS + 1, u32::MAX] {
             let item = SetlistItem::Break {
-                duration_mins: minutes,
+                duration_secs: secs,
                 note: None,
                 label: None,
             };
-            assert!(item.validate().is_err(), "{minutes} minutes is too long");
+            assert!(item.validate().is_err(), "{secs} seconds is too long");
         }
 
-        // The old IPC hole: a u32-sized value arrives as valid JSON, loads,
-        // and is only rejected when the setlist is validated on save.
+        let mut setlist = Setlist::new("Gig");
+        setlist.items.push(SetlistItem::Break {
+            duration_secs: MAX_BREAK_SECS + 1,
+            note: None,
+            label: None,
+        });
+        assert!(setlist.validate().is_err());
+    }
+
+    #[test]
+    fn break_duration_round_trips_in_seconds() {
+        let item = SetlistItem::Break {
+            duration_secs: 11,
+            note: Some("EOAK".into()),
+            label: Some("Pause".into()),
+        };
+
+        let json = serde_json::to_value(&item).expect("serialize break");
+        assert_eq!(json["Break"]["duration_secs"], serde_json::json!(11));
+        assert!(
+            json["Break"].get("duration_mins").is_none(),
+            "only the seconds field may be written"
+        );
+        assert_eq!(
+            serde_json::from_value::<SetlistItem>(json).expect("deserialize break"),
+            item
+        );
+        assert_eq!(item.duration_secs(), 11);
+    }
+
+    #[test]
+    fn legacy_break_minutes_load_as_seconds() {
+        let legacy: SetlistItem =
+            serde_json::from_str(r#"{"Break":{"duration_mins":10,"note":null,"label":null}}"#)
+                .expect("legacy break parses");
+
+        match &legacy {
+            SetlistItem::Break {
+                duration_secs,
+                note,
+                label,
+            } => {
+                assert_eq!(*duration_secs, 600);
+                assert_eq!(*note, None);
+                assert_eq!(*label, None);
+            }
+            SetlistItem::Song(_) => panic!("expected a break"),
+        }
+        assert_eq!(legacy.duration_secs(), 600);
+        assert!(legacy.validate().is_ok());
+
+        let migrated = serde_json::to_value(&legacy).expect("serialize migrated break");
+        assert_eq!(migrated["Break"]["duration_secs"], serde_json::json!(600));
+        assert!(migrated["Break"].get("duration_mins").is_none());
+    }
+
+    #[test]
+    fn break_with_both_fields_prefers_seconds() {
+        let both: SetlistItem = serde_json::from_str(
+            r#"{"Break":{"duration_secs":11,"duration_mins":10,"note":null,"label":null}}"#,
+        )
+        .expect("break with both fields parses");
+
+        match &both {
+            SetlistItem::Break { duration_secs, .. } => assert_eq!(*duration_secs, 11),
+            SetlistItem::Song(_) => panic!("expected a break"),
+        }
+        assert_eq!(both.duration_secs(), 11, "minutes must not win");
+    }
+
+    #[test]
+    fn break_without_any_duration_is_rejected() {
+        assert!(
+            serde_json::from_str::<SetlistItem>(r#"{"Break":{"note":null,"label":null}}"#).is_err(),
+            "a break must carry duration_secs or legacy duration_mins"
+        );
+    }
+
+    #[test]
+    fn oversized_legacy_break_minutes_load_but_fail_validation() {
+        // Just over the cap: no silent truncation to 36000.
+        let over: SetlistItem =
+            serde_json::from_str(r#"{"Break":{"duration_mins":601,"note":null,"label":null}}"#)
+                .expect("601-minute legacy break parses");
+        assert_eq!(over.duration_secs(), 36_060);
+        assert!(over.validate().is_err(), "next save must fail");
+
+        // A u32-sized legacy value saturates during migration instead of
+        // overflowing; it still loads and is rejected on save.
         let huge: SetlistItem =
             serde_json::from_str(r#"{"Break":{"duration_mins":4000000000,"note":null}}"#)
-                .expect("u32-sized duration parses");
-        assert_eq!(huge.duration_secs(), 4_000_000_000 * 60);
+                .expect("u32-sized legacy duration parses");
+        assert_eq!(huge.duration_secs(), u64::from(u32::MAX));
         assert!(huge.validate().is_err());
 
         let mut setlist = Setlist::new("Gig");
-        setlist.items.push(huge);
+        setlist.items.push(over);
         assert!(setlist.validate().is_err());
+    }
+
+    #[test]
+    fn total_duration_uses_break_seconds() {
+        let mut setlist = Setlist::new("Short break");
+        setlist.items = vec![
+            SetlistItem::Song(song("Opener", Some(180))),
+            SetlistItem::Break {
+                duration_secs: 11,
+                note: None,
+                label: None,
+            },
+            SetlistItem::Song(song("Closer", Some(240))),
+        ];
+
+        assert_eq!(setlist.total_duration_secs(), 431);
     }
 
     #[test]
@@ -946,7 +1120,7 @@ mod tests {
         );
 
         let mut break_item = SetlistItem::Break {
-            duration_mins: 10,
+            duration_secs: 600,
             note: Some("x".repeat(MAX_COMMENT_CHARS)),
             label: None,
         };
@@ -993,7 +1167,7 @@ mod tests {
 
         let break_item: SetlistItem = serde_json::from_value(serde_json::json!({
             "Break": {
-                "duration_mins": 10,
+                "duration_secs": 600,
                 "note": "b".repeat(MAX_COMMENT_CHARS + 1),
             }
         }))

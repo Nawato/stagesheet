@@ -13,7 +13,7 @@ editing models, storage, IPC, or the printable sheet.
    export/measurement source and is hidden in print). UI chrome may be themed;
    neither the sheet nor the frames may.
 3. Duration is computed in Rust, never only in the UI:
-   `sum(song.duration_secs or 0) + sum(break.duration_mins * 60)`.
+   `sum(song.duration_secs or 0) + sum(break.duration_secs)`.
 4. All storage lives under `<app_data_dir>/stagesheet/`; the frontend `fs` capability
    is scoped to `$APPDATA/stagesheet/**`. Do not widen it.
 5. Every Tauri command is `async` and returns `Result<T, AppError>`.
@@ -54,7 +54,7 @@ pub struct SheetOptions {
 pub enum SetlistItem {
     Song(Song),
     Break {
-        duration_mins: u32,         // 0..=600, checked in Setlist::validate
+        duration_secs: u32,         // 0..=36000, checked in Setlist::validate
         note: Option<String>,       // "Comment" in the UI; trimmed, ≤ 140 chars
         label: Option<String>,      // e.g. "Intermission"; trimmed, ≤ 24 chars
     },
@@ -80,8 +80,15 @@ Serde notes:
 
 - `SetlistItem` uses serde's default externally tagged form:
   `{"Song": {...}}` and
-  `{"Break": {"duration_mins": 10, "note": null, "label": null}}`.
+  `{"Break": {"duration_secs": 600, "note": null, "label": null}}`.
   A missing `note`/`label` deserializes to `None` (old files stay valid).
+  `SetlistItem` derives `Serialize` and deserializes through a manual
+  implementation: breaks accept the pre-Feature-17 `duration_mins` payload and
+  convert it × 60, while `duration_secs` wins when both fields exist. Writing
+  always emits `duration_secs` only, never `duration_mins`. A break with neither
+  field is malformed and rejected. The legacy conversion saturates at `u32::MAX`
+  so any old u32-sized minute value still loads; validation then rejects it on
+  the next save (save-only, like all bounds).
 - `LogoAlignment` deserializes case-insensitively (`"left"`, `"Left"`, `"CENTER"`).
 - `Song.key` and all optional fields default when missing.
 - `Setlist.sheet_options` carries a field-level `#[serde(default)]`; the
@@ -107,8 +114,10 @@ Serde notes:
   - `Setlist::validate()`: title non-empty; logo width 10..=80 mm and plain file
     name; every item via `SetlistItem::validate()`.
   - `SetlistItem::validate()`: songs delegate to `Song::validate()`; breaks
-    require `duration_mins` in `0..=600`, `label` ≤ 24 chars, and `note`
-    (the break "Comment") ≤ 140 chars. Lengths are counted after trimming.
+    require `duration_secs` in `0..=36000` (the old 600-minute cap, in seconds),
+    `label` ≤ 24 chars, and `note` (the break "Comment") ≤ 140 chars. Lengths
+    are counted after trimming. Oversized legacy minute values still load but
+    fail this check on save.
 - `Setlist.logo` accepts the legacy key `logo_config`; missing timestamps default to
   `Utc::now`.
 - TS mirror: `SheetOptions`, `DEFAULT_SHEET_OPTIONS`, and
@@ -116,6 +125,12 @@ Serde notes:
   loading/cloning so a field left off by an older writer still means "visible".
   `PageMode`, `DEFAULT_PAGE_MODE`, and `withPageModeDefaults()` live there too;
   they normalize a missing `page_mode` to `"Single"`.
+  `BreakItem.duration_secs` is the only written break length.
+  `withBreakDefaults()`/`normalizeSetlistItems()` convert legacy backup JSON
+  (`duration_mins` × 60, preferring `duration_secs`) and are applied on restore
+  and when adopting loaded setlists; `duration_mins` is never persisted.
+  `formatBreakDuration()` in `format.ts` is the shared display helper:
+  `11 sec` under a minute, `10 min` for whole minutes, `1 min 5 sec` otherwise.
 - Unknown legacy fields are ignored, so the first-draft schema still loads.
 
 ## Storage
@@ -182,7 +197,9 @@ JS argument keys are camelCase (`setlistId`, `fileName`); model fields are snake
   the duration is always shown, while the label (default `Break`, bold/uppercase)
   and the comment are gated by `show_comment`. There is no separate label
   toggle. Keep the text lookups in helpers (`songCommentText`, `breakLabelText`,
-  `breakCommentText` in `sheet.ts`).
+  `breakCommentText` in `sheet.ts`). Break lengths render through
+  `formatBreakDuration()` so preview, print, export, and the editor meta agree
+  (`11 sec`, `10 min`, `1 min 5 sec`); totals keep `formatRuntime()`.
 - Typography targets: title 22–26pt bold, meta 11–12pt, song rows 12–14pt, tabular
   figures for numbers/BPM/key.
 - `Setlist.page_mode` drives one class: JS toggles `#setlist-sheet.multipage`
@@ -288,8 +305,14 @@ JS argument keys are camelCase (`setlistId`, `fileName`); model fields are snake
 - Version rules: `schema_version` is mandatory and must be a positive integer.
   A version newer than `BACKUP_SCHEMA_VERSION` is rejected with an "update
   StageSheet" message; older versions go through `migrateEnvelope()` before the
-  per-record normalizers. Bump `BACKUP_SCHEMA_VERSION` whenever the serialized
-  `Song` / `Setlist` shape changes in a way that needs migration.
+  per-record normalizers. Bump `BACKUP_SCHEMA_VERSION` when the serialized
+  `Song` / `Setlist` shape changes in a way the per-record normalizers cannot
+  absorb; the break seconds rename stays schema 1 because both payload shapes
+  normalize to `duration_secs`.
+- Break lengths are written as `duration_secs`. Schema-1 backups from older
+  builds may still carry `duration_mins`; `normalizeBreak()` runs the same
+  seconds-preferred, minutes × 60 fallback as serde, so old backups restore
+  with identical totals and are re-saved in the current shape.
 - Restore semantics: upsert by `id`; records with the same IDs are overwritten,
   nothing else is deleted. Structurally malformed records are skipped and
   reported; validation failures from `save_*` are reported per record. The UI
@@ -301,9 +324,12 @@ JS argument keys are camelCase (`setlistId`, `fileName`); model fields are snake
 
 ## Tests that must stay green
 
-- `cargo test` in `src-tauri`: model round-trips, first-draft JSON migration, reorder
-  bounds, duration with breaks, storage CRUD, logo validation/traversal rejection,
-  raster downscaling, and untouched small/SVG logos.
+- `cargo test` in `src-tauri`: model round-trips, legacy minute-break migration and
+  conversion-on-save, first-draft JSON migration, reorder bounds, duration with
+  breaks (`duration_secs` totals, 11-second precision), break bounds
+  (0/36000 pass, 36001 fails, oversized legacy values load then fail save),
+  storage CRUD, logo validation/traversal rejection, raster downscaling, and
+  untouched small/SVG logos.
   (The `tauri` crate needs the `webkit2gtk-4.1` system libraries from the README to
   compile, even for pure model tests.)
 - `npm run build`: TypeScript strict mode + Vite production bundle.

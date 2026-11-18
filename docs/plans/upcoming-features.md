@@ -30,15 +30,16 @@ written (legacy `artist` text stays as a display fallback until adopted).
 
 Full specs lived here until the 2026-11 cleanup; the contract facts below are
 all mirrored in `SKILL.md`, which is now the single authority for shipped
-behavior. Features 12 (edit library songs) and 18 (setlist Delete-clarity) are
-Done; their specs remain below as reference.
+behavior. Features 12 (edit library songs), 17 (break seconds), and 18
+(setlist Delete-clarity) are Done; their specs remain below as reference.
 
 - **Validation hardening (with Feature 2)** — Done. `Setlist::validate()` walks
-  every item. Bounds enforced in Rust: break `duration_mins` `0..=600`, break
-  `label` ≤ 24 chars after trim, song/break comments ≤ 140 chars after trim.
-  Validation runs **on save only**: old files still load; their next save fails
-  with a clear message. No silent truncation. (Superseded in part by
-  Feature 17, which moves breaks to second precision.)
+  every item. Bounds enforced in Rust: break `duration_secs` `0..=36000` (the
+  old 600-minute cap), break `label` ≤ 24 chars after trim, song/break comments
+  ≤ 140 chars after trim. Validation runs **on save only**: old files still
+  load; their next save fails with a clear message. No silent truncation.
+  Feature 17 replaced the minute field with seconds; legacy `duration_mins`
+  JSON still loads × 60.
 - **Feature 1: Song tuning (free text)** — Done. `Song.tuning: Option<String>`,
   trimmed, empty → `None`, max 24 chars, `#[serde(default)]`. Conditional
   `Tuning` column (toggle on *and* ≥1 song with tuning). Library search covers
@@ -439,9 +440,9 @@ print-CSS, or exporter change; existing paper QA stands.
   + gate + summary).
 2. QA + `SKILL.md` + this file status + commit.
 
-## Feature 17: Breaks with second precision — Todo
+## Feature 17: Breaks with second precision — Done
 
-Status: Todo, independent of the artist chain. From user feedback: real
+Status: Done, independent of the artist chain. From user feedback: real
 breaks can be 11 seconds (EOAK set), and minute-only granularity cannot
 express that. Replaces the `duration_mins` side of the validation-hardening
 contract; everything else (labels, comments, bounds philosophy) stays.
@@ -476,6 +477,23 @@ No structural change: the break row keeps `[label] · [duration] · [comment]`
 with the new duration text. Row heights shift slightly for second-precision
 labels; auto-fit absorbs it in Single mode, frames re-measure in Multiple
 mode. No column, frame, print-CSS, or exporter change.
+
+### Shipped notes
+
+`SetlistItem` now derives `Serialize` and deserializes through a wire enum:
+`duration_secs` is authoritative, legacy `duration_mins` is multiplied × 60
+with u32 saturation, and serialization never writes `duration_mins`. The
+shared `formatBreakDuration()` helper drives the sheet and the break editor
+meta; totals still use `formatRuntime()`. The editor's `mm:ss` field rejects
+blank/invalid values and values above `600:00` with `is-invalid` plus the
+status line, and Save commits valid field text to the model before
+re-checking the rendered fields and calling the backend (so Ctrl/Cmd+S with the
+field still focused cannot save a stale duration).
+`withBreakDefaults()`/`normalizeSetlistItems()` in `types.ts` apply
+the same legacy fallback when adopting loaded setlists and when restoring a
+backup; schema 1 stays unchanged because old and new break payloads both
+normalize to `duration_secs`, and restored records are written in the new
+shape.
 
 ### Tests + QA
 
@@ -541,10 +559,10 @@ misread instead of adding new behavior.
   (multi-page mode + sub-70% legibility nudge). Feature 13 adds setlist
   duplication; the remaining slice is a split-setlist helper (move second half
   to a new setlist) as an alternative to multi-page.
-- **P1 — Library/setlist tooling**: Features 12 (edit library songs) and 18
-  (delete clarity) are Done. Feature 13 (duplicate setlist as preset base) and
-  Feature 17 (break seconds) are independent and remain Todo. Then the artist
-  chain in order: 14 (artist records + logos) → 15 (library artist filter) →
+- **P1 — Library/setlist tooling**: Features 12 (edit library songs),
+  17 (break seconds), and 18 (delete clarity) are Done. Feature 13 (duplicate
+  setlist as preset base) remains independent and Todo. Then the artist chain
+  in order: 14 (artist records + logos) → 15 (library artist filter) →
   16 (setlist artist + per-artist picker + lock).
 - **P1 — Backup/restore**: Done (Feature 7). One versioned JSON envelope for
   the full library + setlists; logos are re-imported manually in v1.
