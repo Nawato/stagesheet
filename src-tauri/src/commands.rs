@@ -8,7 +8,7 @@ use tauri::State;
 use uuid::Uuid;
 
 use crate::error::AppError;
-use crate::models::{Setlist, Song};
+use crate::models::{Artist, Setlist, Song};
 use crate::storage::Storage;
 
 #[tauri::command]
@@ -25,6 +25,28 @@ pub async fn save_song(song: Song, storage: State<'_, Storage>) -> Result<Song, 
 #[tauri::command]
 pub async fn delete_song(id: Uuid, storage: State<'_, Storage>) -> Result<(), AppError> {
     storage.delete_song(id).await
+}
+
+#[tauri::command]
+pub async fn list_artists(storage: State<'_, Storage>) -> Result<Vec<Artist>, AppError> {
+    storage.list_artists().await
+}
+
+#[tauri::command]
+pub async fn save_artist(
+    mut artist: Artist,
+    storage: State<'_, Storage>,
+) -> Result<Artist, AppError> {
+    // Store the display name trimmed; blank names then fail validation with the
+    // clear artist error instead of persisting padding.
+    artist.name = artist.name.trim().to_string();
+    storage.save_artist(&artist).await?;
+    Ok(artist)
+}
+
+#[tauri::command]
+pub async fn delete_artist(id: Uuid, storage: State<'_, Storage>) -> Result<(), AppError> {
+    storage.delete_artist(id).await
 }
 
 #[tauri::command]

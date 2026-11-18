@@ -32,10 +32,17 @@ pub struct LogoConfig {
     pub alignment: LogoAlignment,
 }
 
+pub struct Artist {
+    pub id: uuid::Uuid,
+    pub name: String,          // trimmed, non-empty
+    pub logo: LogoConfig,      // same rules/pool as setlists
+}
+
 pub struct Song {
     pub id: uuid::Uuid,
     pub title: String,
-    pub artist: Option<String>,
+    pub artist: Option<String>,        // display snapshot / legacy free text
+    pub artist_id: Option<uuid::Uuid>, // artist record; missing in old files
     pub bpm: Option<u16>,
     pub key: Option<String>,       // e.g. "Em"
     pub tuning: Option<String>,    // e.g. "Drop D"; trimmed, ≤ 24 chars
@@ -71,6 +78,7 @@ pub struct Setlist {
     pub logo: LogoConfig,            // serde alias: logo_config
     pub sheet_options: SheetOptions, // missing in old files -> all true
     pub page_mode: PageMode,         // missing in old files -> Single
+    pub artist_id: Option<uuid::Uuid>, // declared by Feature 14; missing -> None
     pub created_at: chrono::DateTime<chrono::Utc>,
     pub updated_at: chrono::DateTime<chrono::Utc>,
 }
@@ -91,6 +99,26 @@ Serde notes:
   the next save (save-only, like all bounds).
 - `LogoAlignment` deserializes case-insensitively (`"left"`, `"Left"`, `"CENTER"`).
 - `Song.key` and all optional fields default when missing.
+- `Artist.name` is trimmed in both directions; a whitespace-only name loads as
+  an empty string and fails `Artist::validate()` on its next save (clear artist
+  name error). There is deliberately no invented maximum length.
+- `Artist.logo` shares `LogoConfig` and therefore every setlist logo rule: plain
+  file name, 10..=80 mm, same alignment enum. Missing logo objects default to
+  **no file / 40 mm / Center**.
+- `Song.artist` stays the display snapshot and legacy free-text field.
+  `Song.artist_id` (Feature 14) carries the artist record reference and
+  `#[serde(default)]` keeps old songs loading with `None`. Saving a song assigned
+  to a record stores both the id and the record's current name in `artist`;
+  renaming the artist never rewrites songs. Display resolution is frontend-only
+  (`resolveArtistName` in `src/artists.ts`): live record name, else `artist`
+  text, else blank. Dangling ids are valid and resolve as unresolved.
+- `Setlist.artist_id` is declared by Feature 14 (`#[serde(default)]`, old files
+  load as `None`) but Feature 16 wires it into the editor, header picker, lock,
+  and backup UI. No foreign-key validation; dangling ids resolve as unlocked.
+- The artist list is frontend-sorted by name. Counts use resolved identity:
+  id-backed songs count for their record, legacy-text songs count for a
+  same-named record until adopted, and unmatched text stays uncounted. Search
+  and sort-by-artist use the same resolved display name.
 - `Setlist.sheet_options` carries a field-level `#[serde(default)]`; the
   `SheetOptions` struct carries a **container-level** `#[serde(default)]` and a
   manual `Default` with every field `true`. So a missing field, a partial
@@ -111,6 +139,8 @@ Serde notes:
   save fails with a clear message. No silent truncation.
   - `Song::validate()`: title non-empty; `tuning` ≤ 24 chars; `notes` (the song
     "Comment") ≤ 140 chars.
+  - `Artist::validate()`: name non-empty after trim; logo width 10..=80 mm and
+    plain file name (shared `LogoConfig::validate`).
   - `Setlist::validate()`: title non-empty; logo width 10..=80 mm and plain file
     name; every item via `SetlistItem::validate()`.
   - `SetlistItem::validate()`: songs delegate to `Song::validate()`; breaks
@@ -125,6 +155,12 @@ Serde notes:
   loading/cloning so a field left off by an older writer still means "visible".
   `PageMode`, `DEFAULT_PAGE_MODE`, and `withPageModeDefaults()` live there too;
   they normalize a missing `page_mode` to `"Single"`.
+  `normalizeArtistId()` maps missing/blank song/setlist `artist_id` values to
+  `null` on load, adoption, and restore.
+  `Artist` is mirrored in `types.ts`; `src/artists.ts` holds
+  `resolveArtistName()` (display/search/sort), `resolveArtistForSong()` (counts
+  and the future library filter), and `resolveSetlistLogo()` (own logo → artist
+  logo → placeholder, reused by Feature 16).
   `BreakItem.duration_secs` is the only written break length.
   `withBreakDefaults()`/`normalizeSetlistItems()` convert legacy backup JSON
   (`duration_mins` × 60, preferring `duration_secs`) and are applied on restore
@@ -138,12 +174,18 @@ Serde notes:
 ```text
 <app_data_dir>/stagesheet/
 ├── songs.json            # Vec<Song>
+├── artists.json          # Vec<Artist>
 ├── setlists/<uuid>.json  # Setlist
 └── logos/<uuid>.<ext>    # PNG / JPEG / SVG, max 5 MiB
 ```
 
 - Writes: temp file + rename, serialized by a tokio mutex.
 - Logo file names are plain names (no separators, `..`, drive letters, or `:`).
+- Setlist and artist logos share `logos/` and the same `import_logo` path.
+  `remove_logo` deletes a file only when no setlist or artist record references
+  it (checked under the write mutex; missing files are success). Setlist/artist
+  deletion only schedules `remove_logo`, so an interrupted delete never breaks a
+  still-referenced logo.
 - Content sniffing decides the stored extension; never trust the client MIME type.
 - `import_logo` decodes PNG/JPEG (invalid bodies are rejected), and when the
   longest edge exceeds `MAX_LOGO_DIMENSION` (1024 px) it downscales with aspect
@@ -157,9 +199,14 @@ Serde notes:
 
 ## IPC surface
 
-`list_songs`, `save_song`, `delete_song`, `list_setlists`, `get_setlist`,
-`save_setlist`, `delete_setlist`, `reorder_items`, `setlist_duration`,
-`import_logo`, `remove_logo`.
+`list_songs`, `save_song`, `delete_song`, `list_artists`, `save_artist`,
+`delete_artist`, `list_setlists`, `get_setlist`, `save_setlist`,
+`delete_setlist`, `reorder_items`, `setlist_duration`, `import_logo`,
+`remove_logo`.
+
+`delete_artist` removes only the artist record; the frontend nulls referencing
+song/setlist ids through `save_song`/`save_setlist` loops and reports per-record
+failures. The backend deliberately has no bulk import or cascade command.
 
 JS argument keys are camelCase (`setlistId`, `fileName`); model fields are snake_case.
 
@@ -288,16 +335,18 @@ JS argument keys are camelCase (`setlistId`, `fileName`); model fields are snake
   {
     "schema_version": 1,
     "exported_at": "2026-11-17T18:30:00.000Z",
+    "artists": [ /* Artist */ ],
     "songs": [ /* Song */ ],
     "setlists": [ /* Setlist */ ]
   }
   ```
 
-- Frontend-only by design: export builds the envelope from `list_songs` /
-  `list_setlists`, restore re-saves each record through `save_song` /
-  `save_setlist`. Rust validation, trim rules, and serde defaults stay the single
-  authority; never add a bulk import command or write storage files directly
-  from the frontend.
+- Frontend-only by design: export builds the envelope from `list_artists` /
+  `list_songs` / `list_setlists`, restore re-saves each record through
+  `save_artist` / `save_song` / `save_setlist`. Rust validation, trim rules, and
+  serde defaults stay the single authority; never add a bulk import command or
+  write storage files directly from the frontend. Restore order is artists first,
+  then songs, then setlists.
 - File access uses `dialog.save` / `dialog.open` plus the existing scoped `fs`
   plugin. The selected path is added to the fs scope for that operation only.
   Do not widen `$APPDATA/stagesheet/**`, add fs commands, or change the CSP for
@@ -313,23 +362,46 @@ JS argument keys are camelCase (`setlistId`, `fileName`); model fields are snake
   builds may still carry `duration_mins`; `normalizeBreak()` runs the same
   seconds-preferred, minutes × 60 fallback as serde, so old backups restore
   with identical totals and are re-saved in the current shape.
+- The `artists` array is additive in schema 1. Backups from pre-Feature-14
+  builds have no key and restore as an empty artist list (`normalizeArtist()`
+  mirrors the Rust name trim/logo defaults). `song.artist_id` and
+  `setlist.artist_id` normalize from missing/blank to `null`; restore never
+  requires the artist to exist first, so dangling ids stay loadable.
 - Restore semantics: upsert by `id`; records with the same IDs are overwritten,
   nothing else is deleted. Structurally malformed records are skipped and
   reported; validation failures from `save_*` are reported per record. The UI
-  confirms before writing and reloads both caches afterwards.
-- Logos are **not embedded in v1**. `logo.file_name`, width, and alignment stay
-  in the envelope, so a same-device restore keeps working; on a new device the
-  file is absent, the preview shows the logo placeholder, and the logo must be
-  re-imported manually. Embedding bytes is a future envelope version.
+  confirms before writing and reloads all three caches (artists, songs,
+  setlists) afterwards.
+- Backup/restore guards: an inline library song draft (including a failed one),
+  a non-pristine artist form (edit mode, typed name, or any logo/width/alignment
+  change), and any in-flight library/artist write or artist logo import all
+  refuse with a titled status message. A pristine empty New-artist form does not
+  block. Restore re-checks the guard after reading the file. Back up locks
+  library row actions, the Add submit, artist rows, and the artist form while it
+  reads the snapshot; Restore does the same during its write phase.
+- Artist delete guards: it refuses while a library song write is in flight or an
+  inline song draft is open (same rationale as backup), reports a titled
+  `Artist delete blocked — …` status, and disables library row actions for the
+  reference-clearing loop. A logo import holds the artist Save until it
+  finishes; entering/cancelling artist edit mode re-renders the row's
+  `is-editing`/`aria-expanded` state immediately.
+- Logos are **not embedded in v1**. Setlist and artist `logo.file_name`, width,
+  and alignment stay in the envelope, so a same-device restore keeps working; on
+  a new device the file is absent, the preview shows the logo placeholder, and
+  the logo must be re-imported manually. Embedding bytes is a future envelope
+  version.
 
 ## Tests that must stay green
 
-- `cargo test` in `src-tauri`: model round-trips, legacy minute-break migration and
-  conversion-on-save, first-draft JSON migration, reorder bounds, duration with
-  breaks (`duration_secs` totals, 11-second precision), break bounds
+- `cargo test` in `src-tauri`: model round-trips, artist round-trips and
+  name/logo validation, legacy `artist_id` defaulting on songs and setlists,
+  dangling artist ids, legacy minute-break migration and conversion-on-save,
+  first-draft JSON migration, reorder bounds, duration with breaks
+  (`duration_secs` totals, 11-second precision), break bounds
   (0/36000 pass, 36001 fails, oversized legacy values load then fail save),
-  storage CRUD, logo validation/traversal rejection, raster downscaling, and
-  untouched small/SVG logos.
+  artist/song/setlist storage CRUD, logo removal skipping referenced files,
+  logo validation/traversal rejection, raster downscaling, and untouched
+  small/SVG logos.
   (The `tauri` crate needs the `webkit2gtk-4.1` system libraries from the README to
   compile, even for pure model tests.)
 - `npm run build`: TypeScript strict mode + Vite production bundle.

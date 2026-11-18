@@ -18,13 +18,38 @@ export interface LogoConfig {
 export interface Song {
   id: string;
   title: string;
+  /**
+   * Artist display snapshot. New songs assigned to a record store its current
+   * name here as a fallback; legacy free-text values stay untouched.
+   */
   artist: string | null;
+  /**
+   * Artist record reference. Older files omit the field (loads as null); a
+   * dangling id resolves as unresolved and falls back to `artist` for display.
+   */
+  artist_id: string | null;
   bpm: number | null;
   key: string | null;
   /** Free-text tuning label, e.g. `E Std` or `Drop D`; trimmed, max 24 chars. */
   tuning: string | null;
   duration_secs: number | null;
   notes: string | null;
+}
+
+/** A managed artist with an optional logo. Mirrors `Artist` in `models.rs`. */
+export interface Artist {
+  id: string;
+  /** Display name; trimmed, non-empty (enforced by Rust on save). */
+  name: string;
+  /** Same logo rules and shared `logos/` pool as setlists. */
+  logo: LogoConfig;
+}
+
+/** Normalizes a missing or blank artist record id to `null`. */
+export function normalizeArtistId(value: string | null | undefined): string | null {
+  if (typeof value !== "string") return null;
+  const trimmed = value.trim();
+  return trimmed ? trimmed : null;
 }
 
 /** The `Break` payload of a setlist item. */
@@ -139,6 +164,11 @@ export interface Setlist {
   sheet_options?: SheetOptions;
   /** Missing in pre-Feature-5 files; use `withPageModeDefaults` when loading. */
   page_mode?: PageMode;
+  /**
+   * Artist record reference (declared now, wired into the editor by Feature 16).
+   * Missing/blank loads as null; dangling ids resolve as unlocked.
+   */
+  artist_id?: string | null;
   /** RFC 3339 timestamps. */
   created_at: string;
   updated_at: string;

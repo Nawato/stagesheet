@@ -2,6 +2,7 @@ import "./styles/app.css";
 import "./styles/print.css";
 
 import { api } from "./api";
+import { resolveArtistForSong, resolveArtistName } from "./artists";
 import { exportBackup, readBackupFile } from "./backup";
 import { byId, el } from "./dom";
 import {
@@ -17,7 +18,16 @@ import type { ExportFormat } from "./exporter";
 import { storedLogoUrl } from "./logo";
 import { A4_CONTENT_HEIGHT_PX, renderSheetPages } from "./pages";
 import { renderSetlistSheet } from "./sheet";
-import type { BreakItem, LogoAlignment, PageMode, Setlist, SheetOptions, Song } from "./types";
+import type {
+  Artist,
+  BreakItem,
+  LogoAlignment,
+  LogoConfig,
+  PageMode,
+  Setlist,
+  SheetOptions,
+  Song,
+} from "./types";
 import {
   DEFAULT_LOGO_WIDTH_MM,
   DEFAULT_PAGE_MODE,
@@ -27,6 +37,7 @@ import {
   MAX_BREAK_LABEL_CHARS,
   MAX_BREAK_SECS,
   MAX_COMMENT_CHARS,
+  normalizeArtistId,
   normalizeSetlistItems,
   withPageModeDefaults,
   withSheetDefaults,
@@ -44,6 +55,7 @@ const LEGIBILITY_MIN_FIT = 0.7;
 // ---------------------------------------------------------------------------
 
 let songs: Song[] = [];
+let artists: Artist[] = [];
 let setlists: Setlist[] = [];
 let current: Setlist | null = null;
 let dirty = false;
@@ -64,7 +76,7 @@ let tuningOnly = false;
 let libraryEditor: LibraryEditorState | null = null;
 /** True while the Add-to-library request is in flight. */
 let addingSong = false;
-/** Library writes (add/edit/duplicate/delete) currently in flight. */
+/** Library writes (add/edit/duplicate/delete/artist reference cleanup) in flight. */
 let libraryWritesInFlight = 0;
 /** True while a backup/restore owns the library snapshot. */
 let backingUp = false;
@@ -74,12 +86,44 @@ const pendingLogoRemovals = new Set<string>();
 /** Frames currently rendered in multiple-page mode (the exact page count). */
 let renderedPageCount = 0;
 
+/** Artist form state: one shared form serves both New artist and inline edit. */
+let artistFormState: ArtistFormState = createArtistFormState();
+/** Object URL currently shown in the artist form preview. */
+let artistLogoSrc: string | null = null;
+let artistLogoRequestId = 0;
+let artistLogoPreviewFailed = false;
+/** True while an artist create/update/delete request is in flight. */
+let artistBusy = false;
+/** True while an artist logo upload/import is in flight. */
+let artistLogoBusy = false;
+/** True while deleteArtist clears song/setlist references. */
+let artistDeleting = false;
+/** Session cache of blob URLs for artist thumbnails, keyed by stored file name. */
+const artistThumbUrls = new Map<string, string>();
+
+/** Select value marking the legacy free-text artist option in the library editor. */
+const LEGACY_ARTIST_VALUE = "__legacy_artist__";
+
 type SongSortKey = "title" | "artist" | "key" | "tuning";
+
+/** Input-backed library editor fields; the artist picker is a select. */
+type LibrarySongDraftField =
+  | "title"
+  | "key"
+  | "tuning"
+  | "bpm"
+  | "duration"
+  | "notes";
 
 /** Raw strings from the inline library editor; parsed only on Save. */
 interface LibrarySongDraft {
   title: string;
-  artist: string;
+  /** Selected artist record id, or "" for no artist. */
+  artistId: string;
+  /** Legacy free-text artist kept until the song is assigned to a record. */
+  legacyArtist: string;
+  /** True while the legacy option is the current selection. */
+  keepLegacyArtist: boolean;
   key: string;
   tuning: string;
   bpm: string;
@@ -95,7 +139,7 @@ interface LibraryEditorState {
   /** True after a failed save until the draft is retried or explicitly discarded. */
   retryPending: boolean;
   /** Validation markers that must survive a library re-render. */
-  invalidFields: Set<keyof LibrarySongDraft>;
+  invalidFields: Set<LibrarySongDraftField>;
   /** True when the active search/filter currently hides this row. */
   hiddenByFilter: boolean;
   /** Last focused field/button, kept across disabled states and re-renders. */
@@ -113,10 +157,41 @@ type LibraryEditorFocusTarget =
       selectionDirection: HTMLInputElement["selectionDirection"];
     }
   | {
+      kind: "select";
+      songId: string;
+      selectIndex: number;
+    }
+  | {
       kind: "button";
       songId: string;
       action: "save" | "cancel";
     };
+
+interface ArtistFormState {
+  mode: "create" | "edit";
+  artistId: string | null;
+  name: string;
+  logo: LogoConfig;
+  /** Persisted logo before this draft started; kept when the draft is cancelled. */
+  originalLogo: string | null;
+  /** Files imported for this draft that are no longer its current logo. */
+  transientLogos: Set<string>;
+}
+
+function createArtistFormState(): ArtistFormState {
+  return {
+    mode: "create",
+    artistId: null,
+    name: "",
+    logo: {
+      file_name: null,
+      width_mm: DEFAULT_LOGO_WIDTH_MM,
+      alignment: "Center",
+    },
+    originalLogo: null,
+    transientLogos: new Set(),
+  };
+}
 
 /** Deferred focus restore when an Add finishes while the editor is still busy. */
 let pendingLibraryEditorFocus: LibraryEditorFocusTarget | null = null;
@@ -143,13 +218,29 @@ const songListEl = byId<HTMLUListElement>("song-list");
 const songCountEl = byId<HTMLSpanElement>("song-count");
 const songForm = byId<HTMLFormElement>("song-form");
 const newSongTitle = byId<HTMLInputElement>("new-song-title");
-const newSongArtist = byId<HTMLInputElement>("new-song-artist");
+const newSongArtist = byId<HTMLSelectElement>("new-song-artist");
 const newSongKey = byId<HTMLInputElement>("new-song-key");
 const newSongTuning = byId<HTMLInputElement>("new-song-tuning");
 const newSongBpm = byId<HTMLInputElement>("new-song-bpm");
 const newSongDuration = byId<HTMLInputElement>("new-song-duration");
 const newSongNotes = byId<HTMLInputElement>("new-song-notes");
 const addSongButton = songForm.querySelector<HTMLButtonElement>('button[type="submit"]');
+
+const artistCountEl = byId<HTMLSpanElement>("artist-count");
+const artistListEl = byId<HTMLUListElement>("artist-list");
+const artistForm = byId<HTMLFormElement>("artist-form");
+const artistFormTitle = byId<HTMLHeadingElement>("artist-form-title");
+const artistNameInput = byId<HTMLInputElement>("artist-name");
+const artistLogoPreviewEl = byId<HTMLDivElement>("artist-logo-preview");
+const artistLogoFileInput = byId<HTMLInputElement>("artist-logo-file");
+const artistLogoRemoveButton = byId<HTMLButtonElement>("artist-logo-remove");
+const artistLogoWidthInput = byId<HTMLInputElement>("artist-logo-width");
+const artistLogoWidthOutput = byId<HTMLOutputElement>("artist-logo-width-value");
+const artistAlignmentRadios = Array.from(
+  document.querySelectorAll<HTMLInputElement>('input[name="artist-logo-alignment"]'),
+);
+const artistFormCancelButton = byId<HTMLButtonElement>("artist-form-cancel");
+const artistFormSubmitButton = byId<HTMLButtonElement>("artist-form-submit");
 
 const backupExportButton = byId<HTMLButtonElement>("backup-export");
 const backupRestoreButton = byId<HTMLButtonElement>("backup-restore");
@@ -259,6 +350,42 @@ function bindEvents(): void {
   songForm.addEventListener("submit", (event) => {
     void handleSongSubmit(event);
   });
+  artistForm.addEventListener("submit", (event) => {
+    void handleArtistSubmit(event);
+  });
+  artistForm.addEventListener("keydown", (event) => {
+    if (event.key === "Escape") {
+      event.preventDefault();
+      cancelArtistEdit();
+    }
+  });
+  artistNameInput.addEventListener("input", () => {
+    artistFormState.name = artistNameInput.value;
+    if (artistNameInput.classList.contains("is-invalid")) {
+      markFieldInvalid(artistNameInput, false);
+    }
+  });
+  artistFormCancelButton.addEventListener("click", () => {
+    cancelArtistEdit();
+  });
+  artistLogoFileInput.addEventListener("change", () => {
+    void handleArtistLogoFile();
+  });
+  artistLogoRemoveButton.addEventListener("click", handleArtistLogoRemove);
+  artistLogoWidthInput.addEventListener("input", () => {
+    artistFormState.logo.width_mm = clamp(
+      Number(artistLogoWidthInput.value),
+      LOGO_MIN_WIDTH_MM,
+      LOGO_MAX_WIDTH_MM,
+    );
+    artistLogoWidthOutput.textContent = `${Math.round(artistFormState.logo.width_mm)} mm`;
+  });
+  for (const radio of artistAlignmentRadios) {
+    radio.addEventListener("change", () => {
+      if (!radio.checked || !isLogoAlignment(radio.value)) return;
+      artistFormState.logo.alignment = radio.value;
+    });
+  }
   addBreakButton.addEventListener("click", addBreak);
   backupExportButton.addEventListener("click", () => {
     void backUpLibrary();
@@ -330,6 +457,10 @@ function bindEvents(): void {
           songForm.requestSubmit();
           return;
         }
+        if (artistForm.contains(event.target)) {
+          artistForm.requestSubmit();
+          return;
+        }
       }
       void saveCurrent();
     }
@@ -352,14 +483,18 @@ async function init(): Promise<void> {
   applyPrintPlatformClass();
   logoWidthInput.min = String(LOGO_MIN_WIDTH_MM);
   logoWidthInput.max = String(LOGO_MAX_WIDTH_MM);
+  artistLogoWidthInput.min = String(LOGO_MIN_WIDTH_MM);
+  artistLogoWidthInput.max = String(LOGO_MAX_WIDTH_MM);
   bindEvents();
+  renderArtistForm();
 
   try {
-    const [loadedSongs, loadedSetlists] = await Promise.all([
+    const [loadedSongs, loadedArtists, loadedSetlists] = await Promise.all([
       api.listSongs(),
+      api.listArtists(),
       api.listSetlists(),
     ]);
-    adoptLoadedState(loadedSongs, loadedSetlists);
+    adoptLoadedState(loadedSongs, loadedArtists, loadedSetlists);
   } catch (error) {
     backendAvailable = false;
     current = createDraft();
@@ -410,6 +545,7 @@ function createDraft(): Setlist {
     },
     sheet_options: { ...DEFAULT_SHEET_OPTIONS },
     page_mode: DEFAULT_PAGE_MODE,
+    artist_id: null,
     created_at: now,
     updated_at: now,
   };
@@ -424,6 +560,7 @@ function cloneSetlist(setlist: Setlist): Setlist {
     logo: { ...setlist.logo },
     sheet_options: withSheetDefaults(setlist.sheet_options),
     page_mode: withPageModeDefaults(setlist.page_mode),
+    artist_id: normalizeArtistId(setlist.artist_id),
   };
 }
 
@@ -433,10 +570,15 @@ function cloneSetlist(setlist: Setlist): Setlist {
  */
 function adoptLoadedState(
   loadedSongs: Song[],
+  loadedArtists: Artist[],
   loadedSetlists: Setlist[],
   preferredId?: string | null,
 ): void {
-  songs = [...loadedSongs];
+  adoptArtists(loadedArtists);
+  songs = loadedSongs.map((song) => ({
+    ...song,
+    artist_id: normalizeArtistId(song.artist_id),
+  }));
   sortSongsByTitle();
   libraryEditor = null;
   pendingLibraryEditorFocus = null;
@@ -445,6 +587,7 @@ function adoptLoadedState(
     items: normalizeSetlistItems(setlist.items),
     sheet_options: withSheetDefaults(setlist.sheet_options),
     page_mode: withPageModeDefaults(setlist.page_mode),
+    artist_id: normalizeArtistId(setlist.artist_id),
   }));
   sortSetlists();
 
@@ -454,6 +597,26 @@ function adoptLoadedState(
   const next = preferred ?? setlists[0];
   current = next ? cloneSetlist(next) : createDraft();
   dirty = setlists.length === 0;
+}
+
+/**
+ * Replaces the artist cache from a backend snapshot and discards any open
+ * artist-form draft, because it may point at a record that no longer exists.
+ * Uncommitted logo files are cleaned up best-effort.
+ */
+function adoptArtists(loadedArtists: Artist[]): void {
+  discardArtistDraftLogos(artistFormState);
+  invalidateArtistLogoPreview();
+  artistFormState = createArtistFormState();
+  renderArtistForm();
+
+  artists = loadedArtists
+    .map((artist) => ({
+      ...artist,
+      name: artist.name.trim(),
+      logo: { ...artist.logo },
+    }))
+    .sort((left, right) => left.name.localeCompare(right.name));
 }
 
 async function startNewSetlist(): Promise<void> {
@@ -734,7 +897,7 @@ function baseName(path: string): string {
  * silently omitting unsaved edits and prevents writes from landing after the
  * restore adopts its reloaded state.
  */
-function libraryDraftGuard(action: "backing up" | "restoring"): string | null {
+function libraryWriteGuard(action: string): string | null {
   if (libraryWritesInFlight > 0) {
     return `Wait for the current library request to finish before ${action}.`;
   }
@@ -747,8 +910,52 @@ function libraryDraftGuard(action: "backing up" | "restoring"): string | null {
   return `Save or cancel the ${kind} for “${libraryEditorLabel(editor)}” before ${action}.`;
 }
 
-/** Blocks row/Add actions while a backup or restore owns the library snapshot. */
+/** True while the shared artist form holds anything worth saving. */
+function artistFormHasDraft(): boolean {
+  const state = artistFormState;
+  if (state.mode === "edit") return true;
+  if (state.name.trim()) return true;
+  if (state.logo.file_name) return true;
+  if (state.logo.width_mm !== DEFAULT_LOGO_WIDTH_MM) return true;
+  if (state.logo.alignment !== "Center") return true;
+  if (state.transientLogos.size > 0) return true;
+  return false;
+}
+
+/**
+ * Backup/restore refuse artist-form drafts too: the form is not persisted until
+ * Save, so a snapshot must not silently omit a typed name or changed logo.
+ * A pristine empty New-artist form is not a draft.
+ */
+function libraryDraftGuard(action: "backing up" | "restoring"): string | null {
+  if (artistBusy) {
+    return `Wait for the current artist request to finish before ${action}.`;
+  }
+  if (artistLogoBusy) {
+    return `Artist logo import in progress — wait for it to finish before ${action}.`;
+  }
+
+  const libraryBlock = libraryWriteGuard(action);
+  if (libraryBlock) return libraryBlock;
+
+  if (!artistFormHasDraft()) return null;
+
+  const label = artistFormState.name.trim();
+  if (artistFormState.mode === "edit") {
+    return `Artist draft open — save or cancel the edit for “${label || "this artist"}” before ${action}.`;
+  }
+  if (label) {
+    return `Artist draft open — save or cancel “${label}” before ${action}.`;
+  }
+  return `Artist draft open — save or cancel the new artist before ${action}.`;
+}
+
+/** Blocks row/Add actions while a backup, restore, or artist cleanup owns the library. */
 function blockLibraryActionWhileBusy(): boolean {
+  if (artistDeleting) {
+    setStatus("Artist delete in progress — wait for it to finish.", "info");
+    return true;
+  }
   if (restoring) {
     setStatus("Restore in progress — wait for it to finish.", "info");
     return true;
@@ -780,6 +987,8 @@ async function backUpLibrary(): Promise<void> {
     backupExportButton.disabled = true;
     backupRestoreButton.disabled = true;
     syncAddSongControls();
+    renderArtists();
+    renderArtistForm();
     // Disable row actions for the whole snapshot read/write; handlers also
     // guard so keyboard/programmatic paths cannot mutate the library.
     renderLibrary();
@@ -792,11 +1001,16 @@ async function backUpLibrary(): Promise<void> {
       }
     }
 
-    const [backupSongs, backupSetlists] = await Promise.all([
+    const [backupArtists, backupSongs, backupSetlists] = await Promise.all([
+      api.listArtists(),
       api.listSongs(),
       api.listSetlists(),
     ]);
-    const outcome = await exportBackup({ songs: backupSongs, setlists: backupSetlists });
+    const outcome = await exportBackup({
+      artists: backupArtists,
+      songs: backupSongs,
+      setlists: backupSetlists,
+    });
 
     if (outcome.status === "canceled") {
       setStatus("Backup canceled.");
@@ -804,7 +1018,7 @@ async function backUpLibrary(): Promise<void> {
     }
 
     setStatus(
-      `Backed up ${countLabel(outcome.songs, "song")} and ${countLabel(outcome.setlists, "setlist")} to ${baseName(outcome.path)}.`,
+      `Backed up ${countLabel(outcome.artists, "artist")}, ${countLabel(outcome.songs, "song")} and ${countLabel(outcome.setlists, "setlist")} to ${baseName(outcome.path)}.`,
       "success",
       10000,
     );
@@ -815,6 +1029,8 @@ async function backUpLibrary(): Promise<void> {
     backupExportButton.disabled = false;
     backupRestoreButton.disabled = false;
     syncAddSongControls();
+    renderArtists();
+    renderArtistForm();
     renderLibrary();
   }
 }
@@ -845,7 +1061,7 @@ async function restoreLibrary(): Promise<void> {
   }
 
   const { envelope, skipped } = picked.backup;
-  if (envelope.songs.length + envelope.setlists.length === 0) {
+  if (envelope.songs.length + envelope.artists.length + envelope.setlists.length === 0) {
     const reason = skipped.length > 0 ? ` All records were malformed: ${summarizeRecords(skipped)}.` : "";
     setStatus(`No restorable records in ${baseName(picked.path)}.${reason}`, "error");
     return;
@@ -856,8 +1072,9 @@ async function restoreLibrary(): Promise<void> {
       ? `\n\n${countLabel(skipped.length, "malformed record")} will be skipped: ${summarizeRecords(skipped)}.`
       : "";
   const confirmed = window.confirm(
-    `Restore ${countLabel(envelope.songs.length, "song")} and ${countLabel(envelope.setlists.length, "setlist")} from ${baseName(picked.path)}?\n\n` +
+    `Restore ${countLabel(envelope.artists.length, "artist")}, ${countLabel(envelope.songs.length, "song")} and ${countLabel(envelope.setlists.length, "setlist")} from ${baseName(picked.path)}?\n\n` +
       "Existing records with the same IDs are overwritten; nothing else is deleted. " +
+      "Artists are restored first so song and setlist assignments resolve immediately. " +
       "Logo images are not part of the backup — re-import any missing logos afterwards." +
       skippedNote,
   );
@@ -877,6 +1094,7 @@ async function restoreLibrary(): Promise<void> {
     return;
   }
 
+  let importedArtists = 0;
   let importedSongs = 0;
   let importedSetlists = 0;
   const failures: string[] = [];
@@ -886,9 +1104,20 @@ async function restoreLibrary(): Promise<void> {
     backupExportButton.disabled = true;
     backupRestoreButton.disabled = true;
     syncAddSongControls();
+    renderArtists();
+    renderArtistForm();
     // Row controls are guarded in their handlers; this render applies the visual
     // disabled state without touching any draft (none can be open here).
     renderLibrary();
+
+    for (const [index, artist] of envelope.artists.entries()) {
+      try {
+        await api.saveArtist(artist);
+        importedArtists += 1;
+      } catch (error) {
+        failures.push(`artist ${index + 1} “${artist.name}” (${describeError(error)})`);
+      }
+    }
 
     for (const [index, song] of envelope.songs.entries()) {
       try {
@@ -909,20 +1138,21 @@ async function restoreLibrary(): Promise<void> {
     }
 
     const currentId = current?.id ?? null;
-    const [loadedSongs, loadedSetlists] = await Promise.all([
+    const [loadedSongs, loadedArtists, loadedSetlists] = await Promise.all([
       api.listSongs(),
+      api.listArtists(),
       api.listSetlists(),
     ]);
     pendingLogoRemovals.clear();
     clearLogoPreview();
-    adoptLoadedState(loadedSongs, loadedSetlists, currentId);
+    adoptLoadedState(loadedSongs, loadedArtists, loadedSetlists, currentId);
     renderAll();
     if (backendAvailable && !dirty) {
       await loadLogoForCurrent();
     }
     fitPreview();
 
-    const summary = `Restored ${countLabel(importedSongs, "song")} and ${countLabel(importedSetlists, "setlist")} from ${baseName(picked.path)}.`;
+    const summary = `Restored ${countLabel(importedArtists, "artist")}, ${countLabel(importedSongs, "song")} and ${countLabel(importedSetlists, "setlist")} from ${baseName(picked.path)}.`;
     const problems = [
       failures.length > 0
         ? `${countLabel(failures.length, "record")} rejected: ${summarizeRecords(failures)}`
@@ -939,7 +1169,7 @@ async function restoreLibrary(): Promise<void> {
     }
   } catch (error) {
     setStatus(
-      `Restore failed after ${countLabel(importedSongs + importedSetlists, "record")}: ${describeError(error)}`,
+      `Restore failed after ${countLabel(importedArtists + importedSongs + importedSetlists, "record")}: ${describeError(error)}`,
       "error",
     );
   } finally {
@@ -947,6 +1177,8 @@ async function restoreLibrary(): Promise<void> {
     backupExportButton.disabled = false;
     backupRestoreButton.disabled = false;
     syncAddSongControls();
+    renderArtists();
+    renderArtistForm();
     renderLibrary();
   }
 }
@@ -986,6 +1218,9 @@ function renderAll(): void {
   renderSheetOptions();
   renderPageModeControls();
   renderItems();
+  renderArtists();
+  renderArtistForm();
+  renderNewSongArtistOptions();
   renderLibrary();
   renderSheet();
 }
@@ -1062,7 +1297,7 @@ function renderLibrary(): void {
   const matching = songs
     .filter((song) => {
       if (!query) return true;
-      return [song.title, song.artist, song.key, song.tuning]
+      return [song.title, resolveArtistName(song, artists), song.key, song.tuning]
         .filter((value): value is string => Boolean(value))
         .some((value) => value.toLocaleLowerCase().includes(query));
     })
@@ -1115,8 +1350,12 @@ function sortSongsByTitle(): void {
 
 /** Sorts by the chosen field, puts missing values last, and falls back to title. */
 function compareLibrarySongs(left: Song, right: Song, sort: SongSortKey): number {
-  const leftValue = (left[sort] ?? "").trim();
-  const rightValue = (right[sort] ?? "").trim();
+  const valueFor = (song: Song): string => {
+    if (sort === "artist") return resolveArtistName(song, artists);
+    return (song[sort] ?? "").trim();
+  };
+  const leftValue = valueFor(left);
+  const rightValue = valueFor(right);
 
   if (!leftValue && rightValue) return 1;
   if (leftValue && !rightValue) return -1;
@@ -1136,7 +1375,7 @@ function buildLibraryRow(song: Song): HTMLLIElement {
   info.append(el("span", "song-item-title", song.title));
 
   const metaParts = [
-    song.artist?.trim(),
+    resolveArtistName(song, artists),
     song.key?.trim(),
     song.tuning?.trim(),
     song.bpm ? `${song.bpm} BPM` : null,
@@ -1179,7 +1418,7 @@ function buildLibraryRow(song: Song): HTMLLIElement {
     void deleteLibrarySong(song);
   });
 
-  if (restoring || backingUp) {
+  if (restoring || backingUp || artistDeleting) {
     addButton.disabled = true;
     copyButton.disabled = true;
     editButton.disabled = true;
@@ -1965,10 +2204,23 @@ async function handleSongSubmit(event: SubmitEvent): Promise<void> {
     return;
   }
 
+  const selectedArtist = newSongArtist.value
+    ? artists.find((artist) => artist.id === newSongArtist.value)
+    : null;
+  if (newSongArtist.value && !selectedArtist) {
+    setStatus(
+      "That artist is no longer available. Pick another artist and add the song again.",
+      "error",
+    );
+    renderNewSongArtistOptions();
+    return;
+  }
+
   const song: Song = {
     id: newId(),
     title,
-    artist: trimmedOrNull(newSongArtist.value),
+    artist: selectedArtist?.name.trim() || null,
+    artist_id: selectedArtist?.id ?? null,
     bpm,
     key: trimmedOrNull(newSongKey.value),
     tuning: trimmedOrNull(newSongTuning.value),
@@ -1998,6 +2250,8 @@ async function handleSongSubmit(event: SubmitEvent): Promise<void> {
     songs.push(song);
     sortSongsByTitle();
     songForm.reset();
+    renderNewSongArtistOptions();
+    renderArtists();
     renderLibrary();
     setStatus(`Added “${song.title}” to the library.`, "success");
     if (restoreTitleFocus) {
@@ -2043,9 +2297,16 @@ function libraryEditorId(songId: string): string {
 }
 
 function draftFromSong(song: Song): LibrarySongDraft {
+  const record = song.artist_id
+    ? artists.find((artist) => artist.id === song.artist_id)
+    : undefined;
+  const legacyArtist = record ? "" : (song.artist?.trim() ?? "");
+
   return {
     title: song.title,
-    artist: song.artist ?? "",
+    artistId: record?.id ?? "",
+    legacyArtist,
+    keepLegacyArtist: !record && Boolean(legacyArtist),
     key: song.key ?? "",
     tuning: song.tuning ?? "",
     bpm: song.bpm === null ? "" : String(song.bpm),
@@ -2228,6 +2489,13 @@ function libraryEditorFocusTargetFromElement(
     };
   }
 
+  if (element instanceof HTMLSelectElement) {
+    const selects = [...form.querySelectorAll<HTMLSelectElement>("select")];
+    const selectIndex = selects.indexOf(element);
+    if (selectIndex < 0) return null;
+    return { kind: "select", songId, selectIndex };
+  }
+
   if (element instanceof HTMLButtonElement && element.closest(".song-editor-actions")) {
     return {
       kind: "button",
@@ -2255,11 +2523,13 @@ function restoreLibraryEditorFocus(target: LibraryEditorFocusTarget): boolean {
   const element =
     target.kind === "input"
       ? [...form.querySelectorAll<HTMLInputElement>("input")][target.inputIndex]
-      : form.querySelector<HTMLButtonElement>(
-          target.action === "save"
-            ? 'button[type="submit"]'
-            : '.song-editor-actions button:not([type="submit"])',
-        );
+      : target.kind === "select"
+        ? [...form.querySelectorAll<HTMLSelectElement>("select")][target.selectIndex]
+        : form.querySelector<HTMLButtonElement>(
+            target.action === "save"
+              ? 'button[type="submit"]'
+              : '.song-editor-actions button:not([type="submit"])',
+          );
   if (!element || element.disabled) return false;
 
   element.focus();
@@ -2305,6 +2575,9 @@ function setLibraryEditorBusy(form: HTMLFormElement, busy: boolean): void {
   for (const input of form.querySelectorAll<HTMLInputElement>("input")) {
     input.disabled = busy;
   }
+  for (const select of form.querySelectorAll<HTMLSelectElement>("select")) {
+    select.disabled = busy;
+  }
   for (const button of form.querySelectorAll<HTMLButtonElement>("button")) {
     button.disabled = busy;
   }
@@ -2338,9 +2611,11 @@ function buildLibraryEditor(
   titleField.input.required = true;
   titleField.input.autocomplete = "off";
 
-  const artistField = textField("Artist", draft.artist, "Artist");
-  artistField.element.classList.add("song-editor-wide");
-  artistField.input.autocomplete = "off";
+  const artistSelect = document.createElement("select");
+  artistSelect.autocomplete = "off";
+  renderArtistSelectOptions(artistSelect, draft);
+  const artistElement = el("label", "item-field song-editor-wide");
+  artistElement.append(el("span", "item-field-label", "Artist"), artistSelect);
 
   const keyField = textField("Key", draft.key, "Em");
   keyField.input.maxLength = 12;
@@ -2363,7 +2638,7 @@ function buildLibraryEditor(
 
   fields.append(
     titleField.element,
-    artistField.element,
+    artistElement,
     keyField.element,
     tuningField.element,
     bpmField.element,
@@ -2371,9 +2646,8 @@ function buildLibraryEditor(
     notesField.element,
   );
 
-  const fieldInputs: Record<keyof LibrarySongDraft, HTMLInputElement> = {
+  const fieldInputs: Record<LibrarySongDraftField, HTMLInputElement> = {
     title: titleField.input,
-    artist: artistField.input,
     key: keyField.input,
     tuning: tuningField.input,
     bpm: bpmField.input,
@@ -2398,8 +2672,24 @@ function buildLibraryEditor(
       input.addEventListener(eventName, rememberFocus);
     }
   }
+  artistSelect.addEventListener("change", rememberFocus);
+  artistSelect.addEventListener("change", () => {
+    const editor = libraryEditor;
+    if (!editor || editor.songId !== song.id || editor.saving) return;
 
-  const updateDraft = (key: keyof LibrarySongDraft, input: HTMLInputElement): void => {
+    if (artistSelect.value === LEGACY_ARTIST_VALUE) {
+      editor.draft.artistId = "";
+      editor.draft.keepLegacyArtist = true;
+    } else if (artistSelect.value === "") {
+      editor.draft.artistId = "";
+      editor.draft.keepLegacyArtist = false;
+    } else {
+      editor.draft.artistId = artistSelect.value;
+      editor.draft.keepLegacyArtist = false;
+    }
+  });
+
+  const updateDraft = (key: LibrarySongDraftField, input: HTMLInputElement): void => {
     input.addEventListener("input", () => {
       const editor = libraryEditor;
       if (!editor || editor.songId !== song.id || editor.saving) return;
@@ -2411,7 +2701,6 @@ function buildLibraryEditor(
   };
 
   updateDraft("title", titleField.input);
-  updateDraft("artist", artistField.input);
   updateDraft("key", keyField.input);
   updateDraft("tuning", tuningField.input);
   updateDraft("bpm", bpmField.input);
@@ -2461,10 +2750,30 @@ function buildLibraryEditor(
       return;
     }
 
+    const selectedArtist = state.draft.artistId
+      ? artists.find((artist) => artist.id === state.draft.artistId)
+      : null;
+    if (state.draft.artistId && !selectedArtist) {
+      // The record disappeared while this draft was open. Fall back to the
+      // legacy text (if any) so the next Save can still succeed.
+      state.draft.artistId = "";
+      state.draft.keepLegacyArtist = Boolean(state.draft.legacyArtist.trim());
+      setStatus(
+        "That artist is no longer available. Pick another artist and save again.",
+        "error",
+      );
+      renderLibrary();
+      return;
+    }
+    const artistSnapshot =
+      selectedArtist?.name.trim() ||
+      (state.draft.keepLegacyArtist ? trimmedOrNull(state.draft.legacyArtist) : null);
+
     const edited: Song = {
       id: song.id,
       title,
-      artist: trimmedOrNull(state.draft.artist),
+      artist: artistSnapshot,
+      artist_id: selectedArtist?.id ?? null,
       bpm,
       key: trimmedOrNull(state.draft.key),
       tuning: trimmedOrNull(state.draft.tuning),
@@ -2537,6 +2846,7 @@ async function saveEditedLibrarySong(
 
     const closedEditor = libraryEditor === state;
     if (closedEditor) libraryEditor = null;
+    renderArtists();
     renderLibrary();
     setStatus(
       `Updated “${saved.title}” in the library. Setlists keep their own copies.`,
@@ -2574,6 +2884,7 @@ async function duplicateLibrarySong(song: Song): Promise<void> {
     const saved = await api.saveSong(copy);
     songs.push(saved);
     sortSongsByTitle();
+    renderArtists();
     renderLibrary();
     setStatus(`Duplicated “${song.title}” as “${saved.title}”.`, "success");
   } catch (error) {
@@ -2627,6 +2938,7 @@ async function deleteLibrarySong(song: Song): Promise<void> {
       libraryEditor = null;
       pendingLibraryEditorFocus = null;
     }
+    renderArtists();
     renderLibrary();
     setStatus(`Removed “${song.title}” from the library.`);
   } catch (error) {
@@ -2634,6 +2946,646 @@ async function deleteLibrarySong(song: Song): Promise<void> {
   } finally {
     libraryWritesInFlight -= 1;
   }
+}
+
+// ---------------------------------------------------------------------------
+// Artists
+// ---------------------------------------------------------------------------
+
+/** Rebuilds the Add-to-library artist picker, keeping a still-valid selection. */
+function renderNewSongArtistOptions(): void {
+  const selected = newSongArtist.value;
+  renderArtistSelectOptions(newSongArtist, {
+    artistId: artists.some((artist) => artist.id === selected) ? selected : "",
+    legacyArtist: "",
+    keepLegacyArtist: false,
+  });
+}
+
+/**
+ * Fills an artist `<select>` with **No artist**, every record, and (when the
+ * song still has legacy text) an option that keeps that text unchanged.
+ */
+function renderArtistSelectOptions(
+  select: HTMLSelectElement,
+  selection: { artistId: string; legacyArtist: string; keepLegacyArtist: boolean },
+): void {
+  const fragment = document.createDocumentFragment();
+  fragment.append(artistOption("", "No artist"));
+
+  for (const artist of artists) {
+    fragment.append(artistOption(artist.id, artist.name || "Untitled artist"));
+  }
+
+  const legacy = selection.legacyArtist.trim();
+  if (legacy) {
+    fragment.append(artistOption(LEGACY_ARTIST_VALUE, `Keep text: “${legacy}”`));
+  }
+
+  select.replaceChildren(fragment);
+
+  if (selection.artistId && artists.some((artist) => artist.id === selection.artistId)) {
+    select.value = selection.artistId;
+  } else if (legacy && selection.keepLegacyArtist) {
+    select.value = LEGACY_ARTIST_VALUE;
+  } else {
+    select.value = "";
+  }
+}
+
+function artistOption(value: string, label: string): HTMLOptionElement {
+  const option = document.createElement("option");
+  option.value = value;
+  option.textContent = label;
+  return option;
+}
+
+/** Artists section: logo thumbnails, resolved song counts, and row actions. */
+function renderArtists(): void {
+  artistCountEl.textContent = String(artists.length);
+  artistCountEl.setAttribute(
+    "aria-label",
+    `${artists.length} ${artists.length === 1 ? "artist" : "artists"} in the library`,
+  );
+
+  if (artists.length === 0) {
+    artistListEl.replaceChildren(
+      el("li", "empty-state", "No artists yet. Add the first one below."),
+    );
+    return;
+  }
+
+  // Counts use resolved identity: id-backed songs count for their record and
+  // legacy text counts for a same-named record until it is adopted.
+  const counts = new Map<string, number>();
+  for (const song of songs) {
+    const artist = resolveArtistForSong(song, artists);
+    if (artist) counts.set(artist.id, (counts.get(artist.id) ?? 0) + 1);
+  }
+
+  const locked = artistBusy || restoring || backingUp;
+  const fragment = document.createDocumentFragment();
+  for (const artist of artists) {
+    fragment.append(buildArtistRow(artist, counts.get(artist.id) ?? 0, locked));
+  }
+  artistListEl.replaceChildren(fragment);
+}
+
+function buildArtistRow(artist: Artist, songCount: number, locked: boolean): HTMLLIElement {
+  const row = el("li", "artist-item");
+  if (artistFormState.mode === "edit" && artistFormState.artistId === artist.id) {
+    row.classList.add("is-editing");
+  }
+
+  row.append(buildArtistThumb(artist));
+
+  const info = el("div", "artist-info");
+  info.append(el("span", "artist-name", artist.name || "Untitled artist"));
+  info.append(
+    el(
+      "span",
+      "artist-meta",
+      `${songCount} ${songCount === 1 ? "song" : "songs"}${
+        artist.logo.file_name ? "" : " · no logo"
+      }`,
+    ),
+  );
+
+  const actions = el("div", "artist-actions");
+  const editButton = el("button", "icon-button");
+  editButton.type = "button";
+  editButton.title = `Edit ${artist.name}`;
+  editButton.setAttribute("aria-label", `Edit artist ${artist.name}`);
+  editButton.setAttribute("aria-expanded", String(row.classList.contains("is-editing")));
+  editButton.append(editIcon());
+  editButton.addEventListener("click", () => startArtistEdit(artist.id));
+
+  const deleteButton = el("button", "icon-button", "✕");
+  deleteButton.type = "button";
+  deleteButton.title = `Delete ${artist.name}`;
+  deleteButton.setAttribute("aria-label", `Delete artist ${artist.name}`);
+  deleteButton.addEventListener("click", () => {
+    void deleteArtist(artist);
+  });
+
+  editButton.disabled = locked;
+  deleteButton.disabled = locked;
+  actions.append(editButton, deleteButton);
+  row.append(info, actions);
+  return row;
+}
+
+/** Logo thumbnail. Rendered only through `<img src>` (never inline SVG). */
+function buildArtistThumb(artist: Artist): HTMLSpanElement {
+  const thumb = el("span", "artist-thumb");
+  const fileName = artist.logo.file_name;
+  if (!fileName) {
+    thumb.classList.add("is-empty");
+    thumb.setAttribute("aria-hidden", "true");
+    thumb.textContent = "—";
+    return thumb;
+  }
+
+  const image = el("img", "artist-thumb-img");
+  image.alt = "";
+  thumb.append(image);
+
+  const cached = artistThumbUrls.get(fileName);
+  if (cached) {
+    image.src = cached;
+    return thumb;
+  }
+
+  void storedLogoUrl(fileName)
+    .then((url) => {
+      artistThumbUrls.set(fileName, url);
+      if (image.isConnected) image.src = url;
+    })
+    .catch(() => {
+      if (!image.isConnected) return;
+      image.remove();
+      thumb.classList.add("is-empty");
+      thumb.setAttribute("aria-hidden", "true");
+      thumb.textContent = "—";
+    });
+
+  return thumb;
+}
+
+/** Enters inline edit mode with the artist's name and current logo settings. */
+function startArtistEdit(artistId: string): void {
+  if (artistBusy || artistDeleting) {
+    setStatus("Wait for the current artist request to finish before editing an artist.", "info");
+    return;
+  }
+  if (artistLogoBusy) {
+    setStatus("Wait for the artist logo import to finish before editing an artist.", "info");
+    return;
+  }
+  if (restoring || backingUp) return;
+
+  const artist = artists.find((entry) => entry.id === artistId);
+  if (!artist) return;
+
+  if (artistFormState.mode === "edit" && artistFormState.artistId === artistId) {
+    artistNameInput.focus();
+    artistNameInput.select();
+    return;
+  }
+
+  discardArtistDraftLogos(artistFormState);
+  artistFormState = {
+    mode: "edit",
+    artistId,
+    name: artist.name,
+    logo: { ...artist.logo },
+    originalLogo: artist.logo.file_name,
+    transientLogos: new Set(),
+  };
+  renderArtistForm();
+  renderArtists();
+  void showArtistStoredLogo(artist.logo.file_name);
+  artistNameInput.focus();
+  artistNameInput.select();
+}
+
+/** Cancels the current artist draft (new or edit) and resets the form. */
+function cancelArtistEdit(): void {
+  if (artistBusy) return;
+
+  discardArtistDraftLogos(artistFormState);
+  resetArtistForm();
+  renderArtists();
+  artistNameInput.focus();
+}
+
+/** Clears the form without deleting any logo file. */
+function resetArtistForm(): void {
+  invalidateArtistLogoPreview();
+  artistFormState = createArtistFormState();
+  renderArtistForm();
+}
+
+/** Synchronizes the shared artist form with `artistFormState`. */
+function renderArtistForm(): void {
+  const state = artistFormState;
+  artistFormTitle.textContent = state.mode === "edit" ? "Edit artist" : "New artist";
+
+  if (artistNameInput.value !== state.name) {
+    artistNameInput.value = state.name;
+  }
+  artistLogoWidthInput.value = String(state.logo.width_mm);
+  artistLogoWidthOutput.textContent = `${Math.round(state.logo.width_mm)} mm`;
+  for (const radio of artistAlignmentRadios) {
+    radio.checked = radio.value === state.logo.alignment;
+  }
+  artistFormSubmitButton.textContent =
+    state.mode === "edit" ? "Save artist" : "Add artist";
+  artistForm.setAttribute("aria-busy", String(artistBusy));
+  syncArtistFormControls();
+  renderArtistLogoPreview();
+}
+
+function syncArtistFormControls(): void {
+  const locked = artistBusy || restoring || backingUp;
+  for (const control of artistForm.querySelectorAll<HTMLInputElement>("input")) {
+    control.disabled = locked;
+  }
+  artistFormSubmitButton.disabled = locked || artistLogoBusy;
+  artistFormCancelButton.disabled = locked;
+  artistLogoRemoveButton.disabled = locked || !artistFormState.logo.file_name;
+}
+
+function renderArtistLogoPreview(): void {
+  artistLogoPreviewEl.replaceChildren();
+
+  if (!artistFormState.logo.file_name) {
+    artistLogoPreviewEl.append(el("span", "artist-logo-preview-empty", "No logo"));
+    return;
+  }
+
+  if (!artistLogoSrc) {
+    artistLogoPreviewEl.append(
+      el(
+        "span",
+        "artist-logo-preview-empty",
+        artistLogoPreviewFailed ? "No preview" : "Loading…",
+      ),
+    );
+    return;
+  }
+
+  const image = el("img", "artist-logo-preview-img");
+  image.src = artistLogoSrc;
+  image.alt = "";
+  artistLogoPreviewEl.append(image);
+}
+
+/** Revokes the artist form preview URL and cancels any pending stored load. */
+function invalidateArtistLogoPreview(): void {
+  artistLogoRequestId += 1;
+  artistLogoPreviewFailed = false;
+  if (artistLogoSrc) {
+    URL.revokeObjectURL(artistLogoSrc);
+    artistLogoSrc = null;
+  }
+}
+
+/** Shows a local object URL (fresh upload) in the form preview. */
+function showArtistLogoPreview(url: string): void {
+  invalidateArtistLogoPreview();
+  artistLogoSrc = url;
+  renderArtistLogoPreview();
+}
+
+/** Loads a stored logo into the form preview, ignoring stale requests. */
+async function showArtistStoredLogo(fileName: string | null): Promise<void> {
+  invalidateArtistLogoPreview();
+  if (!fileName) {
+    renderArtistLogoPreview();
+    return;
+  }
+
+  const request = artistLogoRequestId;
+  try {
+    const url = await storedLogoUrl(fileName);
+    if (request !== artistLogoRequestId) {
+      URL.revokeObjectURL(url);
+      return;
+    }
+    artistLogoSrc = url;
+    renderArtistLogoPreview();
+  } catch (error) {
+    if (request === artistLogoRequestId) {
+      artistLogoPreviewFailed = true;
+      renderArtistLogoPreview();
+      setStatus(`Could not load artist logo: ${describeError(error)}`, "error");
+    }
+  }
+}
+
+/**
+ * Deletes draft-only logo files. The persisted `originalLogo` is always kept:
+ * cancelling an edit must not remove the artist's saved logo.
+ */
+function discardArtistDraftLogos(state: ArtistFormState): void {
+  const names = new Set(state.transientLogos);
+  if (state.logo.file_name) names.add(state.logo.file_name);
+
+  for (const name of names) {
+    if (state.originalLogo && name === state.originalLogo) continue;
+    // A leftover file is harmless; never fail a UI reset over cleanup.
+    void api.removeLogo(name).catch(() => undefined);
+  }
+}
+
+async function handleArtistSubmit(event: SubmitEvent): Promise<void> {
+  event.preventDefault();
+  if (artistBusy || artistDeleting) {
+    setStatus("Wait for the current artist request to finish before saving.", "info");
+    return;
+  }
+  if (artistLogoBusy) {
+    setStatus("Wait for the artist logo import to finish before saving.", "info");
+    return;
+  }
+  if (blockLibraryActionWhileBusy()) return;
+  if (!ensureBackend()) return;
+
+  const name = artistNameInput.value.trim();
+  if (!name) {
+    markFieldInvalid(artistNameInput, true);
+    setStatus("Artist name is required.", "error");
+    artistNameInput.focus();
+    return;
+  }
+  markFieldInvalid(artistNameInput, false);
+
+  const state = artistFormState;
+  const wasEdit = state.mode === "edit";
+  const artist: Artist = {
+    id: wasEdit && state.artistId ? state.artistId : newId(),
+    name,
+    logo: { ...state.logo },
+  };
+
+  artistBusy = true;
+  libraryWritesInFlight += 1;
+  renderArtists();
+  renderArtistForm();
+  setStatus(`Saving artist “${name}”…`);
+
+  try {
+    const saved = await api.saveArtist(artist);
+    const index = artists.findIndex((entry) => entry.id === saved.id);
+    if (index >= 0) {
+      artists[index] = saved;
+    } else {
+      artists.push(saved);
+    }
+    artists.sort((left, right) => left.name.localeCompare(right.name));
+
+    // The record is persisted; now the replaced/imported files can go. The
+    // backend still skips any file a setlist or another artist references.
+    const cleanup = new Set(state.transientLogos);
+    if (wasEdit && state.originalLogo && state.originalLogo !== saved.logo.file_name) {
+      cleanup.add(state.originalLogo);
+    }
+    for (const fileName of cleanup) {
+      if (fileName === saved.logo.file_name) continue;
+      void api.removeLogo(fileName).catch(() => undefined);
+    }
+
+    resetArtistForm();
+    renderArtists();
+    renderNewSongArtistOptions();
+    renderLibrary();
+    setStatus(
+      wasEdit
+        ? `Updated artist “${saved.name}”. Songs and setlists show the new name without being rewritten.`
+        : `Added artist “${saved.name}”.`,
+      "success",
+    );
+  } catch (error) {
+    setStatus(`Could not save artist: ${describeError(error)}`, "error");
+  } finally {
+    artistBusy = false;
+    libraryWritesInFlight -= 1;
+    renderArtists();
+    renderArtistForm();
+  }
+}
+
+async function handleArtistLogoFile(): Promise<void> {
+  const file = artistLogoFileInput.files?.[0];
+  artistLogoFileInput.value = "";
+  if (!file) return;
+  if (artistBusy || artistLogoBusy || artistDeleting || restoring || backingUp) {
+    setStatus(
+      "Wait for the current artist or logo request to finish before choosing another logo.",
+      "info",
+    );
+    return;
+  }
+
+  const allowed = ["image/png", "image/jpeg", "image/svg+xml"];
+  if (!allowed.includes(file.type) && !/\.(png|jpe?g|svg)$/i.test(file.name)) {
+    setStatus("Artist logo must be a PNG, JPEG, or SVG image.", "error");
+    return;
+  }
+  if (file.size > 5 * 1024 * 1024) {
+    setStatus("Artist logo must be 5 MiB or smaller.", "error");
+    return;
+  }
+  if (!ensureBackend()) return;
+
+  const state = artistFormState;
+  const previousFileName = state.logo.file_name;
+  artistLogoBusy = true;
+  syncArtistFormControls();
+  setStatus(`Importing artist logo “${file.name}”…`);
+
+  try {
+    let bytes: Uint8Array;
+    try {
+      bytes = new Uint8Array(await file.arrayBuffer());
+    } catch (error) {
+      setStatus(`Could not read artist logo: ${describeError(error)}`, "error");
+      return;
+    }
+
+    // The draft was cancelled or replaced while the file was being read.
+    if (artistFormState !== state) return;
+
+    const previewUrl = URL.createObjectURL(file);
+    showArtistLogoPreview(previewUrl);
+    const request = artistLogoRequestId;
+
+    try {
+      const storedName = await api.importLogo(bytes, file.name);
+      if (request !== artistLogoRequestId || artistFormState !== state) {
+        // The form moved on while the upload was in flight.
+        void api.removeLogo(storedName).catch(() => undefined);
+        URL.revokeObjectURL(previewUrl);
+        return;
+      }
+
+      if (
+        previousFileName &&
+        previousFileName !== storedName &&
+        previousFileName !== state.originalLogo
+      ) {
+        state.transientLogos.add(previousFileName);
+      }
+      state.logo.file_name = storedName;
+      renderArtistForm();
+      setStatus("Artist logo imported.", "success");
+    } catch (error) {
+      // Keep the persisted/previous logo after a failed replacement.
+      invalidateArtistLogoPreview();
+      renderArtistForm();
+      if (state.logo.file_name) {
+        void showArtistStoredLogo(state.logo.file_name);
+      }
+      setStatus(`Could not import artist logo: ${describeError(error)}`, "error");
+    }
+  } finally {
+    artistLogoBusy = false;
+    syncArtistFormControls();
+  }
+}
+
+function handleArtistLogoRemove(): void {
+  if (artistBusy) return;
+
+  const fileName = artistFormState.logo.file_name;
+  if (!fileName) return;
+
+  if (fileName !== artistFormState.originalLogo) {
+    artistFormState.transientLogos.add(fileName);
+  }
+  artistFormState.logo.file_name = null;
+  invalidateArtistLogoPreview();
+  renderArtistForm();
+  setStatus("Artist logo removed — save to apply.");
+}
+
+/**
+ * Deletes an artist record and best-effort clears every song/setlist
+ * `artist_id` that points at it. Song `artist` snapshots stay untouched, so
+ * the last name remains visible; dangling ids from an interrupted delete load
+ * as unresolved and are safe.
+ */
+async function deleteArtist(artist: Artist): Promise<void> {
+  if (artistBusy || artistDeleting) {
+    setStatus("Wait for the current artist request to finish before deleting an artist.", "info");
+    return;
+  }
+  if (artistLogoBusy) {
+    setStatus("Artist delete blocked — wait for the logo import to finish.", "info");
+    return;
+  }
+  if (blockLibraryActionWhileBusy()) return;
+  if (!ensureBackend()) return;
+
+  // A concurrent song save/draft would be clobbered by the reference-clearing
+  // loop (or could re-save a stale artist_id afterwards), so use the same guard
+  // as Back up / Restore before taking the library snapshot.
+  const libraryBlock = libraryWriteGuard("deleting an artist");
+  if (libraryBlock) {
+    setStatus(`Artist delete blocked — ${libraryBlock}`, "error");
+    return;
+  }
+
+  const confirmed = window.confirm(
+    `Delete artist “${artist.name}”? Songs keep their last artist name text; setlists assigned to this artist become unassigned.`,
+  );
+  if (!confirmed) return;
+
+  const editingThis =
+    artistFormState.mode === "edit" && artistFormState.artistId === artist.id;
+  const failures: string[] = [];
+
+  artistBusy = true;
+  artistDeleting = true;
+  libraryWritesInFlight += 1;
+  renderArtists();
+  renderArtistForm();
+  // Lock library rows visually for the whole reference-clearing loop; handlers
+  // also refuse through `blockLibraryActionWhileBusy`.
+  renderLibrary();
+  setStatus(`Deleting artist “${artist.name}”…`);
+
+  try {
+    for (const song of [...songs]) {
+      if (song.artist_id !== artist.id) continue;
+      try {
+        const saved = await api.saveSong({ ...song, artist_id: null });
+        const index = songs.findIndex((entry) => entry.id === saved.id);
+        if (index >= 0) songs[index] = saved;
+      } catch (error) {
+        failures.push(`song “${song.title}” (${describeError(error)})`);
+      }
+    }
+
+    for (const setlist of [...setlists]) {
+      if (normalizeArtistId(setlist.artist_id) !== artist.id) continue;
+      try {
+        const saved = await api.saveSetlist({ ...setlist, artist_id: null });
+        const index = setlists.findIndex((entry) => entry.id === saved.id);
+        if (index >= 0) setlists[index] = saved;
+        if (current?.id === saved.id) {
+          current.artist_id = null;
+          if (!dirty) current = cloneSetlist(saved);
+        }
+      } catch (error) {
+        failures.push(`setlist “${setlist.title}” (${describeError(error)})`);
+      }
+    }
+    sortSetlists();
+
+    try {
+      await api.deleteArtist(artist.id);
+    } catch (error) {
+      // References may already be cleared; the artist record stays, so report
+      // without pretending the delete succeeded.
+      const detail =
+        failures.length > 0
+          ? ` References not cleared: ${summarizeRecords(failures)}.`
+          : "";
+      setStatus(`Could not delete artist: ${describeError(error)}.${detail}`, "error");
+      renderAll();
+      return;
+    }
+
+    artists = artists.filter((entry) => entry.id !== artist.id);
+    clearArtistDraftForDeletedArtist(artist.id, editingThis);
+    renderNewSongArtistOptions();
+    renderAll();
+
+    if (artist.logo.file_name) {
+      // Backend skips the file while a setlist or another artist references it.
+      await api.removeLogo(artist.logo.file_name).catch(() => undefined);
+    }
+
+    const summary = `Deleted artist “${artist.name}”. Songs keep their last artist name text; setlists are now unassigned.`;
+    if (failures.length > 0) {
+      setStatus(
+        `${summary} Some references could not be cleared: ${summarizeRecords(failures)}.`,
+        "error",
+      );
+    } else {
+      setStatus(summary, "success");
+    }
+  } catch (error) {
+    setStatus(`Could not delete artist: ${describeError(error)}`, "error");
+  } finally {
+    artistDeleting = false;
+    artistBusy = false;
+    libraryWritesInFlight -= 1;
+    renderArtists();
+    renderArtistForm();
+    renderLibrary();
+  }
+}
+
+/**
+ * Points an open library-editor draft at its legacy snapshot after its artist
+ * record disappears, so opening the editor never silently loses the text.
+ */
+function clearArtistDraftForDeletedArtist(artistId: string, editingThis: boolean): void {
+  const editor = libraryEditor;
+  if (editor?.draft.artistId === artistId) {
+    const song = songs.find((entry) => entry.id === editor.songId);
+    editor.draft.artistId = "";
+    editor.draft.legacyArtist =
+      song?.artist?.trim() ?? editor.draft.legacyArtist.trim();
+    editor.draft.keepLegacyArtist = Boolean(editor.draft.legacyArtist);
+  }
+
+  if (!editingThis) return;
+  discardArtistDraftLogos(artistFormState);
+  resetArtistForm();
 }
 
 // ---------------------------------------------------------------------------

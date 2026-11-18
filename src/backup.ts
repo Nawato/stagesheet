@@ -4,20 +4,21 @@
  * The backup is a versioned JSON envelope:
  *
  * ```json
- * { "schema_version": 1, "exported_at": "…", "songs": [], "setlists": [] }
+ * { "schema_version": 1, "exported_at": "…", "artists": [], "songs": [], "setlists": [] }
  * ```
  *
- * Restore is deliberately frontend-only: it reuses `list_songs`/`list_setlists`
- * to build the envelope and `save_song`/`save_setlist` to write records back, so
- * the existing Rust validation and serde migrations stay the single authority.
- * Files are read/written through the dialog-scoped `fs` permission (opening or
- * saving a path extends the `$APPDATA/stagesheet/**` scope to that one file);
- * no new commands and no capability widening.
+ * Restore is deliberately frontend-only: it reuses `list_artists`/`list_songs`/
+ * `list_setlists` to build the envelope and `save_artist`/`save_song`/
+ * `save_setlist` to write records back, so the existing Rust validation and
+ * serde migrations stay the single authority. Files are read/written through the
+ * dialog-scoped `fs` permission (opening or saving a path extends the
+ * `$APPDATA/stagesheet/**` scope to that one file); no new commands and no
+ * capability widening.
  *
- * Logos are not embedded in v1: setlists keep `logo.file_name`, which still
- * works when restoring on the same device. On a new device the file is missing,
- * the preview shows the logo placeholder, and the logo must be re-imported
- * manually. A later schema version can embed the bytes.
+ * Logos are not embedded in v1: setlists and artists keep `logo.file_name`,
+ * which still works when restoring on the same device. On a new device the file
+ * is missing, the preview shows the logo placeholder, and the logo must be
+ * re-imported manually. A later schema version can embed the bytes.
  */
 
 import { open, save } from "@tauri-apps/plugin-dialog";
@@ -26,11 +27,13 @@ import { downloadDir, join } from "@tauri-apps/api/path";
 
 import {
   DEFAULT_LOGO_WIDTH_MM,
+  normalizeArtistId,
   withBreakDefaults,
   withPageModeDefaults,
   withSheetDefaults,
 } from "./types";
 import type {
+  Artist,
   BreakItem,
   LogoAlignment,
   LogoConfig,
@@ -40,17 +43,23 @@ import type {
   Song,
 } from "./types";
 
-/** Envelope version written by this build. Bump when the payload shape changes. */
+/**
+ * Envelope version written by this build. Bump when the payload shape changes.
+ * The artists array is additive and stays schema 1, like tuning, sheet options,
+ * page mode, and break seconds before it.
+ */
 export const BACKUP_SCHEMA_VERSION = 1;
 
 export interface BackupEnvelope {
   schema_version: number;
   exported_at: string;
+  artists: Artist[];
   songs: Song[];
   setlists: Setlist[];
 }
 
 export interface BackupRecords {
+  artists: Artist[];
   songs: Song[];
   setlists: Setlist[];
 }
@@ -66,6 +75,7 @@ export type BackupExportOutcome =
   | {
       status: "exported";
       path: string;
+      artists: number;
       songs: number;
       setlists: number;
     };
@@ -82,6 +92,7 @@ export function createBackupEnvelope(
   return {
     schema_version: BACKUP_SCHEMA_VERSION,
     exported_at: now.toISOString(),
+    artists: records.artists,
     songs: records.songs,
     setlists: records.setlists,
   };
@@ -108,6 +119,7 @@ export async function exportBackup(records: BackupRecords): Promise<BackupExport
   return {
     status: "exported",
     path,
+    artists: envelope.artists.length,
     songs: envelope.songs.length,
     setlists: envelope.setlists.length,
   };
@@ -161,12 +173,24 @@ export function parseBackupEnvelope(text: string): ParsedBackup {
   if (!Array.isArray(value.setlists)) {
     throw new Error("Not a StageSheet backup: setlists must be an array.");
   }
+  if (value.artists !== undefined && value.artists !== null && !Array.isArray(value.artists)) {
+    throw new Error("Not a StageSheet backup: artists must be an array.");
+  }
 
   // Schema 1 is the first versioned format. Future migrations belong here,
   // keyed by the source version, before the per-record normalizers run.
   const migrated = migrateEnvelope(version, value);
 
   const skipped: string[] = [];
+  const artists: Artist[] = [];
+  migrated.artists.forEach((raw, index) => {
+    try {
+      artists.push(normalizeArtist(raw));
+    } catch (error) {
+      skipped.push(`artist ${index + 1} (${describeError(error)})`);
+    }
+  });
+
   const songs: Song[] = [];
   migrated.songs.forEach((raw, index) => {
     try {
@@ -189,6 +213,7 @@ export function parseBackupEnvelope(text: string): ParsedBackup {
     envelope: {
       schema_version: version,
       exported_at: typeof value.exported_at === "string" ? value.exported_at : "",
+      artists,
       songs,
       setlists,
     },
@@ -201,6 +226,7 @@ export function parseBackupEnvelope(text: string): ParsedBackup {
 // ---------------------------------------------------------------------------
 
 interface MigratedRecords {
+  artists: unknown[];
   songs: unknown[];
   setlists: unknown[];
 }
@@ -217,6 +243,9 @@ function migrateEnvelope(
   switch (version) {
     case 1:
       return {
+        // Feature 14 added the top-level artists array without a version bump.
+        // Backups from older builds have no key; treat that as an empty list.
+        artists: Array.isArray(value.artists) ? (value.artists as unknown[]) : [],
         songs: value.songs as unknown[],
         setlists: value.setlists as unknown[],
       };
@@ -232,6 +261,22 @@ function migrateEnvelope(
 // Record normalization (serde-compatible defaults)
 // ---------------------------------------------------------------------------
 
+function normalizeArtist(value: unknown): Artist {
+  if (!isRecord(value)) throw new Error("artist must be an object");
+
+  // Rust trims the name in both directions; mirror that on restore so an older
+  // backup with padding restores without surrounding whitespace.
+  const name = requireString(value.name, "name").trim();
+  const rawLogo = value.logo ?? {};
+  if (!isRecord(rawLogo)) throw new Error("artist logo must be an object");
+
+  return {
+    id: requireString(value.id, "id"),
+    name,
+    logo: normalizeLogo(rawLogo),
+  };
+}
+
 function normalizeSong(value: unknown): Song {
   if (!isRecord(value)) throw new Error("song must be an object");
 
@@ -239,6 +284,7 @@ function normalizeSong(value: unknown): Song {
     id: requireString(value.id, "id"),
     title: requireString(value.title, "title"),
     artist: optionalText(value.artist),
+    artist_id: optionalArtistId(value.artist_id),
     bpm: optionalInteger(value.bpm, 0xffff, "bpm"),
     key: optionalText(value.key),
     tuning: optionalText(value.tuning),
@@ -275,6 +321,7 @@ function normalizeSetlist(value: unknown): Setlist {
     page_mode: withPageModeDefaults(
       typeof value.page_mode === "string" ? value.page_mode : null,
     ),
+    artist_id: optionalArtistId(value.artist_id),
     // Rust defaults missing timestamps to now; mirror that here so the typed
     // payload always carries strings.
     created_at: optionalTimestamp(value.created_at),
@@ -386,6 +433,13 @@ function requireString(value: unknown, field: string): string {
 
 function optionalText(value: unknown): string | null {
   return typeof value === "string" && value.trim() ? value : null;
+}
+
+/** Missing/null/blank artist record ids normalize to null; other types fail. */
+function optionalArtistId(value: unknown): string | null {
+  if (value === undefined || value === null) return null;
+  if (typeof value !== "string") throw new Error("invalid artist_id");
+  return normalizeArtistId(value);
 }
 
 function optionalInteger(value: unknown, max: number, field: string): number | null {

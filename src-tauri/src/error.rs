@@ -18,6 +18,9 @@ pub enum AppError {
     #[error("song {0} was not found")]
     SongNotFound(Uuid),
 
+    #[error("artist {0} was not found")]
+    ArtistNotFound(Uuid),
+
     #[error("setlist {0} was not found")]
     SetlistNotFound(Uuid),
 

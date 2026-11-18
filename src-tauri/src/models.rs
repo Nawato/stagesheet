@@ -1,8 +1,8 @@
 //! Domain models shared by the desktop and mobile builds.
 //!
 //! The serialized shape of these types is the on-disk format (`songs.json`,
-//! `setlists/*.json`) *and* the Tauri IPC contract. Keep `src/types.ts` in sync
-//! when changing them.
+//! `artists.json`, `setlists/*.json`) *and* the Tauri IPC contract. Keep
+//! `src/types.ts` in sync when changing them.
 
 use chrono::{DateTime, NaiveDate, Utc};
 use serde::{Deserialize, Serialize};
@@ -81,14 +81,14 @@ impl<'de> Deserialize<'de> for LogoAlignment {
     }
 }
 
-/// Logo placement for a setlist.
+/// Logo placement for a setlist or artist.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct LogoConfig {
     /// File name relative to `<app_data_dir>/stagesheet/logos/`.
     ///
     /// Only a plain file name is stored, never an absolute path, so setlists
-    /// stay portable between devices.
+    /// and artists stay portable between devices.
     pub file_name: Option<String>,
     /// Printed width in millimetres. The UI keeps the aspect ratio locked.
     pub width_mm: f32,
@@ -127,13 +127,60 @@ impl LogoConfig {
     }
 }
 
+/// A managed artist with an optional logo.
+///
+/// Songs and (from Feature 16 on) setlists reference artists by id; the name is
+/// the resolved display value. Renaming an artist therefore never rewrites the
+/// songs or setlists that point at it.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Artist {
+    pub id: Uuid,
+    /// Display name. Trimmed in both directions; blank names fail validation.
+    #[serde(
+        deserialize_with = "deserialize_trimmed_string",
+        serialize_with = "serialize_trimmed_string"
+    )]
+    pub name: String,
+    /// Same logo rules and shared `logos/` pool as setlists.
+    #[serde(default)]
+    pub logo: LogoConfig,
+}
+
+impl Artist {
+    pub fn new(name: impl Into<String>) -> Self {
+        Self {
+            id: Uuid::new_v4(),
+            name: name.into().trim().to_string(),
+            logo: LogoConfig::default(),
+        }
+    }
+
+    pub fn validate(&self) -> Result<(), String> {
+        if self.name.trim().is_empty() {
+            return Err("artist name must not be empty".into());
+        }
+
+        self.logo.validate()
+    }
+}
+
 /// A reusable song in the library.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Song {
     pub id: Uuid,
     pub title: String,
+    /// Display snapshot for the artist.
+    ///
+    /// New songs assigned to an artist record store its name here as a fallback;
+    /// legacy free-text values stay untouched until the song is adopted. The
+    /// resolved record name wins while `artist_id` points at a live record.
     #[serde(default)]
     pub artist: Option<String>,
+    /// Artist record reference. Missing in older files, so it defaults to `None`
+    /// (display falls back to `artist`). Dangling ids are valid and resolve as
+    /// unresolved in the UI.
+    #[serde(default)]
+    pub artist_id: Option<Uuid>,
     #[serde(default)]
     pub bpm: Option<u16>,
     /// Musical key, e.g. `Em`. Added after the first schema draft, hence the
@@ -162,6 +209,7 @@ impl Song {
             id: Uuid::new_v4(),
             title: title.into(),
             artist: None,
+            artist_id: None,
             bpm: None,
             key: None,
             tuning: None,
@@ -204,6 +252,22 @@ fn normalize_trimmed_text(value: Option<String>) -> Option<String> {
     value
         .map(|text| text.trim().to_string())
         .filter(|text| !text.is_empty())
+}
+
+/// Trims a required text value. A whitespace-only value becomes an empty string
+/// so the owning `validate()` reports the blank field instead of hiding it.
+fn deserialize_trimmed_string<'de, D>(deserializer: D) -> Result<String, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    String::deserialize(deserializer).map(|text| text.trim().to_string())
+}
+
+fn serialize_trimmed_string<S>(value: &String, serializer: S) -> Result<S::Ok, S::Error>
+where
+    S: serde::Serializer,
+{
+    serializer.serialize_str(value.trim())
 }
 
 fn deserialize_trimmed_text<'de, D>(deserializer: D) -> Result<Option<String>, D::Error>
@@ -420,6 +484,11 @@ pub struct Setlist {
     /// Missing in pre-Feature-5 files; defaults to the single-page cap.
     #[serde(default)]
     pub page_mode: PageMode,
+    /// Artist record reference. Declared by Feature 14 and wired into the editor
+    /// and header picker by Feature 16; missing in older files -> `None`
+    /// (unlocked). Dangling ids resolve as unlocked, never as a save error.
+    #[serde(default)]
+    pub artist_id: Option<Uuid>,
     #[serde(default = "Utc::now")]
     pub created_at: DateTime<Utc>,
     #[serde(default = "Utc::now")]
@@ -438,6 +507,7 @@ impl Setlist {
             logo: LogoConfig::default(),
             sheet_options: SheetOptions::default(),
             page_mode: PageMode::default(),
+            artist_id: None,
             created_at: now,
             updated_at: now,
         }
@@ -516,6 +586,7 @@ mod tests {
             id: Uuid::new_v4(),
             title: title.into(),
             artist: Some("The Band".into()),
+            artist_id: None,
             bpm: Some(128),
             key: Some("Em".into()),
             tuning: Some("Drop D".into()),
@@ -1263,6 +1334,169 @@ mod tests {
 
         setlist.logo.file_name = Some("../escape.png".into());
         assert!(setlist.validate().is_err());
+    }
+
+    #[test]
+    fn artist_round_trips_with_logo() {
+        let mut artist = Artist::new("The Band");
+        artist.logo = LogoConfig {
+            file_name: Some("band-logo.png".into()),
+            width_mm: 35.0,
+            alignment: LogoAlignment::Right,
+        };
+
+        let json = serde_json::to_string_pretty(&artist).expect("serialize artist");
+        assert!(json.contains("\"name\": \"The Band\""));
+        assert!(json.contains("\"width_mm\": 35.0"));
+        let decoded: Artist = serde_json::from_str(&json).expect("deserialize artist");
+
+        assert_eq!(decoded, artist);
+        assert!(decoded.validate().is_ok());
+    }
+
+    #[test]
+    fn artist_name_is_trimmed_and_blank_names_fail_validation() {
+        let created = Artist::new("  The Band  ");
+        assert_eq!(created.name, "The Band");
+
+        let trimmed: Artist = serde_json::from_value(serde_json::json!({
+            "id": Uuid::new_v4(),
+            "name": "  The Band  ",
+            "logo": {
+                "file_name": null,
+                "width_mm": 40.0,
+                "alignment": "Center"
+            }
+        }))
+        .expect("padded artist name parses");
+        assert_eq!(trimmed.name, "The Band");
+        assert_eq!(
+            serde_json::to_value(&trimmed).expect("serialize artist")["name"],
+            serde_json::json!("The Band")
+        );
+
+        for blank in ["", "   ", "\t\n"] {
+            let mut artist = Artist::new("The Band");
+            artist.name = blank.into();
+            let error = artist.validate().expect_err("blank names must fail");
+            assert!(
+                error.contains("artist name"),
+                "error names the field: {error}"
+            );
+        }
+    }
+
+    #[test]
+    fn artist_logo_rules_match_setlist_logo_rules() {
+        let mut artist = Artist::new("The Band");
+        assert_eq!(artist.logo, LogoConfig::default());
+
+        for width in [LOGO_MIN_WIDTH_MM, LOGO_MAX_WIDTH_MM] {
+            artist.logo.width_mm = width;
+            assert!(artist.validate().is_ok(), "{width} mm is allowed");
+        }
+
+        for width in [9.0, 81.0, f32::NAN, f32::INFINITY] {
+            artist.logo.width_mm = width;
+            assert!(artist.validate().is_err(), "{width} mm must fail");
+        }
+
+        artist.logo.width_mm = DEFAULT_LOGO_WIDTH_MM;
+        artist.logo.file_name = Some("../escape.png".into());
+        assert!(artist.validate().is_err());
+        artist.logo.file_name = Some("nested/logo.png".into());
+        assert!(artist.validate().is_err());
+        artist.logo.file_name = Some("band.png".into());
+        assert!(artist.validate().is_ok());
+    }
+
+    #[test]
+    fn legacy_song_json_without_artist_id_loads_as_none() {
+        let legacy = r#"{
+            "id": "0f8c7a6e-2b3d-4c5e-8f90-1a2b3c4d5e6f",
+            "title": "Old Song",
+            "artist": "The Band",
+            "bpm": 120,
+            "key": "Em",
+            "tuning": "Drop D",
+            "duration_secs": 240,
+            "notes": null
+        }"#;
+
+        let song: Song = serde_json::from_str(legacy).expect("legacy song parses");
+        assert_eq!(song.artist_id, None);
+        assert_eq!(song.artist.as_deref(), Some("The Band"));
+        assert!(song.validate().is_ok());
+    }
+
+    #[test]
+    fn song_artist_id_and_name_snapshot_survive_round_trip() {
+        let artist_id = Uuid::new_v4();
+        let song = Song {
+            artist: Some("The Band".into()),
+            artist_id: Some(artist_id),
+            ..Song::new("Opener")
+        };
+
+        let json = serde_json::to_string(&song).expect("serialize song");
+        assert!(json.contains(&format!("\"artist_id\":\"{artist_id}\"")));
+        assert!(json.contains("\"artist\":\"The Band\""));
+
+        let decoded: Song = serde_json::from_str(&json).expect("deserialize song");
+        assert_eq!(decoded, song);
+        assert_eq!(decoded.artist_id, Some(artist_id));
+        assert_eq!(decoded.artist.as_deref(), Some("The Band"));
+    }
+
+    #[test]
+    fn dangling_artist_ids_are_valid_on_songs_and_setlists() {
+        let missing = Uuid::new_v4();
+
+        let song = Song {
+            artist_id: Some(missing),
+            ..Song::new("Orphan")
+        };
+        assert!(
+            song.validate().is_ok(),
+            "dangling ids resolve as unresolved, not as validation errors"
+        );
+
+        let mut setlist = Setlist::new("Gig");
+        setlist.artist_id = Some(missing);
+        assert!(setlist.validate().is_ok());
+    }
+
+    #[test]
+    fn legacy_setlist_without_artist_id_loads_as_none() {
+        let legacy = serde_json::json!({
+            "id": Uuid::new_v4(),
+            "title": "Old Gig",
+            "venue": null,
+            "date": null,
+            "items": [],
+            "logo": {
+                "file_name": null,
+                "width_mm": 40.0,
+                "alignment": "Center"
+            }
+        });
+
+        let setlist: Setlist = serde_json::from_value(legacy).expect("pre-feature setlist parses");
+        assert_eq!(setlist.artist_id, None);
+    }
+
+    #[test]
+    fn setlist_artist_id_round_trips() {
+        let artist_id = Uuid::new_v4();
+        let mut setlist = sample_setlist();
+        setlist.artist_id = Some(artist_id);
+
+        let json = serde_json::to_string(&setlist).expect("serialize setlist");
+        assert!(json.contains(&format!("\"artist_id\":\"{artist_id}\"")));
+        let decoded: Setlist = serde_json::from_str(&json).expect("deserialize setlist");
+
+        assert_eq!(decoded, setlist);
+        assert_eq!(decoded.artist_id, Some(artist_id));
     }
 
     #[test]

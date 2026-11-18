@@ -20,12 +20,13 @@ in `SKILL.md`; agent notes live in `AGENTS.md`.
 
 ```text
 src/
-  main.ts            app shell, editor, song library, logo controls
+  main.ts            app shell, editor, song library, artist records, logo controls
   sheet.ts           renders #setlist-sheet (table markup, per-combination widths)
   pages.ts           paginates the sheet into A4 frames for multiple-page mode
   types.ts           TypeScript mirror of the Rust IPC/JSON models
   api.ts             typed wrappers around the Tauri commands
-  backup.ts          versioned one-file library/setlist backup + restore
+  artists.ts         artist display names, counts, and logo resolution helpers
+  backup.ts          versioned one-file artist/song/setlist backup + restore
   logo.ts            reads stored logos from the app-data directory
   exporter.ts        PDF/PNG raster export + save/open flow
   format.ts          duration/date helpers
@@ -35,7 +36,7 @@ src/
 src-tauri/
   src/lib.rs         shared entry point for desktop and mobile
   src/main.rs        desktop binary; calls stagesheet_lib::run()
-  src/models.rs      Song, SetlistItem, SheetOptions, PageMode, LogoConfig, Setlist (+ tests)
+  src/models.rs      Artist, Song, SetlistItem, SheetOptions, PageMode, LogoConfig, Setlist (+ tests)
   src/storage.rs     JSON persistence in <app_data_dir>/stagesheet (+ tests)
   src/commands.rs    async #[tauri::command] handlers
   src/error.rs       thiserror AppError (serialized to the frontend)
@@ -108,6 +109,7 @@ Everything is local JSON under the platform app-data directory:
 ```text
 <app_data_dir>/stagesheet/
 ├── songs.json            # Vec<Song>
+├── artists.json          # Vec<Artist>
 ├── setlists/<uuid>.json  # one Setlist per file
 └── logos/<uuid>.<ext>    # imported PNG/JPEG/SVG files
 ```
@@ -120,21 +122,41 @@ Logos are validated by content (PNG/JPEG magic bytes, SVG root tag), capped at 5
 and stored under a generated UUID name. Absolute paths are never persisted. Raster
 logos whose longest edge exceeds 1024 px are decoded and downscaled on import with
 the aspect ratio preserved (PNG stays PNG, JPEG stays JPEG at quality 85); SVGs are
-stored byte-for-byte and stay vector.
+stored byte-for-byte and stay vector. Setlists and artists share this logo pool.
+Removing a logo skips files still referenced by a setlist or artist record.
 
 ## Song library
 
 The library pane keeps reusable songs and offers instant search across title,
-artist, key, and tuning. A view-only sort control orders the list by title
-(default), artist, key, or tuning; missing values sort last and ties fall back to
-title. The **Has tuning** checkbox narrows the list to songs with a tuning set and
-combines with the search query. Each row adds the song to the running order,
-duplicates it into the library under a new id with a `(copy)` suffix, or removes
-it after a confirmation. **Edit** opens an inline editor in the row with the same
-fields and validation as the add form; saving keeps the song's id and re-applies
-the current search, sort, and tuning filter, while saved setlists keep their own
+artist, key, and tuning. Search matches the resolved artist name, so songs
+assigned to an artist record and older free-text songs filter identically. A
+view-only sort control orders the list by title (default), resolved artist name,
+key, or tuning; missing values sort last and ties fall back to title. The **Has
+tuning** checkbox narrows the list to songs with a tuning set and combines with
+the search query. Each row adds the song to the running order, duplicates it
+into the library under a new id with a `(copy)` suffix, or removes it after a
+confirmation. **Edit** opens an inline editor in the row with the same fields
+and validation as the add form; saving keeps the song's id and re-applies the
+current search, sort, and tuning filter, while saved setlists keep their own
 copies. Sorting and filtering never mark a setlist dirty or change the stored
 data.
+
+### Artists
+
+The same pane has an **Artists** section with logo thumbnails and resolved song
+counts. **New artist** takes a name and the same logo upload, width, and
+alignment controls as a setlist; each row's Edit action reuses that form for
+name and logo changes, and Delete confirms first. Renaming never rewrites songs
+or setlists: they reference the record by id, and the record name wins in the
+library display, search, and sort. Song add/edit forms offer **No artist** plus
+every record; legacy free-text songs get a "Keep text" option until they are
+adopted. Deleting an artist clears referencing `artist_id` values best-effort,
+keeps each song's last name snapshot, and leaves its logo file alone while a
+setlist or another artist still uses it. Entering or cancelling edit mode
+updates the row's editing state immediately; a pending logo import holds the
+artist Save until it finishes; and Delete is refused while a library song
+edit/save is in flight and locks library row actions while references are
+cleared.
 
 ## Backup and restore
 
@@ -145,38 +167,45 @@ human-readable JSON file:
 {
   "schema_version": 1,
   "exported_at": "2026-11-17T18:30:00.000Z",
+  "artists": [ /* Artist[] */ ],
   "songs": [ /* Song[] */ ],
   "setlists": [ /* Setlist[] */ ]
 }
 ```
 
-The envelope includes every current field (tuning, sheet options, page mode,
-labels, comments, and logo width/alignment). Break lengths are written as
-`duration_secs`; schema-1 backups from older builds may still carry
-`duration_mins` and are converted × 60 on restore. Restore is frontend-only: it
-reads the file through the dialog-scoped `fs` permission, validates the
-envelope, and re-saves each record through `save_song` / `save_setlist`, so Rust
-validation and serde defaults remain the authority. Older schema versions are
-migrated before saving; a `schema_version` newer than the build supports is
-rejected with a clear "update StageSheet" message instead of being partially
-imported.
+The envelope includes every current field (artist references, tuning, sheet
+options, page mode, labels, comments, and logo width/alignment). Break lengths
+are written as `duration_secs`; schema-1 backups from older builds may still
+carry `duration_mins` and are converted × 60 on restore. Restore is
+frontend-only: it reads the file through the dialog-scoped `fs` permission,
+validates the envelope, and re-saves each record through `save_artist` /
+`save_song` / `save_setlist`, so Rust validation and serde defaults remain the
+authority. Artists are restored first, then songs, then setlists, so
+assignments resolve immediately; an absent `artists` array in an older backup
+restores as an empty list, and `artist_id` values are preserved even when the
+record does not exist yet. Older schema versions are migrated before saving; a
+`schema_version` newer than the build supports is rejected with a clear "update
+StageSheet" message instead of being partially imported.
 
-Restore overwrites existing songs and setlists with the same IDs and does not
-delete anything else. Malformed records are skipped and reported with counts.
-Back up and Restore require open library drafts to be saved or cancelled first
-and refuse while a library write is in flight. Back up locks library row actions
-and the Add submit while it reads the snapshot; Restore does the same during its
-write phase and re-enables them when the restore finishes (after adopting on
-success or after the failure path). The setlist editor and header actions are
-not locked, and a setlist draft edited during a restore can be replaced by the
-restored state.
+Restore overwrites existing artists, songs, and setlists with the same IDs and
+does not delete anything else. Malformed records are skipped and reported with
+counts. Back up and Restore require open library drafts and non-pristine artist
+forms (edit mode, a typed name, or a changed logo/width/alignment) to be saved
+or cancelled first. Both refuse while any library/artist write or artist logo
+import is in flight, and Restore re-checks the guard after reading the file.
+Back up locks library row actions, the Add submit, artist rows, and the artist
+form while it reads the snapshot; Restore does the same during its write phase
+and re-enables them when the restore finishes (after adopting on success or
+after the failure path). The setlist editor and header actions are not locked,
+and a setlist draft edited during a restore can be replaced by the restored
+state.
 
-**Logo images are not embedded in v1**: a setlist keeps its `logo.file_name`, so
-restoring on the same device keeps working, but on a new device the image is
-missing and must be re-imported manually for each setlist. A later envelope
+**Logo images are not embedded in v1**: setlists and artists keep their
+`logo.file_name`, so restoring on the same device keeps working, but on a new
+device the image is missing and must be re-imported manually. A later envelope
 version can embed the bytes.
 
-No new Tauri commands or capabilities were added: writing and reading use
+Backup/restore adds no Tauri commands or capabilities: writing and reading use
 `dialog.save` / `dialog.open` plus the existing scoped `fs` plugin, with the
 selected file added to the scope for that one operation.
 
@@ -196,6 +225,7 @@ then writes the chosen file.
 All command handlers are async and return `Result<T, AppError>`:
 
 - `list_songs`, `save_song`, `delete_song`
+- `list_artists`, `save_artist`, `delete_artist`
 - `list_setlists`, `get_setlist`, `save_setlist`, `delete_setlist`
 - `reorder_items(setlist_id, from, to)`, `setlist_duration(setlist_id)`
 - `import_logo(bytes, file_name)`, `remove_logo(file_name)`
@@ -217,12 +247,21 @@ change.
   `NaiveDate`, and created/updated timestamps, with migration-friendly serde
   defaults and aliases.
 - JSON storage + capability scoping + the full command list above.
-- Song library with instant search (title, artist, key, tuning), view-only sort by
-  title/artist/key/tuning, a "Has tuning" filter, one-click add, inline row
-  editing with the add form's validation and field limits (stable id, re-sorted
-  and re-filtered after save), per-row duplicate under a new id, and delete with
-  confirmation. Free-text tuning (max 24 chars) is part of search, the add form,
-  the library editor, and each setlist song's editor details.
+- Song library with instant search (title, resolved artist, key, tuning),
+  view-only sort by title/resolved artist/key/tuning, a "Has tuning" filter,
+  one-click add, inline row editing with the add form's validation and field
+  limits (stable id, re-sorted and re-filtered after save), per-row duplicate
+  under a new id, and delete with confirmation. Free-text tuning (max 24 chars)
+  is part of search, the add form, the library editor, and each setlist song's
+  editor details.
+- Managed artist records (name + logo) in the library pane with logo
+  thumbnails, resolved song counts, an inline create/edit form using the setlist
+  logo controls, and confirmed delete. Songs reference artists by id while
+  keeping a name snapshot; renaming updates display without rewriting songs or
+  setlists, deleting clears references best-effort and reports failures, and
+  legacy free-text artists remain as a display fallback (and a "Keep text"
+  option) until adopted. Artist logos share the `import_logo` pool and removal
+  skips files any setlist or artist still references.
 - Setlist editor: title/venue/date, break insertion (custom label, `mm:ss`
   length, comment), up/down + drag reorder, inline BPM/key/tuning editing,
   Comment fields for songs and breaks (max 140 chars) that render on the sheet,
@@ -277,19 +316,20 @@ change.
 - GitHub Actions regression gate (`.github/workflows/ci.yml`): Node 20 frontend
   build plus `cargo test` on `ubuntu-latest` with the webkit2gtk-4.1 packages,
   cached npm/Cargo downloads. No secrets, bundles, signing, or mobile builds.
-- One-file backup/restore of the whole song library and every setlist as a
-  versioned JSON envelope (`schema_version: 1`), written and read through the
-  dialog-scoped fs permission with no new commands or capability widening.
-  Restore validates records, re-saves them through the normal commands, and
-  reports imported/rejected counts; future schema versions are rejected until
-  the app supports them, older ones can migrate forward. Logos are not embedded
-  in v1 and are re-imported manually.
+- One-file backup/restore of artists, the whole song library, and every setlist
+  as a versioned JSON envelope (`schema_version: 1`), written and read through
+  the dialog-scoped fs permission with no new commands or capability widening.
+  Restore validates records, re-saves them through the normal commands
+  (artists first), and reports imported/rejected counts; future schema versions
+  are rejected until the app supports them, older ones can migrate forward.
+  Logos are not embedded in v1 and are re-imported manually.
 
 ### Still missing (per plan)
 
-- Planned library/setlist tooling (Features 13–16, Todo): setlist duplication as
-  a preset base, managed artists (name + logo) with record-based library filter
-  and per-artist setlist picker + lock.
+- Remaining artist-chain tooling: Feature 15 (in-memory library artist filter)
+  and Feature 16 (setlist artist, per-artist setlist picker, and toggleable add
+  lock). Their data fields and logo-resolution helper groundwork ship with
+  Feature 14. Setlist duplication (Feature 13) remains Todo.
 - Paginated split-setlist helper (duplicate setlist, move second half) as an
   alternative to multi-page mode.
 - Physical-paper QA on A4 (page count, header/footer per engine, legibility),

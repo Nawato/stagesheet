@@ -4,10 +4,12 @@ Per-feature specs for what ships next, ordered by priority. The current data
 contract lives in `SKILL.md`; these specs extend it and must update it in the
 same commit. Statuses: **Todo** / **In progress** / **Done**.
 
-Context: `Song` today is `{ title, artist, bpm, key, tuning, duration_secs,
-notes }` (`src-tauri/src/models.rs`, `src/types.ts`), with `artist` as free
-text and no artist records. Setlist items store Song *copies* (deliberate:
-editing the library never rewrites saved setlists). The sheet defaults to a
+Context: before Feature 14, `Song` was `{ title, artist, bpm, key, tuning,
+duration_secs, notes }` (`src-tauri/src/models.rs`, `src/types.ts`), with
+`artist` as free text and no artist records. Setlist items store Song *copies*
+(deliberate: editing the library never rewrites saved setlists). Feature 14 has
+since added managed `Artist` records plus `Song.artist_id`/`Setlist.artist_id`
+with the legacy text as a display fallback. The sheet defaults to a
 single A4 page with auto-fit shrink (`--sheet-fit`, min 50%), implemented in
 `main.ts` (`fitSheetToPage`) and `print.css`; per-setlist `page_mode`
 (Feature 5) opts into multiple pages instead. Column widths come from
@@ -30,8 +32,9 @@ written (legacy `artist` text stays as a display fallback until adopted).
 
 Full specs lived here until the 2026-11 cleanup; the contract facts below are
 all mirrored in `SKILL.md`, which is now the single authority for shipped
-behavior. Features 12 (edit library songs), 17 (break seconds), and 18
-(setlist Delete-clarity) are Done; their specs remain below as reference.
+behavior. Features 12 (edit library songs), 14 (artist records with logos),
+17 (break seconds), and 18 (setlist Delete-clarity) are Done; their specs remain
+below as reference.
 
 - **Validation hardening (with Feature 2)** — Done. `Setlist::validate()` walks
   every item. Bounds enforced in Rust: break `duration_secs` `0..=36000` (the
@@ -88,6 +91,11 @@ behavior. Features 12 (edit library songs), 17 (break seconds), and 18
   with cloned brand header and footer; the tall sheet stays as the
   export/measurement source. Frame count equals exported PDF page count.
   WebKitGTK frames are normalized with `zoom: 0.885` in print.
+- **Feature 14: Artist records with logos** — Done. `artists.json` +
+  `list_artists` / `save_artist` / `delete_artist`; shared logo pool;
+  `Song.artist_id` with name snapshot fallback; declared `Setlist.artist_id`
+  for Feature 16; library Artists section and song dropdowns; additive
+  schema-1 backup `artists` array. Renames never rewrite songs/setlists.
 
 ## Feature 12: Edit library songs — Done
 
@@ -135,8 +143,8 @@ None. `save_song` already upserts by `id` (`storage.rs`), and `Song::validate`
 already enforces the add-form bounds (non-empty title, tuning ≤ 24, comment ≤
 140 after trim). Re-saving an edited song keeps its id; setlist items hold
 copies, so saved setlists are untouched — the same guarantee Duplicate relies
-on. No serde, storage, backup, or IPC change. (After Feature 14 the artist
-field is a record dropdown; until then it stays the free-text input.)
+on. No serde, storage, backup, or IPC change. (Since Feature 14 the artist
+field is the record dropdown described there.)
 
 ### UI
 
@@ -145,7 +153,7 @@ field is a record dropdown; until then it stays the free-text input.)
   fields and limits as the "Add to library" form (title required, BPM 1–400,
   duration `mm:ss`, tuning `maxlength=24`, comment `maxlength=140`).
 - **Save** re-saves through `save_song` with the stable id, then re-sorts and
-  re-renders the library (including the Feature 15 artist list); **Cancel**
+  re-renders the library (including the Feature 14 artist counts); **Cancel**
   discards without touching the cache. Field-level error messages match the
   add form; failures report through the status line.
 - The status line confirms with `Updated “<title>” in the library. Setlists
@@ -249,13 +257,40 @@ time.
 3. Remaining overflow slice stays open: split-setlist (move second half to a
   new setlist) as the alternative to multi-page mode.
 
-## Feature 14: Artist records with logos — Todo
+## Feature 14: Artist records with logos — Done
 
-Status: Todo, builds before Features 15–16. From user feedback: artists must
+Status: Done, builds before Features 15–16. From user feedback: artists must
 be creatable in one place — name plus logo — and songs (and later setlists)
 are assigned to an artist there, instead of retyping free text on every song.
 This replaces free-text matching everywhere new code is written; legacy
 `Song.artist` text stays as a display fallback until adopted.
+
+### Shipped notes
+
+`Artist { id, name, logo }` lives in `artists.json` and shares the setlist logo
+pool (`import_logo`, downscale, and the reference-aware `remove_logo`).
+`Song.artist_id` stores the record reference while `artist` keeps the current
+name snapshot/legacy text; `Setlist.artist_id` is declared for Feature 16 but
+not wired into the editor, header picker, or lock yet. The library pane gained
+an Artists section (logo thumbnails, resolved counts, one shared create/edit
+form with name + logo/width/alignment, confirmed delete), and both song forms
+use artist dropdowns with a "Keep text" option for unassigned legacy songs.
+Renaming never rewrites songs or setlists; `resolveArtistName()` drives library
+display/search/sort, `resolveArtistForSong()` drives counts and the future
+filter, and `resolveSetlistLogo()` holds the own-logo → artist-logo →
+placeholder chain for Feature 16. Delete nulls song/setlist ids through
+best-effort `save_*` loops, keeps snapshots, reports per-record failures, and
+only then deletes the record and attempts logo cleanup. Backups carry an
+additive schema-1 `artists` array and restore artists first, then songs, then
+setlists. Follow-up hardening: Back up/Restore treat edit mode, a typed artist
+name, or a changed logo/width/alignment as an artist draft and refuse with a
+titled message (a pristine empty form does not block), and Restore re-checks
+after reading the file; entering/cancelling edit updates `is-editing` and
+`aria-expanded` immediately; a pending logo import disables/rejects the artist
+Save and blocks backup/restore until it finishes; artist Delete refuses during a
+library song write or inline draft and locks library row actions while clearing
+references. Manual QA for the artist CRUD, logo chain, and backup round trip is
+listed below.
 
 ### Data model
 
@@ -310,12 +345,17 @@ This replaces free-text matching everywhere new code is written; legacy
   without `artist_id` loads as `None`; id + snapshot survive a round trip;
   logo bounds shared with setlists; `cargo test` green.
 - `npm run build` clean.
-- Manual QA: create/rename/delete artist; rename reflects in library +
-  setlists without touching them; delete nulls references (snapshots shown,
-  setlists unlocked, nothing else deleted); logo resolution chain
-  (setlist → artist → placeholder) in preview and export; backup/restore
-  round trip incl. artists; old-build restore drops artists but keeps
-  songs/setlists (documented, accepted).
+- Manual QA: create/rename/delete artist; rename reflects in the library
+  display/search/sort without touching songs or setlists; delete nulls
+  references (snapshots shown, setlist ids cleared, nothing else deleted);
+  edit/cancel immediately reflects `is-editing`/`aria-expanded`; a pending logo
+  import holds Save and blocks backup/restore; typed/edit/changed-logo artist
+  drafts block backup/restore while a pristine empty form does not; artist
+  delete is blocked during a library song write/draft and library rows lock
+  during cleanup; logo resolution chain helper (setlist → artist → placeholder)
+  is covered by code review now and wired into preview/export by Feature 16;
+  backup/restore round trip incl. artists; old-build restore drops artists but
+  keeps songs/setlists (documented, accepted).
 
 ### Build order
 
@@ -559,10 +599,10 @@ misread instead of adding new behavior.
   (multi-page mode + sub-70% legibility nudge). Feature 13 adds setlist
   duplication; the remaining slice is a split-setlist helper (move second half
   to a new setlist) as an alternative to multi-page.
-- **P1 — Library/setlist tooling**: Features 12 (edit library songs),
-  17 (break seconds), and 18 (delete clarity) are Done. Feature 13 (duplicate
-  setlist as preset base) remains independent and Todo. Then the artist chain
-  in order: 14 (artist records + logos) → 15 (library artist filter) →
+- **P1 — Library/setlist tooling**: Features 12 (edit library songs), 14
+  (artist records + logos), 17 (break seconds), and 18 (delete clarity) are
+  Done. Feature 13 (duplicate setlist as preset base) remains independent and
+  Todo. Then the remaining artist chain in order: 15 (library artist filter) →
   16 (setlist artist + per-artist picker + lock).
 - **P1 — Backup/restore**: Done (Feature 7). One versioned JSON envelope for
   the full library + setlists; logos are re-imported manually in v1.

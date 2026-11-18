@@ -1,12 +1,16 @@
 /** Thin typed wrappers around the Tauri commands in `src-tauri/src/commands.rs`. */
 
 import { invoke } from "@tauri-apps/api/core";
-import type { Setlist, Song } from "./types";
+import type { Artist, Setlist, Song } from "./types";
 
 export const api = {
   listSongs: () => invoke<Song[]>("list_songs"),
   saveSong: (song: Song) => invoke<Song>("save_song", { song }),
   deleteSong: (id: string) => invoke<void>("delete_song", { id }),
+
+  listArtists: () => invoke<Artist[]>("list_artists"),
+  saveArtist: (artist: Artist) => invoke<Artist>("save_artist", { artist }),
+  deleteArtist: (id: string) => invoke<void>("delete_artist", { id }),
 
   listSetlists: () => invoke<Setlist[]>("list_setlists"),
   getSetlist: (id: string) => invoke<Setlist>("get_setlist", { id }),

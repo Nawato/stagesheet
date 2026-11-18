@@ -552,6 +552,154 @@ input[type="file"]::file-selector-button {
 }
 
 /* -------------------------------------------------------------------------
+   Artists section (Feature 14)
+   ------------------------------------------------------------------------- */
+
+.artists-section {
+  padding-top: 14px;
+  margin-top: 18px;
+  border-top: 1px dashed var(--line);
+}
+
+.artist-heading {
+  margin-bottom: 8px;
+}
+
+.artist-heading h3 {
+  margin: 0;
+  font-size: 12px;
+  font-weight: 800;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+}
+
+.artist-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  max-height: 230px;
+  margin: 0 0 12px;
+  padding: 0;
+  overflow-y: auto;
+  list-style: none;
+}
+
+.artist-item {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  padding: 6px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: #fdfcf9;
+}
+
+.artist-item.is-editing {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px rgb(23 86 74 / 0.12);
+}
+
+.artist-thumb {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  width: 44px;
+  height: 44px;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--paper);
+  color: var(--ink-soft);
+  font-size: 13px;
+}
+
+.artist-thumb-img {
+  max-width: 100%;
+  max-height: 100%;
+  object-fit: contain;
+}
+
+.artist-info {
+  display: flex;
+  flex: 1 1 120px;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+}
+
+.artist-name {
+  overflow: hidden;
+  font-weight: 650;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.artist-meta {
+  color: var(--ink-soft);
+  font-size: 12px;
+}
+
+.artist-actions {
+  display: flex;
+  flex: 0 0 auto;
+  gap: 2px;
+  margin-left: auto;
+}
+
+.artist-form {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.artist-form h3 {
+  margin: 0;
+  font-size: 12px;
+  font-weight: 800;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+}
+
+.artist-logo-preview-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.artist-logo-preview {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  width: 64px;
+  height: 64px;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: #fbfaf7;
+}
+
+.artist-logo-preview-img {
+  max-width: 100%;
+  max-height: 100%;
+  object-fit: contain;
+}
+
+.artist-logo-preview-empty {
+  color: var(--ink-soft);
+  font-size: 11px;
+  text-align: center;
+}
+
+.artist-form-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+/* -------------------------------------------------------------------------
    Setlist editor
    ------------------------------------------------------------------------- */
 
@@ -1495,6 +1643,11 @@ input[type="file"]::file-selector-button {
 
   .logo-row {
     flex-wrap: wrap;
+  }
+
+  .artist-logo-preview {
+    width: 56px;
+    height: 56px;
   }
 
   .segmented span {

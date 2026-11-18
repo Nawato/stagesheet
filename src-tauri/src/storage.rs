@@ -4,6 +4,7 @@
 //!
 //! ```text
 //! songs.json            reusable song library
+//! artists.json          managed artists (name + logo)
 //! setlists/<uuid>.json  one file per setlist
 //! logos/<uuid>.<ext>    imported band logos
 //! ```
@@ -24,7 +25,7 @@ use tokio::sync::Mutex;
 use uuid::Uuid;
 
 use crate::error::AppError;
-use crate::models::{Setlist, Song, is_plain_file_name};
+use crate::models::{Artist, Setlist, Song, is_plain_file_name};
 
 /// Maximum accepted logo file size (5 MiB).
 pub const MAX_LOGO_BYTES: usize = 5 * 1024 * 1024;
@@ -69,6 +70,10 @@ impl Storage {
 
     fn songs_path(&self) -> PathBuf {
         self.root.join("songs.json")
+    }
+
+    fn artists_path(&self) -> PathBuf {
+        self.root.join("artists.json")
     }
 
     fn setlists_dir(&self) -> PathBuf {
@@ -125,6 +130,53 @@ impl Storage {
         }
 
         self.write_json(&self.songs_path(), &songs).await
+    }
+
+    // ---------------------------------------------------------------------
+    // Artists
+    // ---------------------------------------------------------------------
+
+    pub async fn list_artists(&self) -> Result<Vec<Artist>, AppError> {
+        Ok(self
+            .read_json::<Vec<Artist>>(&self.artists_path())
+            .await?
+            .unwrap_or_default())
+    }
+
+    pub async fn save_artist(&self, artist: &Artist) -> Result<(), AppError> {
+        artist.validate().map_err(AppError::InvalidInput)?;
+
+        let _guard = self.write_lock.lock().await;
+        let mut artists = self
+            .read_json::<Vec<Artist>>(&self.artists_path())
+            .await?
+            .unwrap_or_default();
+
+        match artists.iter_mut().find(|existing| existing.id == artist.id) {
+            Some(existing) => *existing = artist.clone(),
+            None => artists.push(artist.clone()),
+        }
+
+        self.write_json(&self.artists_path(), &artists).await
+    }
+
+    /// Deletes the artist record only. References in songs and setlists are
+    /// cleared by the frontend through `save_song`/`save_setlist` loops, so an
+    /// interrupted delete leaves dangling ids that load as unresolved.
+    pub async fn delete_artist(&self, id: Uuid) -> Result<(), AppError> {
+        let _guard = self.write_lock.lock().await;
+        let mut artists = self
+            .read_json::<Vec<Artist>>(&self.artists_path())
+            .await?
+            .unwrap_or_default();
+
+        let initial_len = artists.len();
+        artists.retain(|artist| artist.id != id);
+        if artists.len() == initial_len {
+            return Err(AppError::ArtistNotFound(id));
+        }
+
+        self.write_json(&self.artists_path(), &artists).await
     }
 
     // ---------------------------------------------------------------------
@@ -259,8 +311,12 @@ impl Storage {
         Ok(file_name)
     }
 
-    /// Removes a stored logo. Missing files are treated as success so callers
-    /// can safely clear stale configuration.
+    /// Removes a stored logo unless a setlist or artist record still references
+    /// it. Missing files are treated as success so callers can safely clear
+    /// stale configuration.
+    ///
+    /// The reference check runs under the write lock: a concurrent save cannot
+    /// slip a reference in between the check and the delete.
     pub async fn remove_logo(&self, file_name: &str) -> Result<(), AppError> {
         if !is_plain_file_name(file_name) {
             return Err(AppError::InvalidInput(
@@ -269,11 +325,40 @@ impl Storage {
         }
 
         let _guard = self.write_lock.lock().await;
+
+        if self.logo_is_referenced(file_name).await? {
+            return Ok(());
+        }
+
         match tokio::fs::remove_file(self.logos_dir().join(file_name)).await {
             Ok(()) => Ok(()),
             Err(error) if error.kind() == ErrorKind::NotFound => Ok(()),
             Err(error) => Err(error.into()),
         }
+    }
+
+    /// Returns true while a stored setlist or artist record points at the file.
+    ///
+    /// Caller must hold `write_lock`. Unreadable JSON is an error rather than a
+    /// reason to delete: keeping an unreferenced file is harmless, deleting a
+    /// referenced one is not.
+    async fn logo_is_referenced(&self, file_name: &str) -> Result<bool, AppError> {
+        let artists = self
+            .read_json::<Vec<Artist>>(&self.artists_path())
+            .await?
+            .unwrap_or_default();
+        if artists
+            .iter()
+            .any(|artist| artist.logo.file_name.as_deref() == Some(file_name))
+        {
+            return Ok(true);
+        }
+
+        Ok(self
+            .list_setlists()
+            .await?
+            .iter()
+            .any(|setlist| setlist.logo.file_name.as_deref() == Some(file_name)))
     }
 
     // ---------------------------------------------------------------------
@@ -455,6 +540,114 @@ mod tests {
             storage.delete_song(song.id).await,
             Err(AppError::SongNotFound(id)) if id == song.id
         ));
+    }
+
+    #[tokio::test]
+    async fn artist_crud_round_trips() {
+        let (_dir, storage) = storage();
+        let mut artist = Artist::new("  The Band  ");
+        artist.logo.alignment = LogoAlignment::Left;
+        artist.logo.width_mm = 32.0;
+
+        storage.save_artist(&artist).await.expect("create");
+        let artists = storage.list_artists().await.expect("list");
+        assert_eq!(artists, vec![artist.clone()]);
+
+        artist.name = "The Band (renamed)".into();
+        storage.save_artist(&artist).await.expect("update");
+        let artists = storage.list_artists().await.expect("list");
+        assert_eq!(artists.len(), 1, "upsert must not duplicate rows");
+        assert_eq!(artists[0].name, "The Band (renamed)");
+
+        storage.delete_artist(artist.id).await.expect("delete");
+        assert!(storage.list_artists().await.expect("list").is_empty());
+        assert!(matches!(
+            storage.delete_artist(artist.id).await,
+            Err(AppError::ArtistNotFound(id)) if id == artist.id
+        ));
+    }
+
+    #[tokio::test]
+    async fn artist_save_rejects_blank_names_and_bad_logos() {
+        let (_dir, storage) = storage();
+
+        let mut artist = Artist::new("The Band");
+        artist.name = "   ".into();
+        assert!(matches!(
+            storage.save_artist(&artist).await,
+            Err(AppError::InvalidInput(message)) if message.contains("artist name")
+        ));
+
+        artist.name = "The Band".into();
+        artist.logo.width_mm = 81.0;
+        assert!(matches!(
+            storage.save_artist(&artist).await,
+            Err(AppError::InvalidInput(message)) if message.contains("logo width")
+        ));
+        assert!(storage.list_artists().await.expect("list").is_empty());
+    }
+
+    #[tokio::test]
+    async fn remove_logo_skips_referenced_files() {
+        let (_dir, storage) = storage();
+        let png = raster_bytes(16, 16, ImageFormat::Png);
+        let file_name = storage
+            .import_logo("shared.png", &png)
+            .await
+            .expect("import shared logo");
+        let logo_path = storage.logos_dir().join(&file_name);
+
+        let mut artist = Artist::new("The Band");
+        artist.logo.file_name = Some(file_name.clone());
+        storage.save_artist(&artist).await.expect("save artist");
+
+        storage
+            .remove_logo(&file_name)
+            .await
+            .expect("referenced logo removal is a no-op");
+        assert!(logo_path.exists(), "an artist reference must keep the file");
+
+        let mut setlist = Setlist::new("Gig");
+        setlist.logo.file_name = Some(file_name.clone());
+        storage.save_setlist(&setlist).await.expect("save setlist");
+        storage
+            .delete_artist(artist.id)
+            .await
+            .expect("delete artist record");
+        storage
+            .remove_logo(&file_name)
+            .await
+            .expect("referenced logo removal is a no-op");
+        assert!(logo_path.exists(), "a setlist reference must keep the file");
+
+        storage
+            .delete_setlist(setlist.id)
+            .await
+            .expect("delete setlist");
+        storage
+            .remove_logo(&file_name)
+            .await
+            .expect("unreferenced logo is deleted");
+        assert!(!logo_path.exists());
+    }
+
+    #[tokio::test]
+    async fn song_artist_id_and_snapshot_round_trip_through_storage() {
+        let (_dir, storage) = storage();
+        let artist = Artist::new("The Band");
+        storage.save_artist(&artist).await.expect("save artist");
+
+        let song = Song {
+            artist: Some(artist.name.clone()),
+            artist_id: Some(artist.id),
+            ..Song::new("Opener")
+        };
+        storage.save_song(&song).await.expect("save song");
+
+        let songs = storage.list_songs().await.expect("list songs");
+        assert_eq!(songs, vec![song]);
+        assert_eq!(songs[0].artist_id, Some(artist.id));
+        assert_eq!(songs[0].artist.as_deref(), Some("The Band"));
     }
 
     #[tokio::test]

@@ -10,7 +10,7 @@ mod storage;
 
 pub use error::AppError;
 pub use models::{
-    DEFAULT_LOGO_WIDTH_MM, LOGO_MAX_WIDTH_MM, LOGO_MIN_WIDTH_MM, LogoAlignment, LogoConfig,
+    Artist, DEFAULT_LOGO_WIDTH_MM, LOGO_MAX_WIDTH_MM, LOGO_MIN_WIDTH_MM, LogoAlignment, LogoConfig,
     Setlist, SetlistItem, Song,
 };
 pub use storage::Storage;
@@ -32,6 +32,9 @@ pub fn run() {
             commands::list_songs,
             commands::save_song,
             commands::delete_song,
+            commands::list_artists,
+            commands::save_artist,
+            commands::delete_artist,
             commands::list_setlists,
             commands::get_setlist,
             commands::save_setlist,

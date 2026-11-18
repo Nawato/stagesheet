@@ -130,12 +130,13 @@ harness were removed when the exporter shipped.
 - Sheet correctness fixes from real use: Feature 10 done (per-combination
   column widths + header alignment); Feature 11 done (paginated
   preview/print frames). Both outrank new tooling.
-- Library/setlist tooling slice: Feature 12 is Done, Feature 17 is Done,
-  Features 13–16 are Todo, and Feature 18 is Done. In-place library song
-  editing and break-second precision shipped; setlist duplication as a preset
-  base and the artist chain remain. Feature 13 is independent; 14 → 15 → 16
-  form the artist chain: 14 (artist records + logos) → 15 (library artist
-  filter) → 16 (setlist artist + per-artist picker + lock).
+- Library/setlist tooling slice: Feature 12 is Done, Feature 14 is Done,
+  Feature 17 is Done, Features 13, 15, and 16 are Todo, and Feature 18 is Done.
+  In-place library song editing, artist records + logos, and break-second
+  precision shipped; setlist duplication as a preset base and the remaining
+  artist-chain steps remain. Feature 13 is independent; 15 → 16 continue the
+  artist chain: 15 (library artist filter) → 16 (setlist artist + per-artist
+  picker + lock).
 - `tauri android init` / `ios init` on provisioned machines; native share.
 - Print QA on real A4 (checklist below), backup/restore, app versioning,
   signing/release automation (tracked in the roadmap, P3).
@@ -271,5 +272,20 @@ WebView2/WKWebView when available):**
   before re-checking the rendered fields (including Ctrl/Cmd+S while the field
   still has focus); the sheet, editor meta, preview, print, and export share
   `formatBreakDuration` (`11 sec` / `10 min` / `1 min 5 sec`). Totals keep
-  `formatRuntime`. No print/export structure change. Features 13–16 remain
-  Todo; 14 → 15 → 16 stay the artist chain.
+  `formatRuntime`. No print/export structure change. At that point Features
+  13–16 were Todo; 15 → 16 remain the artist-chain steps after Feature 14.
+- 2026-11-18: Feature 14 shipped (artist records with logos). `artists.json`
+  plus `list_artists` / `save_artist` / `delete_artist`, shared logo pool and a
+  reference-aware `remove_logo`; `Song.artist_id` with name-snapshot fallback
+  and legacy-text resolution, plus the declared `Setlist.artist_id` for
+  Feature 16. The library pane gained an Artists section (thumbnails, resolved
+  counts, shared create/edit form, confirmed delete with best-effort reference
+  cleanup and per-record reporting) and both song forms use record dropdowns
+  with a "Keep text" option. Renames never rewrite songs/setlists; the
+  `resolveSetlistLogo` chain is ready for Feature 16. Backup adds an additive
+  schema-1 `artists` array and restores artists → songs → setlists. Follow-up
+  review hardening: backup/restore treat non-pristine artist forms as drafts and
+  re-check after reading the restore file; artist edit visuals sync
+  immediately; logo imports lock artist Save; artist delete refuses during
+  library song writes/drafts and locks library rows while clearing references.
+  Features 13, 15, and 16 remain Todo.
