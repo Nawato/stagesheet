@@ -118,6 +118,8 @@ let artistLogoRequestId = 0;
 let artistLogoPreviewFailed = false;
 /** True while an artist create/update/delete request is in flight. */
 let artistBusy = false;
+/** True while the Logo width slider is saving an artist logo width. */
+let effectiveLogoSaving = false;
 /** True while an artist logo upload/import is in flight. */
 let artistLogoBusy = false;
 /** True while deleteArtist clears song/setlist references. */
@@ -294,6 +296,7 @@ const logoFileInput = byId<HTMLInputElement>("logo-file");
 const logoRemoveButton = byId<HTMLButtonElement>("logo-remove");
 const logoWidthInput = byId<HTMLInputElement>("logo-width");
 const logoWidthOutput = byId<HTMLOutputElement>("logo-width-value");
+const logoShowingEl = byId<HTMLParagraphElement>("logo-showing");
 const alignmentRadios = Array.from(
   document.querySelectorAll<HTMLInputElement>('input[name="logo-alignment"]'),
 );
@@ -379,6 +382,7 @@ function bindEvents(): void {
     current.artist_id = artists.some((artist) => artist.id === value) ? value : null;
     markDirty();
     renderSetlistArtistNote();
+    renderLogoControls();
     renderSummary();
     renderLibrary();
     renderSheet();
@@ -475,14 +479,27 @@ function bindEvents(): void {
   logoRemoveButton.addEventListener("click", handleLogoRemove);
   logoWidthInput.addEventListener("input", () => {
     if (!current) return;
-    current.logo.width_mm = clamp(
+    const width = clamp(
       Number(logoWidthInput.value),
       LOGO_MIN_WIDTH_MM,
       LOGO_MAX_WIDTH_MM,
     );
+    // Artist-logo path: live-update the label only; the `change` handler
+    // commits via `save_artist` without dirtying the setlist. Own and
+    // placeholder paths keep today's input-driven `setlist.logo` behavior.
+    if (effectiveLogoCase() === "artist") {
+      logoWidthOutput.textContent = `${Math.round(width)} mm`;
+      return;
+    }
+    current.logo.width_mm = width;
     logoWidthOutput.textContent = `${Math.round(current.logo.width_mm)} mm`;
     markDirty();
     renderSheet();
+  });
+  logoWidthInput.addEventListener("change", () => {
+    if (!current) return;
+    if (effectiveLogoCase() !== "artist") return;
+    void commitEffectiveArtistLogoWidth();
   });
   for (const radio of alignmentRadios) {
     radio.addEventListener("change", () => {
@@ -1501,25 +1518,13 @@ function renderSetlistArtistSection(): void {
 }
 
 /**
- * Explains the logo resolution chain when the setlist relies on its artist's
- * logo. The Logo controls still edit only the setlist's own config.
+ * Feature 16's Artist-section logo note moved to the Logo fieldset showing
+ * line (Feature 19). Kept as an always-hidden stub so the editor layout does
+ * not show the same note twice.
  */
 function renderSetlistArtistNote(): void {
-  if (!current) {
-    setlistArtistNote.hidden = true;
-    setlistArtistNote.textContent = "";
-    return;
-  }
-
-  const artist = findArtistById(artists, normalizeArtistId(current.artist_id));
-  if (current.logo.file_name || !artist?.logo.file_name) {
-    setlistArtistNote.hidden = true;
-    setlistArtistNote.textContent = "";
-    return;
-  }
-
-  setlistArtistNote.textContent = `Using the logo from “${artistLabel(artist)}” — the artist logo's width and alignment apply until this setlist has its own logo.`;
-  setlistArtistNote.hidden = false;
+  setlistArtistNote.hidden = true;
+  setlistArtistNote.textContent = "";
 }
 
 function artistLabel(artist: Artist): string {
@@ -1542,8 +1547,16 @@ function renderMeta(): void {
 function renderLogoControls(): void {
   if (!current) return;
 
-  logoWidthInput.value = String(current.logo.width_mm);
-  logoWidthOutput.textContent = `${Math.round(current.logo.width_mm)} mm`;
+  // Feature 19: the slider follows the displayed logo (own → artist →
+  // placeholder). The artist path shows the artist's width; own and
+  // placeholder paths show the setlist's own width (pre-sizing the next own
+  // logo when nothing is displayed yet).
+  const logoCase = effectiveLogoCase();
+  const effective = resolveSetlistLogo(current, artists);
+  const sliderWidth =
+    logoCase === "artist" ? effective.width_mm : current.logo.width_mm;
+  logoWidthInput.value = String(sliderWidth);
+  logoWidthOutput.textContent = `${Math.round(sliderWidth)} mm`;
   // Only the setlist's own logo can be removed here; an artist logo shown via
   // the resolution chain is not a setlist logo.
   logoRemoveButton.disabled = !current.logo.file_name && !logoPreviewIsLocal;
@@ -1551,6 +1564,45 @@ function renderLogoControls(): void {
   for (const radio of alignmentRadios) {
     radio.checked = radio.value === current.logo.alignment;
   }
+
+  renderLogoShowing();
+}
+
+/** Which logo the sheet currently displays (Feature 16 resolution). */
+function effectiveLogoCase(): "own" | "artist" | "none" {
+  if (!current) return "none";
+  if (current.logo.file_name) return "own";
+  const artist = findArtistById(artists, normalizeArtistId(current.artist_id));
+  if (artist?.logo.file_name) return "artist";
+  return "none";
+}
+
+/** The live artist record behind the artist-logo path, if any. */
+function effectiveLogoArtist(): Artist | null {
+  if (!current || current.logo.file_name) return null;
+  return findArtistById(artists, normalizeArtistId(current.artist_id));
+}
+
+/**
+ * Visible showing line so the slider's target is unambiguous. Matches the
+ * resolution chain in every case.
+ */
+function renderLogoShowing(): void {
+  if (!current) {
+    logoShowingEl.textContent = "No logo yet";
+    return;
+  }
+  const logoCase = effectiveLogoCase();
+  if (logoCase === "own") {
+    logoShowingEl.textContent = "Setlist logo";
+    return;
+  }
+  const artist = effectiveLogoArtist();
+  if (logoCase === "artist" && artist) {
+    logoShowingEl.textContent = `${artistLabel(artist)} logo (artist)`;
+    return;
+  }
+  logoShowingEl.textContent = "No logo yet";
 }
 
 function renderSheetOptions(): void {
@@ -3761,6 +3813,7 @@ async function handleArtistSubmit(event: SubmitEvent): Promise<void> {
     renderNewSongArtistOptions();
     renderSetlistArtistFilter();
     renderSetlistArtistSection();
+    renderLogoControls();
     renderLibrary();
     // A rename can change legacy-text identity and counts; a logo edit changes
     // this setlist's resolved logo width/alignment even when the file stays the
@@ -4038,6 +4091,111 @@ function clearArtistDraftForDeletedArtist(artistId: string, editingThis: boolean
 // Logo
 // ---------------------------------------------------------------------------
 
+/**
+ * Commits the Logo width slider for the artist-logo path (Feature 19).
+ * Only runs on `change` (release) so dragging never spams `save_artist`;
+ * at most one save is in flight at a time. The setlist itself is never
+ * dirtied: the artist record is what changed.
+ */
+async function commitEffectiveArtistLogoWidth(): Promise<void> {
+  if (!current) return;
+  if (effectiveLogoCase() !== "artist") {
+    renderLogoControls();
+    return;
+  }
+  const artist = effectiveLogoArtist();
+  if (!artist) {
+    renderLogoControls();
+    return;
+  }
+
+  const previousWidth = artist.logo.width_mm;
+  const desiredWidth = clamp(
+    Number(logoWidthInput.value),
+    LOGO_MIN_WIDTH_MM,
+    LOGO_MAX_WIDTH_MM,
+  );
+  if (desiredWidth === previousWidth) {
+    renderLogoControls();
+    return;
+  }
+
+  const revertSlider = (): void => {
+    logoWidthInput.value = String(previousWidth);
+    logoWidthOutput.textContent = `${Math.round(previousWidth)} mm`;
+  };
+
+  // Reuse the Feature 14 artist-edit guards: refuse while a backup/restore
+  // or artist-logo import is in flight, while another artist save runs, or
+  // while an artist draft for this artist is open.
+  if (effectiveLogoSaving || artistBusy) {
+    revertSlider();
+    setStatus("Wait for the current artist request to finish before changing the logo width.", "info");
+    return;
+  }
+  if (artistLogoBusy) {
+    revertSlider();
+    setStatus("Wait for the artist logo import to finish before changing the logo width.", "info");
+    return;
+  }
+  if (backingUp || restoring) {
+    revertSlider();
+    setStatus(
+      backingUp
+        ? "Backup in progress — wait for it to finish before changing the logo width."
+        : "Restore in progress — wait for it to finish before changing the logo width.",
+      "info",
+    );
+    return;
+  }
+  if (artistFormState.mode === "edit" && artistFormState.artistId === artist.id) {
+    revertSlider();
+    setStatus(
+      `Artist draft open — save or cancel the edit for “${artistLabel(artist)}” before changing the logo width.`,
+      "error",
+    );
+    return;
+  }
+  if (!ensureBackend()) {
+    revertSlider();
+    return;
+  }
+
+  effectiveLogoSaving = true;
+  artistBusy = true;
+  logoWidthInput.disabled = true;
+  setStatus(`Saving logo width for “${artistLabel(artist)}”…`);
+
+  try {
+    const updated: Artist = {
+      ...artist,
+      logo: { ...artist.logo, width_mm: desiredWidth },
+    };
+    const saved = await api.saveArtist(updated);
+    const index = artists.findIndex((entry) => entry.id === saved.id);
+    if (index >= 0) {
+      artists[index] = saved;
+    } else {
+      artists.push(saved);
+      artists.sort((left, right) => left.name.localeCompare(right.name));
+    }
+    renderLogoControls();
+    renderSheet();
+    setStatus(
+      `Updated logo width for “${artistLabel(saved)}” to ${Math.round(saved.logo.width_mm)} mm — applies to every setlist showing that artist's logo.`,
+      "success",
+    );
+  } catch (error) {
+    revertSlider();
+    renderSheet();
+    setStatus(`Could not save logo width: ${describeError(error)}`, "error");
+  } finally {
+    effectiveLogoSaving = false;
+    artistBusy = false;
+    logoWidthInput.disabled = false;
+  }
+}
+
 async function handleLogoFile(): Promise<void> {
   const file = logoFileInput.files?.[0];
   logoFileInput.value = "";
@@ -4063,6 +4221,17 @@ async function handleLogoFile(): Promise<void> {
   }
 
   const setlist = current;
+  // Feature 19: adopt the currently displayed logo's size/alignment so the
+  // replacement appears exactly where and how large the previous logo was.
+  // Own → no-op; artist → copies the artist width/alignment; neither →
+  // no-op (the slider already pre-sized the next own logo).
+  const displayed = resolveSetlistLogo(setlist, artists);
+  setlist.logo.width_mm = clamp(
+    displayed.width_mm,
+    LOGO_MIN_WIDTH_MM,
+    LOGO_MAX_WIDTH_MM,
+  );
+  setlist.logo.alignment = displayed.alignment;
   const previewUrl = URL.createObjectURL(file);
   const previousFileName = setlist.logo.file_name;
   setLogoPreview(previewUrl);

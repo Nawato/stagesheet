@@ -131,15 +131,15 @@ harness were removed when the exporter shipped.
 - Sheet correctness fixes from real use: Feature 10 done (per-combination
   column widths + header alignment); Feature 11 done (paginated
   preview/print frames). Both outrank new tooling.
-- Library/setlist tooling slice: Features 12, 13, 14, 15, 16, 17, and 18 are
-  Done. In-place library song editing, setlist duplication as a preset base,
+- Library/setlist tooling slice: Features 12, 13, 14, 15, 16, 17, 18, and 19
+  are Done. In-place library song editing, setlist duplication as a preset base,
   artist records + logos, the in-memory library artist filter, the setlist
-  artist + per-artist picker + library lock, and break-second precision
-  shipped. Duplication copies the setlist artist and shares the logo file.
-  The only remaining overflow tool is the split-setlist helper. Specced next
-  (Todo): Feature 19 (effective logo width control in the setlist editor),
-  Feature 20 (artist-first landing page + per-artist scoping), and Feature
-  21 (print/export toolbar consolidation).
+  artist + per-artist picker + library lock, break-second precision, and the
+  effective logo width control shipped. Duplication copies the setlist artist
+  and shares the logo file. The only remaining overflow tool is the
+  split-setlist helper. Specced next (Todo): Feature 20 (artist-first landing
+  page + per-artist scoping) and Feature 21 (print/export toolbar
+  consolidation).
 - `tauri android init` / `ios init` on provisioned machines; native share.
 - Print QA on real A4 (checklist below), backup/restore, app versioning,
   signing/release automation (tracked in the roadmap, P3).
@@ -359,3 +359,14 @@ WebView2/WKWebView when available):**
   Escape returns focus), and the `.print-hint` pill becomes a
   `title` tooltip on the Print button. Print stays one-click
   `window.print()`; no exporter, raster, or print-output change.
+- 2026-11-18: Feature 19 shipped (effective logo width control). The Logo
+  width slider edits the displayed logo: own/placeholder stay input-driven
+  on `setlist.logo.width_mm`, the artist path commits `artist.logo.width_mm`
+  via `save_artist` on `change` without dirtying the setlist (one in-flight
+  save, Feature 14 guards, slider revert on refusal/failure, shared-size
+  status). Uploading an own logo adopts the displayed width/alignment;
+  removal falls back to the artist logo with the slider following. The Logo
+  fieldset shows `Setlist logo` / `<name> logo (artist)` / `No logo yet`;
+  the Artist-section note is retired. No Rust, IPC, storage, backup-schema,
+  sheet/colgroup/frame/print-CSS, raster, CSP, or capability change.
+  Features 20–21 remain Todo.

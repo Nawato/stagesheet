@@ -37,7 +37,12 @@ commit as each change.
   (max 140 chars) that render on the sheet, and logo upload with
   width/alignment controls. Oversized raster logos are downscaled on import;
   SVG logos stay vector. The logo chain is setlist own → artist → placeholder
-  in preview, print, and export. Delete/Discard sits next to Save in the header
+  in preview, print, and export, and the Logo width slider edits the
+  displayed logo: own/placeholder paths stay input-driven on the setlist
+  config, the artist path commits the shared artist width on release without
+  dirtying the setlist, uploads adopt the displayed size/alignment, removal
+  falls back to the artist logo, and a `Setlist logo` / `<name> logo
+  (artist)` / `No logo yet` line names the target. Delete/Discard sits next to Save in the header
   actions (away from Add break) and keeps the existing confirmation for saved
   setlists and unsaved drafts.
 - **Duplicate** sits beside **Delete** and turns the current setlist into a
@@ -109,10 +114,6 @@ commit as each change.
 
 ## Still missing (per plan)
 
-- Feature 19 — the setlist editor's logo slider controls the currently
-  displayed logo: an artist logo's size is changeable in place, an own logo
-  uploaded on top adopts that effective size, and removing it falls back to
-  the band logo.
 - Feature 20 — artist-first mode: a landing page for artist
   creation/selection, per-artist song libraries and setlists, and a mandatory
   artist on save (legacy records stay "unfiled" until assigned).

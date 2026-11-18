@@ -926,6 +926,12 @@ input[type="file"]::file-selector-button {
   text-transform: uppercase;
 }
 
+.logo-showing {
+  margin: 0;
+  color: var(--ink-soft);
+  font-size: 12px;
+}
+
 .backup-controls {
   display: flex;
   flex-direction: column;

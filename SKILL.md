@@ -276,8 +276,15 @@ JS argument keys are camelCase (`setlistId`, `fileName`); model fields are snake
   otherwise its artist's `logo` when set, otherwise the setlist placeholder
   config. `resolveSetlistLogo()` is the single helper for preview, print, and
   export; the resolved `LogoConfig` supplies the file name, width, and
-  alignment. The editor's Logo controls still edit only the setlist's own logo.
-  No column, frame, print-CSS, or raster change is involved.
+  alignment. The Logo fieldset width slider edits that effective logo: own
+  logo and placeholder paths edit `setlist.logo.width_mm` input-driven (the
+  placeholder pre-sizes the next own logo); the artist path commits
+  `artist.logo.width_mm` via `save_artist` on `change` (release) without
+  dirtying the setlist, guarded like an artist edit and reverting the slider
+  on failure. Uploading an own logo adopts the displayed width/alignment for
+  a seamless swap; removing it falls back to the artist logo automatically.
+  A `Setlist logo` / `<name> logo (artist)` / `No logo yet` showing line names
+  the slider target. No column, frame, print-CSS, or raster change is involved.
 - `<thead>` carries the logo/title/venue/date header and column labels; `<tfoot>`
   carries the footer. Both are marked as table header/footer groups
   (`display: table-header-group` / `table-footer-group`). Chromium-based engines

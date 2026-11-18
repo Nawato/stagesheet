@@ -43,8 +43,8 @@ Full specs lived here until the 2026-11 cleanup; the contract facts below are
 all mirrored in `SKILL.md`, which is now the single authority for shipped
 behavior. Features 12 (edit library songs), 13 (duplicate setlist as preset
 base), 14 (artist records with logos), 15 (filter library by artist), 16
-(setlist artist + lock), 17 (break seconds), and 18 (setlist Delete-clarity)
-are Done; their specs remain below as reference.
+(setlist artist + lock), 17 (break seconds), 18 (setlist Delete-clarity), and
+19 (effective logo width control) are Done; their specs remain below as reference.
 
 - **Validation hardening (with Feature 2)** — Done. `Setlist::validate()` walks
   every item. Bounds enforced in Rust: break `duration_secs` `0..=36000` (the
@@ -694,9 +694,9 @@ misread instead of adding new behavior.
    it).
 2. QA + this file status + commit.
 
-## Feature 19: Effective logo width control (setlist slider) — Todo
+## Feature 19: Effective logo width control (setlist slider) — Done
 
-Status: Todo, small, independent of Feature 20. From user feedback: if the
+Status: Done, small, independent of Feature 20. From user feedback: if the
 artist has a logo, its size must be changeable with the setlist editor's
 width slider; when a setlist puts its own logo image on top, that one should
 come in at the size that was set up before; removing it must switch back to
@@ -707,6 +707,22 @@ placeholder, but the Logo fieldset still edits only `setlist.logo`: the width
 slider never touches `artist.logo.width_mm`, so with the artist logo on the
 sheet the slider does nothing visible, and a newly uploaded own logo lands at
 the setlist's stale width instead of the size the user just had on screen.
+
+### Shipped notes
+
+The slider follows the displayed logo: own and placeholder paths stay
+`input`-driven on `setlist.logo.width_mm` (placeholder pre-sizes the next
+own logo), while the artist path updates the label on `input` and commits
+`artist.logo.width_mm` through `save_artist` on `change` without dirtying the
+setlist. The artist commit holds `artistBusy`, allows one in-flight save,
+refuses while backup/restore or an artist logo import runs or an edit draft
+for that artist is open, and reverts the slider on refusal or failure with a
+status message that names the shared-size consequence. Uploading an own logo
+copies the displayed width/alignment onto `setlist.logo` before the first
+re-render; removing it keeps the guarded `remove_logo` flow and the slider
+follows back to the artist width. The Logo fieldset shows `Setlist logo` /
+`<name> logo (artist)` / `No logo yet`; the Artist-section note is retired to
+an always-hidden stub so it never duplicates.
 
 ### Data model
 
