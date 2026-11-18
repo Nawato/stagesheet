@@ -20,17 +20,18 @@ Decisions locked in: tuning is a **free-text optional field** (same pattern as
 `key`), not a preset picker or per-instrument map. The **library is the
 canonical place for song data** (Feature 12): setlist items are gig-specific
 snapshots, so fixing a song happens once in the library and saved setlists
-keep their copies — there will be no propagation of library edits into
-setlists. The artist lock (Feature 16) is an **editor-only constraint**: it
+keep their copies by default — there is no silent propagation of library edits
+into setlists (Feature 28 adds an explicit per-edit opt-in offer). The artist
+lock (Feature 16) is an **editor-only constraint**: it
 filters the library and gates adds, but it never rewrites existing setlist
 items and never changes the printed sheet. **Artists become records**
 (Feature 14): one managed artist list with names and logos that songs and
 setlists reference by id, replacing free-text matching everywhere new code is
-written (legacy `artist` text stays as a display fallback until adopted). Two
-further decisions are locked at spec time: the setlist editor's width slider
-controls **whichever logo is currently displayed** (Feature 19) — an own logo
-uploaded on top adopts that effective size/alignment, and removing it falls
-back to the artist logo automatically. **The artist becomes the workspace
+written (legacy `artist` text stays as a display fallback until adopted). The
+setlist editor's width slider and alignment radios edit **this setlist's own
+geometry** (Feature 29; superseding Feature 19's displayed-logo binding) — the
+artist keeps only the image, and removing an own logo falls back to the artist
+image at the setlist's size. **The artist becomes the workspace
 scope** (Feature 20): a landing page gates artist creation/selection, songs
 and setlists must belong to exactly one artist on save, and the library and
 setlist lists show only the active artist's records (Feature 15's select,
@@ -159,8 +160,9 @@ Locked answer to the "songs must be uniform" feedback: the library is the one
 canonical edit place, and setlist items stay copies on purpose (a gig snapshot
 may legitimately differ — capo, shortened version — from the library
 original). Fixing a song happens once in the library; saved setlists are
-never rewritten. There is no propagation feature planned; the status line
-keeps the copy semantics visible instead.
+never silently rewritten. Feature 28 supersedes the "no propagation" half with
+an explicit per-edit opt-in offer; declining (the default) keeps every copy
+untouched.
 
 ### Data model
 
@@ -1425,9 +1427,11 @@ logo sizing instead of mm, selectable/vector PDF text, mobile, SQLite.
    internal `cols-*-time` class names unchanged).
 3. QA + this file status + commit.
 
-## Feature 27: Artist-creation logo reaches the setlist (bugfix) — Todo
+## Feature 27: Artist-creation logo reaches the setlist (bugfix) — Done (desktop QA pending)
 
-Status: Todo, small, builds on Features 14/20/23/29 (rebased onto the
+Status: Done — code complete; the six desktop QA gates remain pending (no
+desktop session in this environment). Small, builds on Features 14/20/23/29
+(rebased onto the
 per-setlist logo model). From user feedback:
 a logo uploaded during artist creation does not show in the setlist afterwards —
 the new setlist shows the placeholder and the Logo fieldset sticks on the
@@ -1444,6 +1448,57 @@ setlist preview is not re-resolved after scope entry — and `enterScope()` /
 `switchScope()` skip `loadLogoForCurrent()` whenever the selected draft is dirty
 (a brand-new setlist is always dirty), so the fieldset showing line and `<img>`
 stay on the placeholder path.
+
+### Shipped notes
+
+- Root cause confirmed: `enterScope()` / `switchScope()` (and `init()` /
+  `deleteCurrent()`) loaded the resolved logo only when the selected setlist was
+  clean. A brand-new setlist is a dirty blank draft pre-assigned to the artist,
+  so the artist image was never read and the preview stayed on the placeholder.
+  Those four paths plus `startNewSetlist()`, restore, and the
+  `File under…`/reselect path now await `loadLogoForCurrent()` whenever the
+  backend is available; a blank draft shows its artist's image at the
+  setlist's own default 40 mm / Center (Feature 29 geometry).
+- Landing create warms the saved `file_name` in `artistThumbUrls` through a
+  small `storedLogoUrl()` helper (revokes duplicates/failures) before
+  `enterScope()`, so the artist thumbnail is ready when the landing card next
+  renders. Landing inline Edit prunes the replaced/removed old thumbnail, warms
+  the saved one, recomputes the showing line, and **awaits**
+  `refreshLogoIfChanged()` before the final status/focus; rename, swap, and
+  removal all update the current draft (own file → artist file → none) and the
+  landing thumbnail.
+- `refreshLogoIfChanged()` no longer delegates to `loadLogoForCurrent()`'s
+  clear-first path. It bumps `logoRequestId`, reads the changed resolved file
+  while the old blob URL stays on screen, then swaps and revokes the previous
+  URL; no file (or no backend) clears normally, a local upload preview always
+  wins, and a stale request revokes its own URL. A read failure clears to the
+  truthful placeholder state and reports `Could not load logo: …` as before.
+  Removing an own logo therefore falls back to the artist image without a
+  placeholder flash; the local-preview case in `handleLogoRemove()` keeps the
+  displayed image on screen until the swap instead of clearing first.
+- Showing line content is unchanged: `“<Name>” logo (from the artist) — size
+  applies to this setlist only.` with the setlist's width/alignment. There is no
+  `save_artist` geometry write; export still reads `storedLogoDataUrl()` and the
+  resolved file. Export capture, backup/restore, and artist-draft guards are
+  untouched.
+- Gates: `npm run build` and `cargo test` pass (no Rust/model/serde/storage/
+  IPC/schema/backup/CSP/fs change). QA deviation: the six desktop gates
+  (create→enter→New, removal fallback, geometry save/reload, placeholder copy,
+  export/print logo, backup round trip) need a running `tauri dev` session and
+  were not executed in this environment; the code paths were verified by
+  inspection and are recorded as pending rather than passed.
+
+Reviewed 2026-11-19: UX/UI designer, frontend developer, software architect
+(Rust/Tauri reviewer trimmed — frontend/docs-only diff). Applied: Edit-save
+focus restored only after the artist busy lock releases; in-flight logo reads
+invalidated before the equality shortcut; local-preview removal now clears the
+stale image (empty resolution checked first); Feature 30's Reset local-preview
+handoff and old-file cleanup ordering pinned; superseded top-of-plan decisions
+annotated. Waived/deferred: the six desktop QA gates (no desktop session), the
+create→enter placeholder frame (one read, overlay covers most of it), refresh
+errors being followed by a success status (pre-existing rare path), thumbnail
+cache race on lazy vs warmed reads, and the pre-existing dirty prompt for an
+untouched blank draft.
 
 ### Data model
 
@@ -1955,7 +2010,9 @@ Behavior: clears `setlist.logo.file_name` only (cancels any
 `pendingLogoRemovals` entry for the abandoned own file — never deletes a file
 still referenced elsewhere); never touches `width_mm`/`alignment`; `markDirty()`
 + `refreshLogoIfChanged()` + `renderSheet()` + showing-line recompute; Save
-persists. Focus stays on Reset while it remains enabled; once a successful
+persists. Like Remove, stop a local upload preview from winning before the
+refresh (`logoPreviewIsLocal = false; loadedLogoFileName = null`) so the
+artist image actually swaps in. Focus stays on Reset while it remains enabled; once a successful
 Reset disables it (no own logo left), move focus to the upload control like
 Feature 29's Remove rule instead of dropping focus to `<body>`.
 `Artist logo restored — save to apply.` then
@@ -2029,8 +2086,9 @@ new dialog tokens, model/schema changes.
   guidance, backend small items — Done), and Feature 26 (UI polish + language
   pass — Done). The split-setlist helper stays open behind these.
 - **P1 — v0.3.2 slice (In progress)**: Feature 27 (artist-creation logo
-  reaches the setlist — bugfix, rebased onto 29), Feature 28 (opt-in library ⇄
-  setlist song sync offer with safe-default custom modal), Feature 29
+  reaches the setlist — bugfix, rebased onto 29 — Done, desktop QA pending),
+  Feature 28 (opt-in
+  library ⇄ setlist song sync offer with safe-default custom modal), Feature 29
   (per-setlist logo size — artist keeps the image, geometry lives on the
   setlist — Done), and Feature 30 (artist-logo propagation offer with
   Keep-vs-follow + Reset to artist logo; setlist side stays silent-local). The

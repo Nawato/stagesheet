@@ -364,6 +364,21 @@ model fields are snake_case.
   here.`; and `No logo yet — add an image above.` (no live artist, dangling id,
   or Unfiled). The line stays `role="note"`, never live. No column, frame,
   print-CSS, or raster change is involved.
+- Logo preview lifecycle (Feature 27): scope entry and startup (`enterScope`,
+  `switchScope`, `init`, New, Delete/Discard, restore) await
+  `loadLogoForCurrent()` whenever the backend is available, including dirty
+  blank drafts pre-assigned to an artist; refiling awaits the resolved refresh
+  through the save path. Artist Edit saves prune the
+  replaced thumbnail blob URL and warm the saved `file_name` in the landing
+  thumbnail cache; create warms the saved file before entering the scope, and
+  inline Edit awaits `refreshLogoIfChanged()` before reporting success. A
+  changed resolved file is read before the displayed blob URL is
+  revoked/swapped, so own-logo removal falls back to the artist image
+  and an artist image swap never flashes the placeholder; a local upload
+  preview wins until an explicit Remove/Reset stops it, stale loads are
+  cancelled by `logoRequestId`, and export
+  still uses `storedLogoDataUrl()`. The width/alignment rules above are
+  unchanged.
 - `<thead>` carries the logo/title/venue/date header and column labels; `<tfoot>`
   carries the footer. Both are marked as table header/footer groups
   (`display: table-header-group` / `table-footer-group`). Chromium-based engines

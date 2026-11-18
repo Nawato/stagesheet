@@ -178,13 +178,21 @@ commit as each change.
   of scope as specced: S/M/L sizing, bulk resize, logo bytes in backups,
   export/print layout changes.
 
+- Artist-creation logo fix (Feature 27): scope entry, startup, New, and
+  Delete/Discard await the resolved logo load even for dirty drafts, so a blank
+  setlist pre-assigned to an artist shows that artist's image at the setlist's
+  own geometry. Artist create/edit saves warm the saved thumbnail blob URL and
+  prune the replaced/removed one; inline Edit awaits the resolved-preview
+  refresh before its status, covering rename, image swap, and removal.
+  `refreshLogoIfChanged()` reads the replacement file before revoking the
+  displayed blob URL, so own-logo removal falls back to the artist image and an
+  artist swap updates without a placeholder flash; local upload previews still
+  win until Remove/Reset stops them, and export keeps the data-URL/resolved-file
+  path. Desktop QA gates 1–6 remain pending (no desktop session in this
+  environment).
+
 ## Still missing (per plan)
 
-- Artist-creation logo bug (plan Feature 27, Todo): a logo uploaded during
-  artist creation does not reach the setlist — placeholder stays. Fix warms the
-  artists cache / thumbnail blob URL and re-resolves `resolveSetlistLogo()` on
-  artist save + scope entry; all six QA gates apply, with gate 3 rebased onto
-  per-setlist geometry (Feature 29 retired the `save_artist` size path).
 - Opt-in library ⇄ setlist song sync (plan Feature 28, Todo): after a library
   or setlist-item song edit with matching in-scope `Song.id` copies, a custom
   safe-default modal (Keep focused, Enter/Escape = Keep, no "don't ask again")

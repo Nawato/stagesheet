@@ -646,7 +646,9 @@ async function init(): Promise<void> {
   // an in-flight edit with the migration's stale snapshot.
   bindEvents();
   renderAll();
-  if (backendAvailable && !dirty) {
+  // Load the resolved logo even for a fresh (dirty) scope draft: a blank
+  // setlist pre-assigned to an artist must show that artist's image.
+  if (backendAvailable) {
     await loadLogoForCurrent();
   }
   fitPreview();
@@ -905,7 +907,7 @@ async function startNewSetlist(): Promise<void> {
   // A New setlist pre-assigned from the header picker may inherit the artist's
   // logo; load it like any other setlist switch.
   if (backendAvailable) {
-    void loadLogoForCurrent();
+    await loadLogoForCurrent();
   }
 }
 
@@ -1041,7 +1043,7 @@ async function saveCurrent(): Promise<boolean> {
     renderSetlistSelect();
     renderFileUnder();
     renderSheet();
-    void refreshLogoIfChanged();
+    await refreshLogoIfChanged();
 
     // Rust is the authority for the saved duration; the local sum is only a
     // fallback if the follow-up call fails for an unrelated reason.
@@ -1094,7 +1096,8 @@ async function deleteCurrent(): Promise<void> {
   current = next ? cloneSetlist(next) : blankDraftForScope();
   dirty = !next;
   renderAll();
-  if (backendAvailable && !dirty) {
+  // Also for a dirty blank draft: the new scope's artist image must show.
+  if (backendAvailable) {
     await loadLogoForCurrent();
   }
 }
@@ -1152,7 +1155,7 @@ async function duplicateCurrent(): Promise<void> {
 
       renderAll();
       // The copy shares the logo file, so the existing preview stays valid.
-      void refreshLogoIfChanged();
+      await refreshLogoIfChanged();
       fitPreview();
       setStatus(`Duplicated “${sourceTitle}” as “${saved.title}”.`, "success");
     } catch (error) {
@@ -1662,7 +1665,7 @@ async function restoreLibrary(): Promise<void> {
     clearLogoPreview();
     adoptLoadedState(loadedSongs, loadedArtists, loadedSetlists, currentId);
     renderAll();
-    if (backendAvailable && !dirty) {
+    if (backendAvailable) {
       await loadLogoForCurrent();
     }
     fitPreview();
@@ -1901,7 +1904,8 @@ async function switchScope(next: string): Promise<void> {
   current = inScope[0] ? cloneSetlist(inScope[0]) : blankDraftForScope();
   dirty = inScope.length === 0;
   renderAll();
-  if (backendAvailable && !dirty) {
+  // Also for a dirty blank draft: the new scope's artist image must show.
+  if (backendAvailable) {
     await loadLogoForCurrent();
   }
   fitPreview();
@@ -2045,7 +2049,7 @@ async function fileCurrentSetlist(artistId: string): Promise<void> {
     const filedTitle = current.title;
     reselectCurrentInScope();
     renderAll();
-    if (backendAvailable && !dirty) {
+    if (backendAvailable) {
       await loadLogoForCurrent();
     }
     fitPreview();
@@ -4002,6 +4006,32 @@ function pruneArtistThumbUrl(fileName: string | null | undefined): void {
   }
 }
 
+/**
+ * Warms the landing thumbnail cache for a just-saved artist logo, so the next
+ * card render paints the new image instead of loading it lazily. Failure is
+ * non-fatal: `buildArtistThumb` retries on demand.
+ */
+async function warmArtistThumbUrl(fileName: string | null | undefined): Promise<void> {
+  if (!fileName || artistThumbUrls.has(fileName)) return;
+
+  let url: string | null = null;
+  try {
+    url = await storedLogoUrl(fileName);
+    // A render may have cached the same file while this read was in flight.
+    const existing = artistThumbUrls.get(fileName);
+    if (existing) {
+      URL.revokeObjectURL(url);
+      url = null;
+      return;
+    }
+    artistThumbUrls.set(fileName, url);
+    url = null;
+  } catch {
+    // Never leak a blob URL when warming fails; the lazy path retries.
+    if (url) URL.revokeObjectURL(url);
+  }
+}
+
 /** Logo thumbnail. Rendered only through `<img src>` (never inline SVG). */
 function buildArtistThumb(artist: Artist): HTMLSpanElement {  const thumb = el("span", "artist-thumb");
   const fileName = artist.logo.file_name;
@@ -4277,8 +4307,10 @@ async function handleArtistSubmit(event: SubmitEvent): Promise<void> {
   syncLandingArtistFormControls();
   setStatus(`Saving artist “${name}”…`);
 
+  let savedArtistId: string | null = null;
   try {
     const saved = await api.saveArtist(artist);
+    savedArtistId = saved.id;
     const index = artists.findIndex((entry) => entry.id === saved.id);
     if (index >= 0) {
       artists[index] = saved;
@@ -4298,6 +4330,9 @@ async function handleArtistSubmit(event: SubmitEvent): Promise<void> {
       pruneArtistThumbUrl(fileName);
       void api.removeLogo(fileName).catch(() => undefined);
     }
+    // Warm the replaced/added image so the next landing render paints it
+    // without a lazy load; a rename keeps the existing cached entry.
+    await warmArtistThumbUrl(saved.logo.file_name);
 
     resetArtistForm();
     renderNewSongArtistOptions();
@@ -4311,8 +4346,9 @@ async function handleArtistSubmit(event: SubmitEvent): Promise<void> {
     renderSummary();
     renderSheet();
     renderLanding();
-    void refreshLogoIfChanged();
-    focusLandingArtistEdit(saved.id);
+    // Await the swap: a rename, logo change, or logo removal must show its
+    // resolved preview (or fallback/placeholder) before the final status/focus.
+    await refreshLogoIfChanged();
     setStatus(
       `Updated artist “${saved.name}”. Songs and setlists show the new name without being rewritten.`,
       "success",
@@ -4324,6 +4360,9 @@ async function handleArtistSubmit(event: SubmitEvent): Promise<void> {
     libraryWritesInFlight -= 1;
     syncLandingManagementButtons();
     syncLandingArtistFormControls();
+    // Focus only after the busy lock releases: the rebuilt row's Edit button is
+    // disabled until here, so focusing it inside `try` was a no-op.
+    if (savedArtistId) focusLandingArtistEdit(savedArtistId);
   }
 }
 
@@ -4560,7 +4599,7 @@ async function deleteArtist(artist: Artist): Promise<void> {
     }
     renderNewSongArtistOptions();
     renderAll();
-    void refreshLogoIfChanged();
+    await refreshLogoIfChanged();
 
     if (artist.logo.file_name) {
       pruneArtistThumbUrl(artist.logo.file_name);
@@ -4641,7 +4680,8 @@ async function enterScope(id: string): Promise<void> {
   current = inScope[0] ? cloneSetlist(inScope[0]) : blankDraftForScope();
   dirty = inScope.length === 0;
   renderAll();
-  if (backendAvailable && !dirty) {
+  // Also for a dirty blank draft: the new scope's artist image must show.
+  if (backendAvailable) {
     await loadLogoForCurrent();
   }
   fitPreview();
@@ -5221,6 +5261,9 @@ async function handleLandingCreate(
     landingLogoFile = null;
     // The created name is committed: a later New-artist form starts blank.
     landingCreateNameDraft = "";
+    // Warm the new artist's thumbnail so the landing row can paint it
+    // immediately; `enterScope` then loads the setlist preview from storage.
+    await warmArtistThumbUrl(saved.logo.file_name);
     setStatus(`Added artist “${saved.name}”.`, "success");
     await enterScope(saved.id);
   } catch (error) {
@@ -5394,7 +5437,13 @@ function handleLogoRemove(): void {
   }
 
   current.logo.file_name = null;
-  setLogoPreview(null);
+  // Keep the displayed image while the artist fallback (if any) loads. A local
+  // upload preview stops winning so `refreshLogoIfChanged` can swap in the
+  // stored fallback; with no fallback it clears normally.
+  if (logoPreviewIsLocal) {
+    logoPreviewIsLocal = false;
+    loadedLogoFileName = null;
+  }
   renderLogoControls();
   markDirty();
   // With no own logo the preview may now fall back to the artist's logo at the
@@ -5455,12 +5504,59 @@ async function loadLogoForCurrent(): Promise<void> {
  * Reloads the preview only when the resolved stored file changed, so artist
  * renames and unrelated renders do not revoke a working blob URL. A local
  * upload preview always wins until it is saved or cleared.
+ *
+ * A changed file is read **before** the displayed blob URL is revoked: removing
+ * an own logo or swapping the artist image keeps the old image visible while the
+ * replacement loads, so the preview never flashes the placeholder. A request
+ * that loses to a newer preview or a different setlist is revoked unassigned.
  */
 async function refreshLogoIfChanged(): Promise<void> {
+  // Cancel any older resolution read first: if the resolved file flips back to
+  // the already-loaded one, a stale in-flight read must not land afterwards.
+  logoRequestId += 1;
+  const request = logoRequestId;
   if (logoPreviewIsLocal) return;
   const fileName = resolvedSetlistLogo()?.file_name ?? null;
+
+  // Check the empty resolution before the equality shortcut: Remove can clear
+  // `logoPreviewIsLocal` while a local upload blob is still the displayed
+  // `logoSrc`, and `null === loadedLogoFileName` would otherwise keep it.
+  if (!fileName || !backendAvailable) {
+    if (logoSrc) {
+      clearLogoPreview();
+      renderLogoControls();
+      renderSheet();
+    }
+    return;
+  }
   if (fileName === loadedLogoFileName) return;
-  await loadLogoForCurrent();
+
+  let url: string | null = null;
+  try {
+    url = await storedLogoUrl(fileName);
+    if (request !== logoRequestId || logoPreviewIsLocal) {
+      URL.revokeObjectURL(url);
+      return;
+    }
+    const previous = logoSrc;
+    logoSrc = url;
+    url = null;
+    logoPreviewIsLocal = false;
+    loadedLogoFileName = fileName;
+    if (previous) URL.revokeObjectURL(previous);
+  } catch (error) {
+    if (request !== logoRequestId) return;
+    // The old image no longer matches the resolved file: clear truthfully and
+    // report through the normal status path.
+    clearLogoPreview();
+    renderLogoControls();
+    renderSheet();
+    setStatus(`Could not load logo: ${describeError(error)}`, "error");
+    return;
+  }
+
+  renderLogoControls();
+  renderSheet();
 }
 
 function setLogoPreview(url: string | null): void {
