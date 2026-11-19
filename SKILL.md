@@ -496,8 +496,11 @@ model fields are snake_case.
   repetition: `src/pages.ts` clones the brand header and footer into each
   `#sheet-pages .sheet-page` frame.
 - Rows use `.song-row` / `.break-row` and must keep `break-inside: avoid`.
-- Song artist always renders under the title; a song comment renders there only
-  when `show_comment` is on, and a blank comment emits no element. Break rows
+- The printed song cell is the title plus, when `show_comment` is on, the song
+  comment; a blank comment emits no element. **The sheet never prints an artist
+  name** (the app scopes the workspace by artist, so the line was redundant);
+  `Song.artist` / `artist_id` stay library/editor data and never enter the
+  sheet markup. Break rows
   render `[label] · [duration] · [comment]` inside one full-width dashed cell:
   the duration is always shown, while the label (default `Break`, bold/uppercase)
   and the comment are gated by `show_comment`. There is no separate label

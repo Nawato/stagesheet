@@ -464,3 +464,9 @@ WebView2/WKWebView when available):**
   draft-pin retention, Edit-time retry, import-busy Reset guard). No Rust,
   model/serde, IPC, storage, schema, backup-envelope, CSP, or fs change.
   Desktop QA remains pending.
+- 2026-11-19: Feature 31 shipped (no artist line on the printed sheet).
+  `buildSongRow()` in `src/sheet.ts` no longer emits `song-artist`, and
+  `.song-artist` left the shared `app.css` block rule; the song cell is title +
+  optional comment. Preview, frames, native print, and PDF/PNG export share the
+  path. `Song.artist`/`artist_id` stay library/backup data. No Rust, model,
+  IPC, storage, schema, backup-envelope, CSP, or fs change.

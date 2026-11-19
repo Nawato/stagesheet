@@ -2281,6 +2281,44 @@ new dialog tokens, model/schema changes.
 1. Follow-vs-pin writes + modal + strings + guards + Reset button + hint.
 2. QA + `SKILL.md` (resolve-vs-pin rule) + this file status + commit.
 
+## Feature 31: No artist line on the printed sheet — Done
+
+Status: Done, tiny UI-only slice from direct user feedback. Setlists are
+artist-scoped on save and new items come from the active artist's library, but
+legacy/unfiled setlists can still hold snapshot rows by other artists (the
+editor summary keeps the non-matching count). Per direct user request, the
+per-song artist line is dropped for every row.
+
+### Shipped notes
+
+`buildSongRow()` in `src/sheet.ts` no longer emits the `song-artist` span; the
+song cell is the title plus the optional comment. `.song-artist` was folded out
+of the `app.css` block rule (`.song-notes` keeps its 9.5pt italic look and
+`0.6mm` top margin). Preview, both page modes, native print, and PDF/PNG export
+all render through this one path, so every output drops the line together.
+Data is untouched: `Song.artist`/`artist_id` remain on library songs and item
+snapshots (and in backups); Feature 28 deliberately ignores artist fields.
+`SKILL.md` now pins the rule that the sheet never prints an artist name.
+
+Reviewed 2026-11-19: UX/UI designer, frontend developer, software architect,
+end-user (Rust/Tauri trimmed — print-only frontend/docs diff). Applied: exact
+SKILL/status/roadmap rationale (the sheet never prints an artist name; the app
+scopes the workspace by artist), editor-aware data wording, corrected Feature 31
+scope and Feature 28 claims, and desktop/paper QA marked pending.
+Waived/deferred: legacy/unfiled mixed-artist sheets lose on-paper attribution
+(the editor summary still reports mismatches and Comment still prints), the
+item editor's Artist field is now print-inert (a “not printed”/Comment hint is a
+follow-up), and physical print/PDF QA (no desktop session).
+
+### Tests + QA
+
+- `npm run build` clean; `cargo test` green (no Rust change).
+- Desktop/paper QA pending (no desktop session in this environment): sheet
+  preview, multiple-page frames, print, and PDF/PNG show no artist text under
+  song titles; comments still render when the Comment toggle is on;
+  library/editor artist labels are unchanged. Static review confirms all four
+  paths share the single `renderSetlistSheet` builder.
+
 ## Roadmap backlog (prioritized)
 
 - **P0 — Sheet correctness fixes (from real use)**: Features 10 (column widths
@@ -2319,6 +2357,8 @@ new dialog tokens, model/schema changes.
   Keep-vs-follow + Reset to artist logo; setlist side stays silent-local —
   Done (desktop QA pending)). The
   split-setlist helper stays open behind these.
+- **P1 — v0.3.3 follow-up**: Feature 31 (printed sheet drops the per-song
+  artist line — the sheet intentionally prints no artist name) — Done.
 - **P1 — Backup/restore**: Done (Feature 7). One versioned JSON envelope for
   the full library + setlists; logos are re-imported manually in v1.
   Feature 14 adds the `artists` array without a version bump.

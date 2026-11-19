@@ -1529,14 +1529,9 @@ input[type="file"]::file-selector-button {
   line-height: 1.2;
 }
 
-.song-artist,
 .song-notes {
   display: block;
   margin-top: 0.6mm;
-  font-size: 10.5pt;
-}
-
-.song-notes {
   font-size: 9.5pt;
   font-style: italic;
 }

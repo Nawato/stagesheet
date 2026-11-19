@@ -231,10 +231,6 @@ function buildSongRow(
 
   const songCell = el("td", "col-song song-cell");
   songCell.append(el("span", "song-title", song.title));
-  // The artist line is part of the song identity and always shows.
-  if (song.artist?.trim()) {
-    songCell.append(el("span", "song-artist", song.artist.trim()));
-  }
   const commentText = visibility.showComment ? songCommentText(song.notes) : null;
   if (commentText) songCell.append(el("span", "song-notes", commentText));
   row.append(songCell);

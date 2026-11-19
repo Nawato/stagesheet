@@ -76,7 +76,9 @@ commit as each change.
   export. Column widths are per-combination presets summing to 100% with the
   `<colgroup>` as the only width source, so the header stays aligned with the
   body in every toggle combination. Title/venue/date and song titles always
-  print; the Duration column can be hidden, while break durations always render.
+  print (the sheet never prints an artist name — the line was redundant in an
+  artist-scoped workspace); the Duration column can be hidden, while break
+  durations always render.
 - Validation hardening on save: break length `0..=36000` seconds (the old
   600-minute cap, entered as `mm:ss`), break label ≤ 24 chars, and song/break
   comments ≤ 140 chars (after trim). Break durations render as `11 sec`,
