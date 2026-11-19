@@ -392,14 +392,85 @@ model fields are snake_case.
   (`captureGuard()` reverts via `renderLogoControls()`). There is no
   setlist → artist geometry write, no revert closure, and no artist-draft/
   backup/import refusal here. Uploading an own logo keeps the setlist's current
-  geometry (no adoption step); removing it falls back to the artist image at
-  that same size. Showing-line strings (adjust only names):
+  geometry (no adoption step); removing it resolves to the artist image at
+  that same size; only the draft's own file name changes (dirty + normal Save),
+  with no hidden or cross-record setlist write. Showing-line strings (adjust
+  only names):
   `Setlist logo — size applies to this setlist only.`;
   `“<Name>” logo (from the artist) — size applies to this setlist only.`;
   `No logo yet — add an image above, or add one to “<Name>” and it will appear
   here.`; and `No logo yet — add an image above.` (no live artist, dangling id,
   or Unfiled). The line stays `role="note"`, never live. No column, frame,
   print-CSS, or raster change is involved.
+- **Resolve-vs-pin artist logos (Feature 30)**: the artist image is **live**
+  for every setlist without its own `logo.file_name`; changing or removing it
+  never silently rewrites followers. A committed inline artist Edit with a
+  non-null pre-save artist file that changed (change or removal) offers
+  Keep-vs-follow once per edit; adding a first image never prompts. The
+  landing create-form Save is addition-only and never opens the dialog (a new
+  artist has no setlists). *Affected* = persisted setlists whose `artist_id`
+  equals the edited record, whose own `logo.file_name` was null before the
+  save, and whose pre-save artist file was non-null. Own-logo, other-artist,
+  Unfiled/dangling, and placeholder setlists when the artist had no old image
+  are never counted or written. After `save_artist` + `refreshLogoIfChanged`,
+  followers already resolve the outcome, so the dialog uses **outcome
+  framing**: heading `Keep the old logo on N setlists?`, the body says the
+  setlists were using the old image and now show the new image/`No logo yet`,
+  and the confirm is `Use new logo` / `Leave them without a logo` (singular
+  `Leave it without a logo`). `showChoiceDialog` resolves true only for that
+  explicit confirm (Follow) and false for the focused Keep. **Follow**
+  performs **zero `save_setlist` writes** — those setlists resolve the new
+  file or none automatically. **Keep** pins the old artist `file_name` as
+  each target's own logo through one `save_setlist` per target while
+  preserving that setlist's `width_mm`/`alignment` (display pixels unchanged,
+  `its own logo` for one setlist); a clean `current` may be pinned. A dirty
+  `current` still at no own logo is pinned **in its draft only**
+  (`markDirty()`, no auto-save) and reported `Keep the old image on
+  “<Setlist>” too — save that setlist to apply it.`; a dirty `current` with a
+  different own logo is skipped (`Skipped “…”: unsaved changes.`).
+  `showChoiceDialog` keeps Keep focused, traps Tab, and counts a pending
+  dialog as unsaved work. Accepted pins hold `propagationBusy` /
+  `syncPropagationLock(true)`, show `Restoring the old image on N setlists…`,
+  keep the visible landing overlay inert, and make `closeLanding`, scope
+  entry/switch, backup/restore, save/delete/duplicate/New, print/export, File
+  under…, and library actions refuse. Each planned target is re-read before
+  its write (`Skipped “…”: changed while updating.`). The old file is
+  retained (no prune, no `remove_logo`) whenever a target was skipped, the
+  draft was pinned, or a pin failed; delete only on a fully successful batch
+  with at least one pin or no affected targets. A blocked offer, late block,
+  or Keep batch with failures/skips stores a memory-only
+  `{ artistId, oldFileName, targetIds }`; the status says the old image is
+  kept and that opening Edit retries the choice. `startArtistEdit` re-offers
+  through the normal finish path with the pending file and recorded targets
+  that still follow the artist, clearing the record first (a blocked/failed
+  retry stores it again). A new committed logo change, successful
+  Follow/Keep, artist deletion, or restore/adopted cache clears it; a restart
+  drops the memory-only retry (the file stays), and `hasUnsavedWork` counts a
+  pending record. Guards defer with `Export in progress — “<Artist>” saved
+  here only. The old image is kept — open Edit to retry the choice after
+  export.` or `“<Artist>” saved here only. Finish the current library/artist
+  request. The old image is kept — open Edit to retry the choice.`
+  (`artistBusy` is the triggering save and is allowed;
+  `libraryWritesInFlight > 1`, `propagationBusy`, `choiceDialogOpen`, etc.
+  defer; an Edit retry has no triggering save, so any
+  `libraryWritesInFlight > 0` or `artistBusy` defers). The setlist side stays
+  silent-local: upload/Remove changes only the
+  draft's `logo.file_name` and the normal Save persists it (no hidden or
+  cross-record `save_setlist`). The Logo fieldset's **Reset to artist logo**
+  button clears only the draft's own `file_name` (width/alignment survive),
+  adds that file to `pendingLogoRemovals` so the normal save cleanup removes
+  it if unreferenced (backend skips shared files), stops a local upload
+  preview from winning, updates the showing line, and awaits
+  `refreshLogoIfChanged()` before `Artist logo restored — save to apply.` It
+  is native-disabled unless there is an own file, the live artist has a
+  different file (resolved even when the setlist shows its own logo), and no
+  export/propagation/logo-import lock is active; `setlistLogoBusy` disables
+  and refuses Remove/Reset during the import. A successful Reset disables
+  itself (native-disabled never focusable), so focus moves to `#logo-file`;
+  the adjacent `role="note"` hint is `No artist logo — add one to “<Name>”,
+  then use Reset to show it here.` (already-following/no-own-logo rely on the
+  Feature 29 showing line). No per-setlist picker, "don't ask again",
+  cross-artist propagation, geometry change, or logo bytes in backups.
 - Logo preview lifecycle (Feature 27): scope entry and startup (`enterScope`,
   `switchScope`, `init`, New, Delete/Discard, restore) await
   `loadLogoForCurrent()` whenever the backend is available, including dirty
@@ -409,7 +480,7 @@ model fields are snake_case.
   thumbnail cache; create warms the saved file before entering the scope, and
   inline Edit awaits `refreshLogoIfChanged()` before reporting success. A
   changed resolved file is read before the displayed blob URL is
-  revoked/swapped, so own-logo removal falls back to the artist image
+  revoked/swapped, so own-logo removal re-resolves to the artist image
   and an artist image swap never flashes the placeholder; a local upload
   preview wins until an explicit Remove/Reset stops it, stale loads are
   cancelled by `logoRequestId`, and export

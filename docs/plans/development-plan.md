@@ -457,3 +457,10 @@ WebView2/WKWebView when available):**
   Print-vs-Export guidance in the preview toolbar; Unfiled glossary in the
   Unfiled empty state. No Rust, IPC, storage, envelope, or behavior change.
   Only the split-setlist helper remains open.
+- 2026-11-19: v0.3.2 slice shipped: Feature 27 (artist/logo preview lifecycle),
+  Feature 28 (opt-in library ⇄ setlist song propagation offer), Feature 29
+  (per-setlist logo geometry; the artist keeps the image), and Feature 30
+  (artist-logo Keep/Follow offer + Reset to artist logo, outcome-framed dialog,
+  draft-pin retention, Edit-time retry, import-busy Reset guard). No Rust,
+  model/serde, IPC, storage, schema, backup-envelope, CSP, or fs change.
+  Desktop QA remains pending.

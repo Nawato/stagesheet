@@ -45,9 +45,11 @@ commit as each change.
   artist → none) in preview, print, and export; width and
   alignment always come from the setlist's own config, so the Logo slider and
   radios edit this setlist (10–80 mm) in every case and mark it dirty.
-  Uploads keep the displayed geometry, removal falls back to the artist image
-  at that size, and a `Setlist logo` / `<name> logo (from the artist)` /
-  `No logo yet` line names the source without a shared-size claim. Delete/Discard sits next to Save in the header
+  Uploads keep the displayed geometry, removal resolves back to the artist
+  image at that size; only the open draft is marked dirty and the normal Save
+  persists the clear (no hidden or cross-record write), and a `Setlist logo` /
+  `<name> logo (from the artist)` / `No logo yet` line names the source
+  without a shared-size claim. Delete/Discard sits next to Save in the header
   actions (away from Add break) and keeps the existing confirmation for saved
   setlists and unsaved drafts.
 - **Duplicate** sits beside **New** and turns the current setlist into a
@@ -168,8 +170,9 @@ commit as each change.
   `resolveSetlistLogo()` resolves only the file (own → artist → none), while
   width and alignment always come from `setlist.logo`; the Logo slider/radios
   edit the draft in every case (clamped 10–80, dirty + sheet re-render), upload
-  keeps the geometry, and removal falls back to the artist image at the
-  setlist's size. The showing line names provenance without a shared-size
+  keeps the geometry, and removal resolves back to the artist image at the
+  setlist's size; only the draft is cleared and the normal Save persists it
+  (no hidden or cross-record write). The showing line names provenance without a shared-size
   claim, and a silent first-startup migration copies a live artist's
   width/alignment into logo-less setlists still at exactly 40 mm / Center,
   guarded once by a UI-level localStorage key that also records failed ids for
@@ -211,15 +214,34 @@ commit as each change.
   legacy/unfiled/dangling library copies never offer; there is no silent sync
   or global toggle, and accept re-renders the preview. Desktop QA pending.
 
+- Artist-logo propagation + Reset (Feature 30, Done (desktop QA pending)):
+  the artist image stays live for every setlist without its own logo. A changed
+  or removed non-null artist image offers Keep (default, focused) vs Follow
+  once per edit from the landing inline Edit Save. The dialog is outcome-framed
+  (`Keep the old logo on N setlists?`; followers now show the new image or
+  `No logo yet`; confirm is `Use new logo` / `Leave them without a logo`).
+  Follow writes zero setlists; Keep pins the old file as each affected
+  setlist's own logo with one `save_setlist` per target, preserving its
+  width/alignment and display pixels. A clean open setlist may be pinned; a
+  dirty one still at no own logo is pinned in its draft and reported
+  save-to-apply (never auto-saved), while a dirty draft with a different own
+  logo skips/reports. The old file is retained on any skip, draft pin, or
+  failure; a blocked/failed Keep stores a memory-only
+  `{ artistId, oldFileName, targetIds }` and opening Edit retries the choice
+  (a restart drops the retry; the file stays). Addition (`None` → image) never
+  prompts; own-logo, other-artist, and Unfiled setlists are never counted or
+  written. Accepted pins hold the `propagationBusy` lock, show
+  `Restoring the old image on N setlists…`, and keep a visible landing overlay
+  inert; target writes re-read the cache (`Skipped …: changed while
+  updating.`). The Logo fieldset gains a native-disabled **Reset to artist
+  logo** button plus the `No artist logo — add one to “<Name>”, then use Reset
+  to show it here.` hint. Reset adds the abandoned own file to
+  `pendingLogoRemovals`, keeps geometry, and saves through the normal setlist
+  Save; `setlistLogoBusy` blocks Remove/Reset during a logo import. Desktop QA
+  pending.
+
 ## Still missing (per plan)
 
-- Artist-logo propagation + reset (plan Feature 30, Todo, UX-reviewed): an
-  artist image change/removal offers Keep-vs-follow per edit (Keep pins the
-  old file as each affected setlist's own logo; follow writes nothing and
-  followers resolve live; addition never prompts; own-logo/other-artist/
-  Unfiled setlists untouched), setlist-side upload/Remove stays silent-local,
-  and a `Reset to artist logo` button (native disabled + hint, size-preserving,
-  save to apply) restores the shared image after divergence.
 - Paginated split-setlist helper (move the second half of a setlist into a new
   one) as an alternative to multi-page mode.
 - Physical-paper QA on A4 (page count, header/footer per engine, legibility),

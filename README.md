@@ -134,6 +134,19 @@ setlist shows its own logo when set, otherwise its artist's logo, otherwise the
 placeholder; preview, print, and export all use that same file chain, while
 width and alignment always come from the setlist's own config.
 
+Changing an artist's image never silently rewrites its setlists. After an edit
+that changes or removes an existing image, a safe-default dialog (Keep focused)
+offers **Keep old image** (store the old file as each affected setlist's own
+logo, preserving that setlist's size and alignment) or **Use new logo / Leave
+them without a logo** (zero setlist writes — those setlists follow the live
+artist image automatically). A dirty open setlist is pinned in its draft and
+reported; save that setlist to apply it. If the choice is deferred or a Keep
+write fails, the old image stays and opening Edit retries the choice. Adding a
+first image never prompts. In the setlist Logo fieldset, **Reset to artist
+logo** clears a setlist's own image, keeps its width/alignment, and lets the
+artist image show again; save applies it and cleans up the abandoned file when
+nothing else uses it.
+
 ## Song library
 
 The library pane keeps reusable songs and offers instant search across title,
@@ -197,7 +210,7 @@ refused with
 `“<title>” is not by <A> — switch artist scope to add it.` Breaks are
 always allowed, scope changes never remove or rewrite existing items, and the
 running order summary keeps only a count of non-matching songs when any.
-The only rewrite path is the opt-in per-edit song offer above.
+The only setlist-item rewrite path is the opt-in per-edit song offer above.
 The scope selection is session-only: never saved, never backed up.
 
 ## Backup and restore

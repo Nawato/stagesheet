@@ -129,6 +129,19 @@ let renderedPageCount = 0;
 let choiceDialogOpen = false;
 /** True while accepted propagation writes own the editor and its caches. */
 let propagationBusy = false;
+/**
+ * Feature 30 retry record: a replaced/removed artist image retained on disk
+ * after a blocked or partially failed Keep. Memory-only; a restart drops the
+ * retry (the file stays).
+ */
+interface PendingArtistLogoPin {
+  artistId: string;
+  oldFileName: string;
+  targetIds: string[];
+}
+const pendingArtistLogoPins = new Map<string, PendingArtistLogoPin>();
+/** True while a setlist logo import is in flight (blocks Remove/Reset). */
+let setlistLogoBusy = false;
 
 /** Artist form state: one shared form serves both New artist and inline edit. */
 let artistFormState: ArtistFormState = createArtistFormState();
@@ -304,6 +317,8 @@ const addBreakButton = byId<HTMLButtonElement>("add-break");
 
 const logoFileInput = byId<HTMLInputElement>("logo-file");
 const logoRemoveButton = byId<HTMLButtonElement>("logo-remove");
+const logoResetButton = byId<HTMLButtonElement>("logo-reset");
+const logoResetHint = byId<HTMLParagraphElement>("logo-reset-hint");
 const logoWidthInput = byId<HTMLInputElement>("logo-width");
 const logoWidthOutput = byId<HTMLOutputElement>("logo-width-value");
 const logoShowingEl = byId<HTMLParagraphElement>("logo-showing");
@@ -511,6 +526,7 @@ function bindEvents(): void {
     void handleLogoFile();
   });
   logoRemoveButton.addEventListener("click", handleLogoRemove);
+  logoResetButton.addEventListener("click", handleLogoReset);
   // Feature 29: the slider and radios always edit the setlist draft's own
   // geometry, whichever file the resolution chain displays. `input` updates
   // the output text and the sheet; no per-tick status.
@@ -741,6 +757,8 @@ function adoptLoadedState(
   sortSongsByTitle();
   libraryEditor = null;
   pendingLibraryEditorFocus = null;
+  // A restored/adopted cache supersedes any memory-only Feature 30 retry.
+  pendingArtistLogoPins.clear();
   setlists = loadedSetlists.map((setlist) => ({
     ...setlist,
     items: normalizeSetlistItems(setlist.items),
@@ -1128,7 +1146,11 @@ async function deleteCurrent(): Promise<void> {
       setlists = setlists.filter((setlist) => setlist.id !== current?.id);
 
       const detachedLogo = persistedVersion?.logo.file_name;
-      if (detachedLogo && !setlists.some((setlist) => setlist.logo.file_name === detachedLogo)) {
+      if (
+        detachedLogo &&
+        !isPendingArtistLogoFile(detachedLogo) &&
+        !setlists.some((setlist) => setlist.logo.file_name === detachedLogo)
+      ) {
         await api.removeLogo(detachedLogo).catch(() => undefined);
       }
     } catch (error) {
@@ -1316,12 +1338,13 @@ function syncCaptureLock(locked: boolean): void {
   addBreakButton.disabled = locked;
   logoFileInput.disabled = locked;
   logoRemoveButton.disabled = locked;
+  logoResetButton.disabled = locked;
   logoWidthInput.disabled = locked;
   for (const radio of alignmentRadios) radio.disabled = locked;
   for (const [, input] of sheetOptionInputs) input.disabled = locked;
   for (const radio of pageModeRadios) radio.disabled = locked;
-  // Unconditionally re-enabling Remove would contradict its own-logo
-  // precondition (Feature 29); re-render its state from the draft.
+  // Unconditionally re-enabling Remove/Reset would contradict their own-logo
+  // preconditions (Features 29/30); re-render their state from the draft.
   if (!locked) renderLogoControls();
 }
 
@@ -2323,12 +2346,11 @@ async function offerSetlistSongPropagation(
         failures.push({ title, error: describeError(error) });
       } finally {
         libraryWritesInFlight -= 1;
-        try {
-          syncPropagationLock(false);
-          if (isPageFocusLost()) restoreOfferFocus();
-        } finally {
-          propagationBusy = false;
-        }
+        // Clear the flag before unlocking: `renderLogoControls()` reads it, so
+        // the release render must see the lock as already gone.
+        propagationBusy = false;
+        syncPropagationLock(false);
+        if (isPageFocusLost()) restoreOfferFocus();
       }
     } catch (error) {
       setStatus(
@@ -2380,6 +2402,8 @@ function hasUnsavedWork(): boolean {
   if (dirty) return true;
   if (choiceDialogOpen) return true;
   if (propagationBusy) return true;
+  // A retained old artist image awaiting an Edit-time Keep/Follow retry.
+  if (pendingArtistLogoPins.size > 0) return true;
   if (libraryEditor) return true;
   if (artistFormHasDraft()) return true;
   if (landingVisible && (landingTypedName() || landingLogoFile || landingTransientLogos.size > 0)) {
@@ -2517,6 +2541,11 @@ function reselectCurrentInScope(): void {
  */
 async function switchScope(next: string): Promise<void> {
   if (blockDuringPropagation()) {
+    renderScopePicker();
+    return;
+  }
+  if (artistBusy) {
+    setStatus("Wait for the current artist request to finish before switching scope.", "info");
     renderScopePicker();
     return;
   }
@@ -2747,7 +2776,35 @@ function renderLogoControls(): void {
   // the resolution chain is not a setlist logo. A local upload preview counts
   // as the setlist's own logo for the Remove control.
   logoRemoveButton.disabled =
-    exporting || (!current.logo.file_name && !logoPreviewIsLocal);
+    exporting ||
+    propagationBusy ||
+    setlistLogoBusy ||
+    (!current.logo.file_name && !logoPreviewIsLocal);
+
+  // Reset clears only this draft's own file so the live artist image resolves
+  // again. It is available only when there is an own file to clear, the live
+  // artist has a file (checked even when the setlist shows its own logo), and
+  // the two differ. Already following, no own logo, and no artist logo are all
+  // native-disabled states with no extra hint (the showing line covers them).
+  const resetArtist = findArtistById(artists, normalizeArtistId(current.artist_id));
+  const canResetToArtist = Boolean(
+    current.logo.file_name &&
+      resetArtist?.logo.file_name &&
+      current.logo.file_name !== resetArtist.logo.file_name,
+  );
+  logoResetButton.disabled =
+    exporting || propagationBusy || setlistLogoBusy || !canResetToArtist;
+  const showResetHint = Boolean(
+    current.logo.file_name && resetArtist && !resetArtist.logo.file_name,
+  );
+  logoResetHint.hidden = !showResetHint;
+  if (showResetHint && resetArtist) {
+    logoResetHint.textContent = `No artist logo — add one to “${artistLabel(resetArtist)}”, then use Reset to show it here.`;
+    logoResetButton.setAttribute("aria-describedby", "logo-reset-hint");
+  } else {
+    logoResetHint.textContent = "";
+    logoResetButton.removeAttribute("aria-describedby");
+  }
 
   for (const radio of alignmentRadios) {
     radio.checked = radio.value === current.logo.alignment;
@@ -4601,14 +4658,13 @@ async function saveEditedLibrarySong(
     // re-enable their own controls mid-phase.
     syncPropagationLock(true);
   } finally {
-    try {
-      syncPropagationLock(false);
-      // Do not yank focus if the user deliberately moved to search or a row
-      // while the accepted writes were running.
-      if (isPageFocusLost()) restoreLibraryFocus();
-    } finally {
-      propagationBusy = false;
-    }
+    // Clear the flag before unlocking: `renderLogoControls()` reads it, so the
+    // release render must see the lock as already gone.
+    propagationBusy = false;
+    syncPropagationLock(false);
+    // Do not yank focus if the user deliberately moved to search or a row
+    // while the accepted writes were running.
+    if (isPageFocusLost()) restoreLibraryFocus();
   }
 
   const skipNotes = [
@@ -4877,6 +4933,7 @@ function buildArtistThumb(artist: Artist): HTMLSpanElement {  const thumb = el("
  * screen until it is resolved).
  */
 function startArtistEdit(artistId: string): void {
+  if (blockDuringPropagation()) return;
   if (artistBusy || artistDeleting || landingBusy) {
     setStatus("Wait for the current artist request to finish before editing an artist.", "info");
     return;
@@ -4906,6 +4963,7 @@ function startArtistEdit(artistId: string): void {
     const existing = landingCard.querySelector<HTMLInputElement>("#artist-edit-name");
     existing?.focus();
     existing?.select();
+    maybeRetryPendingArtistLogoPin(artist);
     return;
   }
 
@@ -4923,6 +4981,7 @@ function startArtistEdit(artistId: string): void {
   const nameInput = landingCard.querySelector<HTMLInputElement>("#artist-edit-name");
   nameInput?.focus();
   nameInput?.select();
+  maybeRetryPendingArtistLogoPin(artist);
 }
 
 /**
@@ -4930,6 +4989,7 @@ function startArtistEdit(artistId: string): void {
  * Edit button, so keyboard users stay in the management list.
  */
 function cancelArtistEdit(artistId: string): void {
+  if (blockDuringPropagation()) return;
   if (artistBusy) return;
 
   discardArtistDraftLogos(artistFormState);
@@ -5063,8 +5123,400 @@ function discardArtistDraftLogos(state: ArtistFormState): void {
   }
 }
 
+/**
+ * Persisted setlists of one artist that follow the live artist image: they have
+ * no own logo file. These are the only candidates for Feature 30's Keep pin.
+ * Setlists with their own logo, other artists, and Unfiled/dangling ids never
+ * match. The open dirty setlist is included in the count; Keep pins it in its
+ * draft when it still has no own logo (never auto-saving), or skips/reports it
+ * when its draft owns a different file.
+ */
+function artistFollowerSetlists(artistId: string): Setlist[] {
+  return setlists.filter(
+    (setlist) =>
+      normalizeArtistId(setlist.artist_id) === artistId &&
+      setlist.logo.file_name === null,
+  );
+}
+
+/** Stores the memory-only Edit-time retry for a retained old artist image. */
+function rememberPendingArtistLogoPin(
+  artistId: string,
+  oldFileName: string,
+  targets: readonly Setlist[],
+): void {
+  pendingArtistLogoPins.set(artistId, {
+    artistId,
+    oldFileName,
+    targetIds: [...new Set(targets.map((target) => target.id))],
+  });
+}
+
+/**
+ * Current cache targets for a stored retry: the recorded ids that still belong
+ * to the same artist and still have no own logo. Targets saved/pinned since the
+ * failed Keep, or removed, drop out of the retry.
+ */
+function pendingArtistLogoPinTargets(record: PendingArtistLogoPin): Setlist[] {
+  const ids = new Set(record.targetIds);
+  return setlists.filter(
+    (setlist) =>
+      ids.has(setlist.id) &&
+      normalizeArtistId(setlist.artist_id) === record.artistId &&
+      setlist.logo.file_name === null,
+  );
+}
+
+/** True while a retained old image is still needed by a pending Edit retry. */
+function isPendingArtistLogoFile(fileName: string): boolean {
+  for (const record of pendingArtistLogoPins.values()) {
+    if (record.oldFileName === fileName) return true;
+  }
+  return false;
+}
+
+/**
+ * Feature 30 guard matrix. The artist save that triggered the offer is already
+ * counted in `libraryWritesInFlight` and has `artistBusy` set, so both are
+ * allowed here. Everything else defers and leaves the replaced/removed artist
+ * file in place for a later retry.
+ */
+function logoPropagationBlockMessage(
+  artistName: string,
+  triggeringArtistSave: boolean,
+): string | null {
+  if (exporting) {
+    return `Export in progress — “${artistName}” saved here only. The old image is kept — open Edit to retry the choice after export.`;
+  }
+  const libraryBusy = triggeringArtistSave
+    ? libraryWritesInFlight > 1
+    : libraryWritesInFlight > 0;
+  if (
+    backingUp ||
+    restoring ||
+    artistDeleting ||
+    propagationBusy ||
+    choiceDialogOpen ||
+    landingBusy ||
+    artistLogoBusy ||
+    landingLogoBusy ||
+    libraryBusy ||
+    (artistBusy && !triggeringArtistSave)
+  ) {
+    return `“${artistName}” saved here only. Finish the current library/artist request. The old image is kept — open Edit to retry the choice.`;
+  }
+  return null;
+}
+
+/**
+ * Feature 30 Keep: pins the pre-save artist file as each affected setlist's own
+ * logo through one normal `save_setlist` per target. Each setlist keeps its own
+ * width/alignment and display pixels. A dirty open setlist with no own logo is
+ * pinned in its draft (never auto-saved); a dirty one with a different own logo
+ * is skipped and reported. Every target is re-read from the cache before
+ * writing. Accepted writes hold the Feature 28 `propagationBusy` lock.
+ */
+async function pinOldArtistLogoOnSetlists(
+  artist: Artist,
+  oldFileName: string,
+  targets: Setlist[],
+  removing: boolean,
+  restoreFocus: () => void,
+): Promise<void> {
+  const skipped: Array<{ title: string; reason: "unsaved changes" | "changed while updating" }> = [];
+  const failures: Array<{ title: string; error: string }> = [];
+  let updated = 0;
+  let draftPinnedTitle: string | null = null;
+  const dirtyCurrentId = dirty && current ? current.id : null;
+
+  propagationBusy = true;
+  try {
+    syncPropagationLock(true);
+    // Keep the visible landing overlay inert after the choice dialog closes;
+    // artistBusy alone leaves some landing chrome reachable.
+    syncLandingInert();
+    setStatus(`Restoring the old image on ${countLabel(targets.length, "setlist")}…`);
+    for (const target of targets) {
+      const title = displaySetlistTitle(target);
+      if (dirtyCurrentId !== null && target.id === dirtyCurrentId && current) {
+        if (normalizeArtistId(current.artist_id) !== artist.id) {
+          // The draft moved to another artist after the pre-save snapshot; it
+          // must not receive this artist's old image.
+          skipped.push({ title, reason: "unsaved changes" });
+          continue;
+        }
+        if (!current.logo.file_name) {
+          // Pin the retained old image in the open draft only: never auto-save.
+          current.logo.file_name = oldFileName;
+          logoPreviewIsLocal = false;
+          loadedLogoFileName = null;
+          markDirty();
+          renderLogoControls();
+          renderSheet();
+          await refreshLogoIfChanged();
+          draftPinnedTitle = title;
+        } else if (current.logo.file_name === oldFileName) {
+          // A prior attempt (or the user) already pinned the same old image;
+          // the draft only needs its normal Save.
+          draftPinnedTitle = title;
+        } else {
+          // The draft diverged with its own different logo: never overwrite it.
+          skipped.push({ title, reason: "unsaved changes" });
+        }
+        continue;
+      }
+
+      const liveTarget = setlists.find((setlist) => setlist.id === target.id);
+      if (
+        !liveTarget ||
+        liveTarget !== target ||
+        liveTarget.updated_at !== target.updated_at
+      ) {
+        skipped.push({ title, reason: "changed while updating" });
+        continue;
+      }
+
+      const targetWasCurrent =
+        !dirty && current?.id === target.id && current.updated_at === target.updated_at;
+      try {
+        const saved = await api.saveSetlist({
+          ...target,
+          logo: { ...target.logo, file_name: oldFileName },
+        });
+        updated += 1;
+        const index = setlists.findIndex((setlist) => setlist.id === saved.id);
+        // A newer cache entry that appeared during the write wins; never
+        // resurrect a deleted setlist or clobber a concurrent edit.
+        if (index >= 0 && setlists[index] === target) {
+          setlists[index] = cloneSetlist(saved);
+          if (targetWasCurrent && !dirty && current?.id === saved.id) {
+            current = cloneSetlist(saved);
+          }
+        }
+      } catch (error) {
+        failures.push({ title, error: describeError(error) });
+      }
+    }
+
+    sortSetlists();
+    renderAll();
+    await refreshLogoIfChanged();
+    // Re-assert the lock after renders: logo/row renderers may otherwise
+    // re-enable their own controls mid-phase.
+    syncPropagationLock(true);
+
+    const skipMessages = skipped.map(
+      (entry) => `Skipped “${entry.title}”: ${entry.reason}.`,
+    );
+    const draftPinMessage = draftPinnedTitle
+      ? `Keep the old image on “${draftPinnedTitle}” too — save that setlist to apply it.`
+      : "";
+    const retainedNote = "The old image is kept — open Edit to retry the choice.";
+    const retained =
+      failures.length > 0 || skipped.length > 0 || draftPinnedTitle !== null;
+
+    if (failures.length > 0 || skipped.length > 0 || draftPinnedTitle !== null) {
+      rememberPendingArtistLogoPin(artist.id, oldFileName, targets);
+    } else {
+      pendingArtistLogoPins.delete(artist.id);
+    }
+
+    const artistOutcome = `“${artist.name}” ${removing ? "has no logo" : "uses the new logo"}.`;
+    if (failures.length > 0) {
+      const details = failures
+        .map((failure) => `“${failure.title}” failed: ${failure.error}`)
+        .join("; ");
+      setStatus(
+        `Updated ${updated} of ${targets.length} — ${details}. ${retainedNote}` +
+          (draftPinMessage ? ` ${draftPinMessage}` : "") +
+          (skipMessages.length > 0 ? ` ${skipMessages.join(" ")}` : ""),
+        "error",
+      );
+    } else if (skipped.length > 0) {
+      const keptPart =
+        updated > 0
+          ? `Kept the old image on ${updated} of ${targets.length} ${targets.length === 1 ? "setlist" : "setlists"} as ${updated === 1 ? "its" : "their"} own logo.`
+          : "";
+      setStatus(
+        [keptPart, draftPinMessage, skipMessages.join(" "), retainedNote, artistOutcome]
+          .filter(Boolean)
+          .join(" "),
+        updated > 0 ? "success" : "info",
+      );
+    } else if (draftPinnedTitle) {
+      const keptPart =
+        updated > 0
+          ? `Kept the old image on ${countLabel(updated, "setlist")} as ${updated === 1 ? "its" : "their"} own logo.`
+          : "";
+      setStatus(
+        [keptPart, draftPinMessage, artistOutcome].filter(Boolean).join(" "),
+        "success",
+      );
+    } else {
+      setStatus(
+        `Kept the old image on ${countLabel(targets.length, "setlist")} as ${targets.length === 1 ? "its" : "their"} own logo. ${artistOutcome}`,
+        "success",
+      );
+    }
+
+    if (!retained && updated > 0 && !isPendingArtistLogoFile(oldFileName)) {
+      pruneArtistThumbUrl(oldFileName);
+      await api.removeLogo(oldFileName).catch(() => undefined);
+    }
+  } finally {
+    propagationBusy = false;
+    try {
+      syncPropagationLock(false);
+    } finally {
+      // The landing overlay must be interactive before focus is restored;
+      // otherwise focusing its Edit button is a no-op.
+      syncLandingInert();
+    }
+    if (isPageFocusLost()) restoreFocus();
+  }
+}
+
+/**
+ * Feature 30 follow-up after a committed artist save. Addition (no old file)
+ * and rename-only saves never prompt. A changed or removed non-null old file
+ * offers Keep as the safe default; Follow writes zero setlists, Keep pins the
+ * old file onto each affected setlist. The old file's deferred `remove_logo`
+ * runs only after the choice/retry and only when the batch had no skips, draft
+ * pin, or failures; a blocked offer stores a memory-only Edit-time retry.
+ */
+async function finishArtistLogoChange(
+  saved: Artist,
+  oldFileName: string | null,
+  hadOriginalLogo: boolean,
+  candidateTargets: Setlist[],
+  triggeringArtistSave: boolean,
+  restoreFocus: () => void,
+): Promise<void> {
+  if (!oldFileName) {
+    if (!hadOriginalLogo && saved.logo.file_name) {
+      const count = candidateTargets.length;
+      setStatus(
+        count > 0
+          ? `Updated the logo for “${saved.name}”. ${countLabel(count, "setlist")} now ${count === 1 ? "shows" : "show"} it.`
+          : `Updated the logo for “${saved.name}”.`,
+        "success",
+      );
+    } else {
+      setStatus(
+        `Updated artist “${saved.name}”. Songs and setlists show the new name without being rewritten.`,
+        "success",
+      );
+    }
+    return;
+  }
+
+  const removing = saved.logo.file_name === null;
+  const targets = candidateTargets;
+  const cleanupOldFile = async (): Promise<void> => {
+    if (isPendingArtistLogoFile(oldFileName)) return;
+    pruneArtistThumbUrl(oldFileName);
+    await api.removeLogo(oldFileName).catch(() => undefined);
+  };
+
+  if (targets.length === 0) {
+    pendingArtistLogoPins.delete(saved.id);
+    await cleanupOldFile();
+    setStatus(
+      removing
+        ? `Removed the logo for “${saved.name}”.`
+        : `Updated the logo for “${saved.name}”.`,
+      "success",
+    );
+    return;
+  }
+
+  const blocked = logoPropagationBlockMessage(saved.name, triggeringArtistSave);
+  if (blocked) {
+    // The artist now shows the new state, but the old file is still on disk.
+    // Remember it so opening this artist's Edit form offers the choice again.
+    rememberPendingArtistLogoPin(saved.id, oldFileName, targets);
+    setStatus(blocked, "info");
+    return;
+  }
+
+  const count = targets.length;
+  const countText = countLabel(count, "setlist");
+  const names = targets.map(displaySetlistTitle);
+  const theyWere = count === 1 ? "was" : "were";
+  const theyNow = count === 1 ? "It now shows" : "They now show";
+  const them = count === 1 ? "it" : "them";
+  const theyStay = count === 1 ? "it stays" : "they stay";
+  let useNew: boolean;
+  try {
+    useNew = await showChoiceDialog({
+      heading: `Keep the old logo on ${countText}?`,
+      body: removing
+        ? `You removed the logo for “${saved.name}”. ${countText} ${theyWere} using the old image: ${dialogRecordNames(names)}. ${theyNow} “No logo yet”. Keep stores the old image as each setlist's own logo; otherwise ${theyStay} without one. Leaving ${them} without a logo deletes the old image if nothing else uses it. Setlists with their own logo are not affected.`
+        : `You changed the logo for “${saved.name}”. ${countText} ${theyWere} using the old artist image: ${dialogRecordNames(names)}. ${theyNow} the new logo. Keep stores the old image as each setlist's own logo; later artist image changes won't update ${them}. Use new logo leaves ${them} following the live image and deletes the old image if nothing else uses it. Setlists with their own logo are not affected.`,
+      keepLabel: `Keep old image on ${countText}`,
+      confirmLabel: removing ? `Leave ${them} without a logo` : "Use new logo",
+      restoreFocus,
+    });
+  } catch (error) {
+    rememberPendingArtistLogoPin(saved.id, oldFileName, targets);
+    setStatus(
+      `Could not complete the logo choice for “${saved.name}”: ${describeError(error)}. The old image is kept — open Edit to retry the choice.`,
+      "error",
+    );
+    return;
+  }
+
+  // `showChoiceDialog` resolves true for the explicit confirm (Use new /
+  // Leave without) and false for the safe-default Keep. Never invert these
+  // paths: Follow writes zero setlists, Keep pins the old file.
+  if (useNew) {
+    pendingArtistLogoPins.delete(saved.id);
+    await cleanupOldFile();
+    setStatus(
+      removing
+        ? `Removed the logo for “${saved.name}”. ${countText} now ${count === 1 ? "shows" : "show"} “No logo yet”.`
+        : `Updated the logo for “${saved.name}”. ${countText} now ${count === 1 ? "shows" : "show"} the new logo.`,
+      "success",
+    );
+    return;
+  }
+
+  const lateBlock = logoPropagationBlockMessage(saved.name, triggeringArtistSave);
+  if (lateBlock) {
+    rememberPendingArtistLogoPin(saved.id, oldFileName, targets);
+    setStatus(lateBlock, "info");
+    return;
+  }
+  await pinOldArtistLogoOnSetlists(saved, oldFileName, targets, removing, restoreFocus);
+}
+
+/**
+ * Feature 30 Edit-time retry for a retained old artist image. Opening (or
+ * re-clicking) Edit for that artist offers the Keep/Follow choice again using
+ * the stored old file and any recorded setlists that still follow the artist.
+ * The record is cleared before the retry; a blocked/failed retry stores it.
+ */
+function maybeRetryPendingArtistLogoPin(artist: Artist): void {
+  const pending = pendingArtistLogoPins.get(artist.id);
+  if (!pending) return;
+  pendingArtistLogoPins.delete(artist.id);
+  // The artist already points at the retained file: followers show it.
+  if (artist.logo.file_name === pending.oldFileName) return;
+
+  const targets = pendingArtistLogoPinTargets(pending);
+  void finishArtistLogoChange(artist, pending.oldFileName, true, targets, false, () => {
+    focusLandingArtistEdit(artist.id);
+  }).catch((error: unknown) => {
+    setStatus(
+      `Could not retry the old artist image for “${artist.name}”: ${describeError(error)}.`,
+      "error",
+    );
+  });
+}
+
 async function handleArtistSubmit(event: SubmitEvent): Promise<void> {
   event.preventDefault();
+  if (blockDuringPropagation()) return;
   if (artistBusy || artistDeleting) {
     setStatus("Wait for the current artist request to finish before saving.", "info");
     return;
@@ -5098,6 +5550,10 @@ async function handleArtistSubmit(event: SubmitEvent): Promise<void> {
     name,
     logo: { ...state.logo },
   };
+  // Snapshot the pre-save followers: Feature 30's affected definition keys off
+  // the setlist cache before this artist save. Each target is re-read again
+  // before its pin write, so a concurrent change still skips/reports.
+  const followersBeforeSave = artistFollowerSetlists(state.artistId);
 
   artistBusy = true;
   libraryWritesInFlight += 1;
@@ -5119,15 +5575,24 @@ async function handleArtistSubmit(event: SubmitEvent): Promise<void> {
     }
     artists.sort((left, right) => left.name.localeCompare(right.name));
 
-    // The record is persisted; now the replaced/imported files can go. The
-    // backend still skips any file a setlist or another artist references.
-    const cleanup = new Set(state.transientLogos);
-    if (state.originalLogo && state.originalLogo !== saved.logo.file_name) {
-      cleanup.add(state.originalLogo);
+    // A committed logo change (including an addition) supersedes any retained
+    // old image awaiting an Edit-time retry; a rename leaves that retry alone.
+    if (state.originalLogo !== saved.logo.file_name) {
+      pendingArtistLogoPins.delete(saved.id);
     }
-    for (const fileName of cleanup) {
-      if (fileName === saved.logo.file_name) continue;
+
+    // Draft-only files can go now. The persisted `originalLogo` is deferred
+    // until Feature 30's follow-vs-pin choice finishes: Keep needs to pin it
+    // onto affected setlists after the save, so an early `remove_logo` would
+    // delete the file before those writes could reference it.
+    const oldFileName =
+      state.originalLogo && state.originalLogo !== saved.logo.file_name
+        ? state.originalLogo
+        : null;
+    for (const fileName of state.transientLogos) {
+      if (fileName === saved.logo.file_name || fileName === oldFileName) continue;
       pruneArtistThumbUrl(fileName);
+      // A leftover file is harmless; never fail a successful save over cleanup.
       void api.removeLogo(fileName).catch(() => undefined);
     }
     // Warm the replaced/added image so the next landing render paints it
@@ -5149,10 +5614,22 @@ async function handleArtistSubmit(event: SubmitEvent): Promise<void> {
     // Await the swap: a rename, logo change, or logo removal must show its
     // resolved preview (or fallback/placeholder) before the final status/focus.
     await refreshLogoIfChanged();
-    setStatus(
-      `Updated artist “${saved.name}”. Songs and setlists show the new name without being rewritten.`,
-      "success",
-    );
+
+    await finishArtistLogoChange(
+      saved,
+      oldFileName,
+      state.originalLogo !== null,
+      followersBeforeSave,
+      true,
+      () => {
+        if (savedArtistId) focusLandingArtistEdit(savedArtistId);
+      },
+    ).catch((error: unknown) => {
+      setStatus(
+        `Artist saved, but the logo follow-up could not complete: ${describeError(error)}.`,
+        "error",
+      );
+    });
   } catch (error) {
     setStatus(`Could not save artist: ${describeError(error)}`, "error");
   } finally {
@@ -5167,6 +5644,7 @@ async function handleArtistSubmit(event: SubmitEvent): Promise<void> {
 }
 
 async function handleArtistLogoFile(): Promise<void> {
+  if (blockDuringPropagation()) return;
   const form = landingArtistEditForm();
   const fileInput = form?.querySelector<HTMLInputElement>("#artist-edit-logo-file");
   const file = fileInput?.files?.[0];
@@ -5257,6 +5735,7 @@ async function handleArtistLogoFile(): Promise<void> {
 }
 
 function handleArtistLogoRemove(): void {
+  if (blockDuringPropagation()) return;
   if (artistBusy) return;
 
   const fileName = artistFormState.logo.file_name;
@@ -5376,6 +5855,7 @@ async function deleteArtist(artist: Artist): Promise<void> {
     }
 
     artists = artists.filter((entry) => entry.id !== artist.id);
+    pendingArtistLogoPins.delete(artist.id);
     // The clear is keyed off the open draft itself, so it also covers a dirty
     // persisted draft whose cached record no longer points at A and drafts not
     // present in `setlists`. An unrelated draft assignment is preserved.
@@ -5457,6 +5937,10 @@ function clearArtistDraftForDeletedArtist(artistId: string, editingThis: boolean
  */
 async function enterScope(id: string): Promise<void> {
   if (blockDuringPropagation()) return;
+  if (artistBusy) {
+    setStatus("Wait for the current artist request to finish before entering a scope.", "info");
+    return;
+  }
   if (id !== UNFILED_SCOPE && !artists.some((artist) => artist.id === id)) return;
   if (backingUp || restoring) {
     setStatus(
@@ -5497,6 +5981,15 @@ async function enterScope(id: string): Promise<void> {
 /** Closes a reopened landing page without leaving the active scope. */
 function closeLanding(): void {
   if (activeArtistId === null) return;
+  if (blockDuringPropagation()) return;
+  if (artistBusy || landingBusy) {
+    setStatus("Wait for the current artist request to finish before closing.", "info");
+    return;
+  }
+  if (artistLogoBusy || landingLogoBusy) {
+    setStatus("Wait for the logo import to finish before closing.", "info");
+    return;
+  }
   if (landingLogoFile) landingTransientLogos.add(landingLogoFile);
   landingLogoFile = null;
   discardLandingTransientLogos();
@@ -5522,7 +6015,8 @@ function discardLandingTransientLogos(): void {
  * dialog): while either owns the screen, the header and workspace are `inert`,
  * so Tab cannot leave the overlay. The status line stays live for
  * announcements. Removing the attribute restores the background when the
- * overlay hides.
+ * overlay hides. Feature 30 also keeps a visible landing overlay inert during
+ * accepted propagation writes, even after the choice dialog has closed.
  */
 function syncLandingInert(): void {
   const locked = landingVisible || choiceDialogOpen;
@@ -5533,10 +6027,10 @@ function syncLandingInert(): void {
       node.removeAttribute("inert");
     }
   }
-  // A modal that opens while the landing page is visible marks the overlay
-  // inert itself; keep that state if a landing re-render happens mid-dialog.
-  if (choiceDialogOpen && landingVisible) {
+  if ((choiceDialogOpen || propagationBusy) && landingVisible) {
     landingOverlay.setAttribute("inert", "");
+  } else {
+    landingOverlay.removeAttribute("inert");
   }
 }
 
@@ -5617,6 +6111,7 @@ function buildLandingCard(): DocumentFragment {
       toggle.dataset.landingNewToggle = "true";
       toggle.disabled = artistBusy || artistDeleting || landingBusy || restoring || backingUp;
       toggle.addEventListener("click", () => {
+        if (blockDuringPropagation()) return;
         landingShowCreate = true;
         renderLanding();
       });
@@ -5965,6 +6460,7 @@ function refreshLandingLogoPreview(preview: HTMLElement): void {
 }
 
 async function handleLandingLogoFile(fileInput: HTMLInputElement, preview: HTMLElement): Promise<void> {
+  if (blockDuringPropagation()) return;
   const file = fileInput.files?.[0];
   fileInput.value = "";
   if (!file || landingBusy || landingLogoBusy) return;
@@ -6008,6 +6504,7 @@ async function handleLandingLogoFile(fileInput: HTMLInputElement, preview: HTMLE
  * form returns to "No logo" without needing a rebuild.
  */
 function handleLandingLogoRemove(): void {
+  if (blockDuringPropagation()) return;
   if (landingBusy || landingLogoBusy) return;
   const fileName = landingLogoFile;
   if (!fileName) return;
@@ -6028,6 +6525,7 @@ async function handleLandingCreate(
   nameInput: HTMLInputElement,
   submit: HTMLButtonElement,
 ): Promise<void> {
+  if (blockDuringPropagation()) return;
   if (landingBusy) return;
   if (landingLogoBusy) {
     setStatus("Wait for the artist logo import to finish before creating.", "info");
@@ -6066,6 +6564,8 @@ async function handleLandingCreate(
         alignment: "Center",
       },
     });
+    // Feature 30 addition: a brand-new artist has no setlists, so this path
+    // never opens the follow-vs-pin dialog. `Added artist` stays the status.
     artists.push(saved);
     artists.sort((left, right) => left.name.localeCompare(right.name));
     // The staged logo is now referenced by the record; stop tracking it so the
@@ -6175,6 +6675,10 @@ async function handleLogoFile(): Promise<void> {
   const file = logoFileInput.files?.[0];
   logoFileInput.value = "";
   if (!file || !current) return;
+  if (setlistLogoBusy) {
+    setStatus("Wait for the logo import to finish.", "info");
+    return;
+  }
   if (captureGuard()) {
     renderLogoControls();
     return;
@@ -6191,50 +6695,68 @@ async function handleLogoFile(): Promise<void> {
     return;
   }
 
-  let bytes: Uint8Array;
-  try {
-    bytes = new Uint8Array(await file.arrayBuffer());
-  } catch (error) {
-    setStatus(`Could not read logo: ${describeError(error)}`, "error");
-    return;
-  }
-
+  // Hold Remove/Reset from the first await: a Reset during the file read must
+  // not be undone by the import that follows.
   const setlist = current;
-  const previewUrl = URL.createObjectURL(file);
-  const previousFileName = setlist.logo.file_name;
-  setLogoPreview(previewUrl);
+  setlistLogoBusy = true;
   renderLogoControls();
-  markDirty();
-
-  if (!backendAvailable) {
-    setStatus("Logo preview is local only — the backend is unavailable.", "error");
-    return;
-  }
-
   try {
-    const storedName = await api.importLogo(bytes, file.name);
-    if (current !== setlist) {
-      URL.revokeObjectURL(previewUrl);
+    let bytes: Uint8Array;
+    try {
+      bytes = new Uint8Array(await file.arrayBuffer());
+    } catch (error) {
+      setStatus(`Could not read logo: ${describeError(error)}`, "error");
       return;
     }
-    if (previousFileName && previousFileName !== storedName) {
-      pendingLogoRemovals.add(previousFileName);
-    }
-    setlist.logo.file_name = storedName;
+    if (current !== setlist) return;
+
+    const previewUrl = URL.createObjectURL(file);
+    const previousFileName = setlist.logo.file_name;
+    setLogoPreview(previewUrl);
     renderLogoControls();
     markDirty();
-    renderSheet();
-    setStatus("Logo imported.", "success");
-  } catch (error) {
-    setStatus(`Could not import logo: ${describeError(error)}`, "error");
-    // Keep the previous logo (if any) visible after a failed replacement.
-    await loadLogoForCurrent();
+
+    if (!backendAvailable) {
+      setStatus("Logo preview is local only — the backend is unavailable.", "error");
+      return;
+    }
+
+    try {
+      const storedName = await api.importLogo(bytes, file.name);
+      if (current !== setlist) {
+        URL.revokeObjectURL(previewUrl);
+        // The setlist moved on while the import was in flight; the new file is
+        // unreferenced, so clean it up best-effort.
+        void api.removeLogo(storedName).catch(() => undefined);
+        return;
+      }
+      if (previousFileName && previousFileName !== storedName) {
+        pendingLogoRemovals.add(previousFileName);
+      }
+      setlist.logo.file_name = storedName;
+      renderLogoControls();
+      markDirty();
+      renderSheet();
+      setStatus("Logo imported.", "success");
+    } catch (error) {
+      setStatus(`Could not import logo: ${describeError(error)}`, "error");
+      // Keep the previous logo (if any) visible after a failed replacement.
+      await loadLogoForCurrent();
+      renderLogoControls();
+    }
+  } finally {
+    setlistLogoBusy = false;
     renderLogoControls();
   }
 }
 
 function handleLogoRemove(): void {
   if (!current) return;
+  if (setlistLogoBusy) {
+    setStatus("Wait for the logo import to finish.", "info");
+    return;
+  }
+  if (blockDuringPropagation()) return;
   if (captureGuard()) {
     renderLogoControls();
     return;
@@ -6268,6 +6790,52 @@ function handleLogoRemove(): void {
   setStatus(fileName ? "Logo removed — save to apply." : "Logo removed.");
 }
 
+/**
+ * Feature 30: drops the setlist's own logo file so the live artist image
+ * resolves again. Width/alignment stay untouched. A successful Reset disables
+ * itself (there is no own file left), so focus moves to the upload control like
+ * Remove. The abandoned own file joins `pendingLogoRemovals` so the normal save
+ * cleanup removes it when unreferenced; `remove_logo` still skips shared files.
+ */
+async function handleLogoReset(): Promise<void> {
+  if (!current) return;
+  if (setlistLogoBusy) {
+    setStatus("Wait for the logo import to finish.", "info");
+    return;
+  }
+  if (blockDuringPropagation()) return;
+  if (captureGuard()) {
+    renderLogoControls();
+    return;
+  }
+
+  const artist = findArtistById(artists, normalizeArtistId(current.artist_id));
+  const ownFileName = current.logo.file_name;
+  if (
+    !ownFileName ||
+    !artist?.logo.file_name ||
+    ownFileName === artist.logo.file_name
+  ) {
+    renderLogoControls();
+    return;
+  }
+
+  pendingLogoRemovals.add(ownFileName);
+  current.logo.file_name = null;
+  // Stop a local upload preview from winning so the resolved artist image can
+  // actually swap in (same handoff as Remove).
+  logoPreviewIsLocal = false;
+  loadedLogoFileName = null;
+
+  markDirty();
+  renderLogoControls();
+  renderSheet();
+  // Sequence the resolved image before announcing the draft change.
+  await refreshLogoIfChanged();
+  logoFileInput.focus();
+  setStatus("Artist logo restored — save to apply.");
+}
+
 async function cleanupPendingLogoRemovals(): Promise<void> {
   if (pendingLogoRemovals.size === 0 || !backendAvailable) return;
 
@@ -6275,6 +6843,8 @@ async function cleanupPendingLogoRemovals(): Promise<void> {
   pendingLogoRemovals.clear();
 
   for (const name of names) {
+    // A retained old image may still be needed by a Feature 30 Edit retry.
+    if (isPendingArtistLogoFile(name)) continue;
     if (setlists.some((setlist) => setlist.logo.file_name === name)) continue;
     // A leftover file is harmless; never fail a successful save over cleanup.
     await api.removeLogo(name).catch(() => undefined);
