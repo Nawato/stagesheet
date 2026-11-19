@@ -176,6 +176,42 @@ Serde notes:
   Success selects the clean copy in the header (it copies the filed artist, so
   it stays in the active scope). No sheet, `<colgroup>`, frame, print-CSS,
   raster, or layout change is involved.
+- **Opt-in song propagation (Feature 28)**: the library stays the canonical
+  edit place. Library→setlist starts only after a successful library save;
+  setlist→library starts only from an explicit setlist Save (`#save-setlist` or
+  the setlist Ctrl/Cmd+S path), after the saved-runtime status — never on field
+  blur, Print, Duplicate, Back up, File under…, or an auto-save. Matching is
+  `Song.id` equality only (no title/artist-text fallback; dangling/legacy rows
+  never match), scoped to the active artist through `resolveArtistForSong()` /
+  `songInScope()`; the Unfiled scope and other artists are never offered. Both
+  directions require the library song to be filed (`findArtistById` resolves its
+  `artist_id`), excluding legacy-text/unfiled/dangling records.
+  Library→setlist targets are in-scope saved setlists with a differing
+  song-data item snapshot; a dirty target (only `current`) is skipped and
+  reported, never auto-saved, and a clean `current` is included.
+  Setlist→library compares only `title`, `bpm`, `key`, `tuning`,
+  `duration_secs`, and `notes` against the pre-save cached item (or the library
+  song for a new setlist/item), ignores artist text/`artist_id`, and copies only
+  the effective changed fields onto the filed library song while preserving its
+  `artist` snapshot and `artist_id`; its dialog body uses neutral "library copy
+  is different" wording, not an "old version" claim. One modal runs per changed
+  song, sequentially.
+  The reusable `showChoiceDialog` is safe-default (`role="dialog"`,
+  `aria-modal="true"`, header/main and a visible landing overlay inert, exactly
+  two always-enabled buttons, initial focus on Keep; Enter/Escape keep unless
+  the user has explicitly Tabbed to Update, where the focused button activates
+  — Escape always keeps; Tab trapped between the buttons); there is no silent
+  sync, global/per-song toggle, or "don't ask again".
+  Library→setlist accept writes each clean target via `save_setlist` with every
+  matching item snapshot replaced by `{ ...saved }`; setlist→library accept
+  writes only the changed data fields via `save_song`. Accepted batches hold a
+  `propagationBusy` lock (`syncCaptureLock`, `itemList` inert, print/export
+  unavailable, editor/library/scope/backup guards); library→setlist re-reads
+  each planned setlist target before writing, and a changed/cache-mismatched
+  target is skipped with `Skipped “<Setlist>”: changed while updating.`
+  Propagation writes never pass `allowUnfiled`; a pending dialog counts as
+  unsaved work for `beforeunload`. Item snapshots remain gig copies; this
+  explicit-save offer is the only path that rewrites saved copies.
 - The artist list is frontend-sorted by name. Counts use resolved identity:
   id-backed songs count for their record, legacy-text songs count for a
   same-named record until adopted, and unmatched text stays uncounted. Search

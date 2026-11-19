@@ -30,6 +30,7 @@ import type {
   LogoConfig,
   PageMode,
   Setlist,
+  SetlistItem,
   SheetOptions,
   Song,
 } from "./types";
@@ -124,6 +125,10 @@ let restoring = false;
 const pendingLogoRemovals = new Set<string>();
 /** Frames currently rendered in multiple-page mode (the exact page count). */
 let renderedPageCount = 0;
+/** True while a Feature 28 choice dialog owns the screen (unsaved-work guard). */
+let choiceDialogOpen = false;
+/** True while accepted propagation writes own the editor and its caches. */
+let propagationBusy = false;
 
 /** Artist form state: one shared form serves both New artist and inline edit. */
 let artistFormState: ArtistFormState = createArtistFormState();
@@ -339,7 +344,7 @@ function bindEvents(): void {
     void startNewSetlist();
   });
   saveSetlistButton.addEventListener("click", () => {
-    void saveCurrent();
+    void saveCurrent({ offerSongPropagation: true });
   });
   printButton.addEventListener("click", () => {
     void printCurrent();
@@ -410,6 +415,10 @@ function bindEvents(): void {
     void duplicateCurrent();
   });
   setlistArtistFilterSelect.addEventListener("change", () => {
+    if (blockDuringPropagation()) {
+      renderScopePicker();
+      return;
+    }
     const value = setlistArtistFilterSelect.value;
     if (value === LANDING_PICKER_VALUE) {
       // Reopen the landing page without leaving the scope.
@@ -563,6 +572,14 @@ function bindEvents(): void {
   }
 
   window.addEventListener("keydown", (event) => {
+    if (choiceDialogOpen) {
+      // The modal owns the keyboard; still swallow the app's save shortcut so
+      // it cannot reach the browser/background while a choice is pending.
+      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "s") {
+        event.preventDefault();
+      }
+      return;
+    }
     if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "s") {
       event.preventDefault();
       // Inside a song editor, Ctrl/Cmd+S saves the song draft instead of the
@@ -588,7 +605,7 @@ function bindEvents(): void {
           return;
         }
       }
-      void saveCurrent();
+      void saveCurrent({ offerSongPropagation: true });
     }
   });
 
@@ -882,6 +899,7 @@ function adoptArtists(loadedArtists: Artist[]): void {
 }
 
 async function startNewSetlist(): Promise<void> {
+  if (blockDuringPropagation()) return;
   if (isUnfiledScope()) {
     setStatus(
       "New setlist is unavailable in the Unfiled scope — switch to an artist scope to create one.",
@@ -913,6 +931,10 @@ async function startNewSetlist(): Promise<void> {
 
 async function handleSetlistChange(): Promise<void> {
   if (!current) return;
+  if (blockDuringPropagation()) {
+    setlistSelect.value = current.id;
+    return;
+  }
   if (captureGuard()) {
     setlistSelect.value = current.id;
     return;
@@ -942,7 +964,15 @@ async function handleSetlistChange(): Promise<void> {
 /** Backend/validation message from the last failed `saveCurrent`, if any. */
 let lastSaveError: string | null = null;
 
-async function saveCurrent(): Promise<boolean> {
+/**
+ * Saves the current setlist. `offerSongPropagation` is set only by the explicit
+ * Save button and the setlist Ctrl/Cmd+S path; Print, Duplicate, Back up, File
+ * under…, and auto-saves leave it off so no modal interrupts them.
+ */
+async function saveCurrent(
+  options: { offerSongPropagation?: boolean } = {},
+): Promise<boolean> {
+  if (blockDuringPropagation()) return false;
   if (!current || captureGuard()) return false;
   lastSaveError = null;
 
@@ -1019,9 +1049,15 @@ async function saveCurrent(): Promise<boolean> {
     return false;
   }
 
+  const cachedBeforeSave = current
+    ? setlists.find((setlist) => setlist.id === current?.id)
+    : undefined;
+  const previousSetlist = cachedBeforeSave ? cloneSetlist(cachedBeforeSave) : null;
+
   try {
     const saved = await api.saveSetlist(current);
-    current = { ...saved, artist_id: normalizeArtistId(saved.artist_id) };
+    const savedSetlist = { ...saved, artist_id: normalizeArtistId(saved.artist_id) };
+    current = savedSetlist;
     dirty = false;
     dirtyIndicator.hidden = true;
 
@@ -1054,6 +1090,18 @@ async function saveCurrent(): Promise<boolean> {
       `Saved “${saved.title}” · ${formatRuntime(totalSecs)} total runtime.`,
       "success",
     );
+
+    if (options.offerSongPropagation) {
+      try {
+        await offerSetlistSongPropagation(previousSetlist, savedSetlist);
+      } catch (error) {
+        setStatus(
+          `Setlist saved, but the library copy check failed: ${describeError(error)}.`,
+          "error",
+        );
+        saveSetlistButton.focus();
+      }
+    }
     return true;
   } catch (error) {
     lastSaveError = `Could not save: ${describeError(error)}`;
@@ -1063,6 +1111,7 @@ async function saveCurrent(): Promise<boolean> {
 }
 
 async function deleteCurrent(): Promise<void> {
+  if (blockDuringPropagation()) return;
   if (!current || captureGuard()) return;
 
   const persisted = setlists.some((setlist) => setlist.id === current?.id);
@@ -1111,6 +1160,7 @@ let duplicating = false;
  * and cache where they were.
  */
 async function duplicateCurrent(): Promise<void> {
+  if (blockDuringPropagation()) return;
   if (!current || duplicating || captureGuard()) return;
   if (!ensureBackend()) return;
 
@@ -1275,7 +1325,23 @@ function syncCaptureLock(locked: boolean): void {
   if (!locked) renderLogoControls();
 }
 
+/**
+ * Feature 28 accepted-write lock. The choice dialog has already closed, so the
+ * editor/cache/render phase needs its own lock: header/meta/logo/sheet options
+ * and page mode reuse the export-capture lock, item fields become inert, and
+ * print/export stay unavailable until the writes and re-renders finish.
+ */
+function syncPropagationLock(locked: boolean): void {
+  syncCaptureLock(locked);
+  itemList.inert = locked;
+  if (locked) {
+    closeExportMenu();
+  }
+  syncExportControls(locked);
+}
+
 async function printCurrent(): Promise<void> {
+  if (blockDuringPropagation()) return;
   if (!current || exporting) return;
 
   if (dirty && backendAvailable) {
@@ -1302,6 +1368,7 @@ let exporting = false;
  * exactly what the preview shows. `window.print()` stays the text-sharp path.
  */
 async function exportCurrent(format: ExportFormat): Promise<void> {
+  if (blockDuringPropagation()) return;
   if (!current || exporting) return;
   if (!backendAvailable) {
     setStatus("Local backend unavailable — export needs the desktop app.", "error");
@@ -1383,6 +1450,9 @@ function baseName(path: string): string {
  * restore adopts its reloaded state.
  */
 function libraryWriteGuard(action: string): string | null {
+  if (propagationBusy) {
+    return "Updating setlist copies — wait for it to finish.";
+  }
   if (libraryWritesInFlight > 0) {
     return `Wait for the current library request to finish before ${action}.`;
   }
@@ -1468,6 +1538,10 @@ function landingDraftGuard(action: "backing up" | "restoring"): string | null {
 
 /** Blocks row/Add actions while a backup, restore, or artist cleanup owns the library. */
 function blockLibraryActionWhileBusy(): boolean {
+  if (propagationBusy) {
+    setStatus("Updating setlist copies — wait for it to finish.", "info");
+    return true;
+  }
   if (artistDeleting) {
     setStatus("Artist delete in progress — wait for it to finish.", "info");
     return true;
@@ -1481,6 +1555,13 @@ function blockLibraryActionWhileBusy(): boolean {
     return true;
   }
   return false;
+}
+
+/** Short status for every guard that must defer to an accepted propagation phase. */
+function blockDuringPropagation(): boolean {
+  if (!propagationBusy) return false;
+  setStatus("Updating setlist copies — wait for it to finish.", "info");
+  return true;
 }
 
 /**
@@ -1707,6 +1788,569 @@ function summarizeRecords(records: string[], limit = 3): string {
   return records.length > limit ? `${head}; +${records.length - limit} more` : head;
 }
 
+/** Dialog bodies use commas; status summaries keep the existing semicolons. */
+function dialogRecordNames(records: string[], limit = 3): string {
+  const head = records.slice(0, limit).join(", ");
+  return records.length > limit ? `${head}, +${records.length - limit} more` : head;
+}
+
+function displaySongTitle(song: Pick<Song, "title">): string {
+  return song.title.trim() || "Untitled song";
+}
+
+function displaySetlistTitle(setlist: Pick<Setlist, "title">): string {
+  return setlist.title.trim() || "Untitled setlist";
+}
+
+type SongDataField =
+  | "title"
+  | "bpm"
+  | "key"
+  | "tuning"
+  | "duration_secs"
+  | "notes";
+
+const SONG_DATA_FIELDS: readonly SongDataField[] = [
+  "title",
+  "bpm",
+  "key",
+  "tuning",
+  "duration_secs",
+  "notes",
+];
+
+const SONG_DATA_FIELD_LABELS: Record<SongDataField, string> = {
+  title: "title",
+  bpm: "BPM",
+  key: "key",
+  tuning: "tuning",
+  duration_secs: "duration",
+  notes: "comment",
+};
+
+/**
+ * Compares one propagated song-data field. Artist text and `artist_id` are
+ * deliberately excluded: artist identity changes are out of scope in both
+ * directions, so an artist-only edit never opens a dialog.
+ */
+function songFieldDiffers(left: Song, right: Song, field: SongDataField): boolean {
+  switch (field) {
+    case "title":
+      return left.title.trim() !== right.title.trim();
+    case "bpm":
+      return left.bpm !== right.bpm;
+    case "key":
+      return (left.key ?? "") !== (right.key ?? "");
+    case "tuning":
+      return (left.tuning ?? "") !== (right.tuning ?? "");
+    case "duration_secs":
+      return left.duration_secs !== right.duration_secs;
+    case "notes":
+      return (left.notes ?? "") !== (right.notes ?? "");
+  }
+}
+
+function songDataDiffers(left: Song, right: Song): boolean {
+  return SONG_DATA_FIELDS.some((field) => songFieldDiffers(left, right, field));
+}
+
+function changedSongDataFields(left: Song, right: Song): SongDataField[] {
+  return SONG_DATA_FIELDS.filter((field) => songFieldDiffers(left, right, field));
+}
+
+function formatSongFieldList(fields: SongDataField[]): string {
+  const labels = fields.map((field) => SONG_DATA_FIELD_LABELS[field]);
+  if (labels.length <= 1) return labels[0] ?? "";
+  if (labels.length === 2) return `${labels[0]} and ${labels[1]}`;
+  return `${labels.slice(0, -1).join(", ")}, and ${labels[labels.length - 1]}`;
+}
+
+interface ChoiceDialogOptions {
+  heading: string;
+  body: string;
+  keepLabel: string;
+  confirmLabel: string;
+  /** Restores focus to the originating/stable control once the modal is gone. */
+  restoreFocus: () => void;
+}
+
+/**
+ * Feature 28's reusable safe-default modal (Feature 30 reuses this pattern).
+ * The Keep action owns initial focus and Enter/Escape; the confirm action needs
+ * an explicit Tab/click. Background chrome and a visible landing overlay are
+ * inert while open, and the dialog is appended outside both so Tab stays inside.
+ */
+function showChoiceDialog(options: ChoiceDialogOptions): Promise<boolean> {
+  if (choiceDialogOpen) return Promise.resolve(false);
+  choiceDialogOpen = true;
+
+  const titleId = "choice-dialog-title";
+  const bodyId = "choice-dialog-body";
+  const overlay = el("div", "choice-overlay");
+  const dialog = el("div", "choice-dialog");
+  dialog.setAttribute("role", "dialog");
+  dialog.setAttribute("aria-modal", "true");
+  dialog.setAttribute("aria-labelledby", titleId);
+  dialog.setAttribute("aria-describedby", bodyId);
+
+  const heading = el("h2", undefined, options.heading);
+  heading.id = titleId;
+  const body = el("p", "choice-dialog-body", options.body);
+  body.id = bodyId;
+  const actions = el("div", "choice-dialog-actions");
+  const keepButton = el("button", "btn btn-primary", options.keepLabel);
+  keepButton.type = "button";
+  const confirmButton = el("button", "btn", options.confirmLabel);
+  confirmButton.type = "button";
+  actions.append(keepButton, confirmButton);
+  dialog.append(heading, body, actions);
+  overlay.append(dialog);
+
+  for (const node of document.querySelectorAll(".app-shell > header, .app-shell > main")) {
+    node.setAttribute("inert", "");
+  }
+  if (landingVisible) landingOverlay.setAttribute("inert", "");
+  document.body.append(overlay);
+
+  return new Promise<boolean>((resolve) => {
+    let settled = false;
+    let confirmedResult = false;
+
+    const finish = (): void => {
+      choiceDialogOpen = false;
+      document.removeEventListener("keydown", handleKeydown);
+      document.removeEventListener("focusin", handleFocusIn);
+      overlay.remove();
+      landingOverlay.removeAttribute("inert");
+      // Restores the normal header/main state; when the landing overlay is
+      // still visible it keeps them inert.
+      syncLandingInert();
+      try {
+        options.restoreFocus();
+      } finally {
+        resolve(confirmedResult);
+      }
+    };
+
+    const settle = (confirmed: boolean): void => {
+      if (settled) return;
+      settled = true;
+      confirmedResult = confirmed;
+      overlay.classList.add("is-closing");
+
+      const reducedMotion =
+        typeof window.matchMedia === "function" &&
+        window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+      window.setTimeout(finish, reducedMotion ? 0 : 110);
+    };
+
+    const handleKeydown = (event: KeyboardEvent): void => {
+      if (settled) return;
+      if (event.key === "Escape") {
+        event.preventDefault();
+        settle(false);
+        return;
+      }
+      if (event.key === "Enter") {
+        // Enter on the focused confirm button is the explicit activation path;
+        // everywhere else it keeps the safe default.
+        if (document.activeElement === confirmButton) return;
+        event.preventDefault();
+        settle(false);
+        return;
+      }
+      if (event.key !== "Tab") return;
+      const active = document.activeElement;
+      if (event.shiftKey) {
+        if (active === keepButton || !dialog.contains(active)) {
+          event.preventDefault();
+          confirmButton.focus();
+        }
+      } else if (active === confirmButton || !dialog.contains(active)) {
+        event.preventDefault();
+        keepButton.focus();
+      }
+    };
+
+    const handleFocusIn = (event: FocusEvent): void => {
+      if (settled) return;
+      if (event.target instanceof Node && overlay.contains(event.target)) return;
+      keepButton.focus();
+    };
+
+    keepButton.addEventListener("click", () => settle(false));
+    confirmButton.addEventListener("click", () => settle(true));
+    // No backdrop close: a backdrop press only keeps focus inside the dialog.
+    overlay.addEventListener("pointerdown", (event) => {
+      if (event.target !== overlay) return;
+      event.preventDefault();
+      keepButton.focus();
+    });
+    document.addEventListener("keydown", handleKeydown);
+    document.addEventListener("focusin", handleFocusIn);
+
+    keepButton.focus();
+  });
+}
+
+interface SetlistCopyPlan {
+  targets: Setlist[];
+  skipped: Setlist | null;
+}
+
+function setlistHasDifferingCopy(setlist: Setlist, song: Song): boolean {
+  return setlist.items.some(
+    (item) => "Song" in item && item.Song.id === song.id && songDataDiffers(item.Song, song),
+  );
+}
+
+/**
+ * Library→setlist opposite copies in the active artist scope. The open dirty
+ * setlist is reported separately and never written; a clean current setlist is
+ * a normal target because it lives in the cache. Legacy-text/unfiled/dangling
+ * library songs never offer even when they resolve into the active scope.
+ */
+function planLibrarySongPropagation(song: Song): SetlistCopyPlan {
+  if (!activeScopeArtist() || !songInScope(song)) return { targets: [], skipped: null };
+  if (!findArtistById(artists, normalizeArtistId(song.artist_id))) {
+    return { targets: [], skipped: null };
+  }
+
+  const dirtyCurrentId =
+    dirty && current && setlists.some((setlist) => setlist.id === current?.id)
+      ? current.id
+      : null;
+  const targets: Setlist[] = [];
+  let skipped: Setlist | null = null;
+
+  for (const setlist of setlists) {
+    if (!setlistInScope(setlist) || !setlistHasDifferingCopy(setlist, song)) continue;
+    if (setlist.id === dirtyCurrentId && current) {
+      skipped = current;
+    } else {
+      targets.push(setlist);
+    }
+  }
+  return { targets, skipped };
+}
+
+/**
+ * Library→setlist guard matrix. `currentLibrarySave` accounts for this save
+ * already being counted in `libraryWritesInFlight`; the offer is allowed while
+ * that one own request is still finishing.
+ */
+function propagationBlockMessage(title: string, currentLibrarySave: boolean): string | null {
+  if (exporting) {
+    return `Export in progress — “${title}” saved here only. Re-apply the change after export if needed.`;
+  }
+  const libraryBusy = currentLibrarySave
+    ? libraryWritesInFlight > 1
+    : libraryWritesInFlight > 0;
+  if (
+    libraryBusy ||
+    backingUp ||
+    restoring ||
+    artistDeleting ||
+    artistBusy ||
+    landingBusy ||
+    artistLogoBusy ||
+    landingLogoBusy
+  ) {
+    return `“${title}” saved here only. Finish the current library/artist request, then re-edit to propagate.`;
+  }
+  return null;
+}
+
+interface SetlistWriteOutcome {
+  updated: number;
+  failures: Array<{ title: string; error: string }>;
+  skipped: string[];
+}
+
+/** Replaces every matching item snapshot in each clean target, with per-target reporting. */
+async function applyLibrarySongToSetlists(
+  song: Song,
+  targets: Setlist[],
+): Promise<SetlistWriteOutcome> {
+  const failures: Array<{ title: string; error: string }> = [];
+  const skipped: string[] = [];
+  let updated = 0;
+
+  for (const target of targets) {
+    const liveTarget = setlists.find((setlist) => setlist.id === target.id);
+    if (
+      !liveTarget ||
+      liveTarget !== target ||
+      liveTarget.updated_at !== target.updated_at
+    ) {
+      skipped.push(displaySetlistTitle(target));
+      continue;
+    }
+
+    const targetWasCurrent =
+      !dirty &&
+      current?.id === target.id &&
+      current.updated_at === target.updated_at;
+    const items: SetlistItem[] = target.items.map((item) =>
+      "Song" in item && item.Song.id === song.id ? { Song: { ...song } } : item,
+    );
+    try {
+      const saved = await api.saveSetlist({ ...target, items });
+      updated += 1;
+      const index = setlists.findIndex((setlist) => setlist.id === saved.id);
+      // A newer cache entry that appeared during the write wins; never
+      // resurrect a deleted setlist or clobber a concurrent edit.
+      if (index >= 0 && setlists[index] === target) {
+        setlists[index] = cloneSetlist(saved);
+        if (targetWasCurrent && !dirty && current?.id === saved.id) {
+          current = cloneSetlist(saved);
+        }
+      }
+    } catch (error) {
+      failures.push({ title: displaySetlistTitle(target), error: describeError(error) });
+    }
+  }
+
+  return { updated, failures, skipped };
+}
+
+interface SetlistSongPropagationOffer {
+  itemSong: Song;
+  index: number;
+  fields: SongDataField[];
+}
+
+function setlistItemSummary(index: number): HTMLElement | null {
+  return itemList.querySelector<HTMLElement>(
+    `li.item-row[data-index="${index}"] summary`,
+  );
+}
+
+function focusSetlistItemSummary(index: number): void {
+  const summary = setlistItemSummary(index);
+  if (summary) {
+    summary.focus();
+  } else {
+    saveSetlistButton.focus();
+  }
+}
+
+/**
+ * Setlist→library offers: one per unique Song.id whose saved snapshot changed
+ * one of the propagated data fields against the pre-save cache (or the library
+ * song for a new item/setlist). Artist text/id are ignored, and the library
+ * song must be filed.
+ */
+function planSetlistSongPropagation(
+  previousSetlist: Setlist | null,
+  savedSetlist: Setlist,
+): SetlistSongPropagationOffer[] {
+  const offeredIds = new Set<string>();
+  const offers: SetlistSongPropagationOffer[] = [];
+
+  savedSetlist.items.forEach((item, index) => {
+    if (!("Song" in item)) return;
+    const itemSong = item.Song;
+    if (offeredIds.has(itemSong.id)) return;
+
+    const librarySong = songs.find((song) => song.id === itemSong.id);
+    if (!librarySong || !songInScope(librarySong)) return;
+    if (!findArtistById(artists, normalizeArtistId(librarySong.artist_id))) return;
+
+    const previousSong =
+      previousSetlist?.items.find(
+        (previousItem): previousItem is { Song: Song } =>
+          "Song" in previousItem && previousItem.Song.id === itemSong.id,
+      )?.Song ?? null;
+    const changedFields = changedSongDataFields(itemSong, previousSong ?? librarySong);
+    if (changedFields.length === 0) return;
+
+    const effectiveFields = changedFields.filter((field) =>
+      songFieldDiffers(librarySong, itemSong, field),
+    );
+    if (effectiveFields.length === 0) return;
+
+    offeredIds.add(itemSong.id);
+    offers.push({ itemSong, index, fields: effectiveFields });
+  });
+
+  return offers;
+}
+
+/** Copies only the selected data fields; artist text/id stay the library's. */
+function applySongDataFields(target: Song, source: Song, fields: SongDataField[]): Song {
+  const updated = { ...target };
+  for (const field of fields) {
+    switch (field) {
+      case "title":
+        updated.title = source.title;
+        break;
+      case "bpm":
+        updated.bpm = source.bpm;
+        break;
+      case "key":
+        updated.key = source.key;
+        break;
+      case "tuning":
+        updated.tuning = source.tuning;
+        break;
+      case "duration_secs":
+        updated.duration_secs = source.duration_secs;
+        break;
+      case "notes":
+        updated.notes = source.notes;
+        break;
+    }
+  }
+  return updated;
+}
+
+function setlistPropagationBlockMessage(): string | null {
+  if (exporting) {
+    return "Export in progress — setlist saved. Re-edit the item after export if needed.";
+  }
+  if (
+    backingUp ||
+    restoring ||
+    artistDeleting ||
+    artistBusy ||
+    landingBusy ||
+    artistLogoBusy ||
+    landingLogoBusy ||
+    libraryWritesInFlight > 0
+  ) {
+    return "Setlist saved. Finish the current library/artist request, then re-edit the item and save again to update the library.";
+  }
+  if (libraryEditor) {
+    return `Setlist saved. Save or cancel the library edit for “${libraryEditorLabel(libraryEditor)}” first, then re-edit the item and save again to update the library.`;
+  }
+  return null;
+}
+
+/**
+ * One explicit setlist Save may offer several changed songs sequentially. Each
+ * accepted write locks the editor/caches, writes only the changed data fields
+ * onto the filed library song, and focuses the item summary afterwards.
+ */
+async function offerSetlistSongPropagation(
+  previousSetlist: Setlist | null,
+  savedSetlist: Setlist,
+): Promise<void> {
+  if (!activeScopeArtist() || !setlistInScope(savedSetlist)) return;
+
+  const offers = planSetlistSongPropagation(previousSetlist, savedSetlist);
+  if (offers.length === 0) return;
+
+  const blocked = setlistPropagationBlockMessage();
+  if (blocked) {
+    setStatus(blocked, "info");
+    saveSetlistButton.focus();
+    return;
+  }
+
+  const setlistName = displaySetlistTitle(savedSetlist);
+  const failures: Array<{ title: string; error: string }> = [];
+
+  for (const offer of offers) {
+    const title = displaySongTitle(offer.itemSong);
+    const restoreOfferFocus = (): void => {
+      focusSetlistItemSummary(offer.index);
+    };
+
+    try {
+      const confirmed = await showChoiceDialog({
+        heading: "Update the library song too?",
+        body:
+          `You changed “${title}” in “${setlistName}”. The library copy is different. ` +
+          `Updating replaces its ${formatSongFieldList(offer.fields)} with this setlist's copy ` +
+          `and changes every future setlist that adds this song.`,
+        keepLabel: "Keep library unchanged",
+        confirmLabel: "Update library",
+        restoreFocus: restoreOfferFocus,
+      });
+
+      if (!confirmed) {
+        setStatus(
+          `Kept library “${title}” unchanged. Only “${setlistName}” uses the new version.`,
+          "info",
+        );
+        restoreOfferFocus();
+        continue;
+      }
+
+      const lateBlock = setlistPropagationBlockMessage();
+      if (lateBlock) {
+        setStatus(lateBlock, "info");
+        restoreOfferFocus();
+        return;
+      }
+
+      const liveLibrarySong = songs.find((song) => song.id === offer.itemSong.id);
+      if (
+        !liveLibrarySong ||
+        !findArtistById(artists, normalizeArtistId(liveLibrarySong.artist_id))
+      ) {
+        failures.push({ title, error: "the library song is no longer available" });
+        restoreOfferFocus();
+        continue;
+      }
+
+      propagationBusy = true;
+      libraryWritesInFlight += 1;
+      try {
+        syncPropagationLock(true);
+        const saved = await api.saveSong(
+          applySongDataFields(liveLibrarySong, offer.itemSong, offer.fields),
+        );
+        const index = songs.findIndex((song) => song.id === saved.id);
+        if (index >= 0) {
+          songs[index] = saved;
+        } else {
+          songs.push(saved);
+        }
+        sortSongsByTitle();
+        renderLanding();
+        renderLibrary();
+        renderSheet();
+        // Re-assert the lock after renders: logo/row renderers may otherwise
+        // re-enable their own controls mid-phase.
+        syncPropagationLock(true);
+        setStatus(
+          `Updated library “${saved.title}”. Future setlists will use the new version.`,
+          "success",
+        );
+      } catch (error) {
+        failures.push({ title, error: describeError(error) });
+      } finally {
+        libraryWritesInFlight -= 1;
+        try {
+          syncPropagationLock(false);
+          if (isPageFocusLost()) restoreOfferFocus();
+        } finally {
+          propagationBusy = false;
+        }
+      }
+    } catch (error) {
+      setStatus(
+        `Could not complete the library update for “${title}”: ${describeError(error)}.`,
+        "error",
+      );
+      restoreOfferFocus();
+      return;
+    }
+  }
+
+  if (failures.length > 0) {
+    const details = failures
+      .map((failure) => `“${failure.title}” (${failure.error})`)
+      .join("; ");
+    setStatus(
+      `Could not update the library for ${details}. The setlist is saved; edit the library copy directly or change the item again to retry.`,
+      "error",
+    );
+  }
+}
+
 function confirmDiscard(): boolean {
   if (!dirty) return true;
   return window.confirm("Discard unsaved changes to this setlist?");
@@ -1727,12 +2371,15 @@ function unfiledSaveGuidance(action: "backing up" | "printing" | "duplicating"):
 }
 
 /**
- * True while leaving the page could lose work: a dirty setlist, an open
- * library song draft, an open landing artist draft, or a typed-but-uncreated
- * landing artist. `beforeunload` covers all of them, not just the setlist.
+ * True while leaving the page could lose work: a dirty setlist, a pending
+ * propagation choice or accepted write, an open library song draft, an open
+ * landing artist draft, or a typed-but-uncreated landing artist. `beforeunload`
+ * covers all of them, not just the setlist.
  */
 function hasUnsavedWork(): boolean {
   if (dirty) return true;
+  if (choiceDialogOpen) return true;
+  if (propagationBusy) return true;
   if (libraryEditor) return true;
   if (artistFormHasDraft()) return true;
   if (landingVisible && (landingTypedName() || landingLogoFile || landingTransientLogos.size > 0)) {
@@ -1869,6 +2516,10 @@ function reselectCurrentInScope(): void {
  * discard of a dirty editor) before the scope changes.
  */
 async function switchScope(next: string): Promise<void> {
+  if (blockDuringPropagation()) {
+    renderScopePicker();
+    return;
+  }
   if (next !== UNFILED_SCOPE && !artists.some((artist) => artist.id === next)) {
     renderScopePicker();
     return;
@@ -2021,6 +2672,10 @@ function renderFileUnder(): void {
  */
 async function fileCurrentSetlist(artistId: string): Promise<void> {
   if (!current) return;
+  if (blockDuringPropagation()) {
+    renderFileUnder();
+    return;
+  }
   if (captureGuard()) {
     renderFileUnder();
     return;
@@ -3765,22 +4420,32 @@ function buildLibraryEditor(
     setStatus(`Saving “${edited.title}”…`);
     setLibraryEditorBusy(form, true);
     libraryWritesInFlight += 1;
-    void saveEditedLibrarySong(edited, state, focusTarget).finally(() => {
-      libraryWritesInFlight -= 1;
-      if (libraryEditor === state) {
-        state.saving = false;
-        const currentForm = findLibraryEditor(song.id) ?? form;
-        setLibraryEditorBusy(currentForm, false);
-        if (
-          focusTarget &&
-          currentForm.contains(focusTarget) &&
-          shouldRestoreEditorFocus(focusTarget)
-        ) {
-          focusTarget.focus();
+    void saveEditedLibrarySong(edited, state, focusTarget)
+      .catch((error) => {
+        // The song save itself is handled inside; this is a last-resort guard
+        // for the follow-up offer/render path, which must not reject unseen.
+        setStatus(
+          `Updated “${edited.title}” in the library, but could not finish the setlist copy check: ${describeError(error)}.`,
+          "error",
+        );
+        if (isPageFocusLost()) focusLibraryEditButton(edited.id);
+      })
+      .finally(() => {
+        libraryWritesInFlight -= 1;
+        if (libraryEditor === state) {
+          state.saving = false;
+          const currentForm = findLibraryEditor(song.id) ?? form;
+          setLibraryEditorBusy(currentForm, false);
+          if (
+            focusTarget &&
+            currentForm.contains(focusTarget) &&
+            shouldRestoreEditorFocus(focusTarget)
+          ) {
+            focusTarget.focus();
+          }
         }
-      }
-      restorePendingLibraryEditorFocus();
-    });
+        restorePendingLibraryEditorFocus();
+      });
   });
 
   cancelButton.addEventListener("click", () => {
@@ -3802,33 +4467,16 @@ function buildLibraryEditor(
 /**
  * Upserts the edited song under its stable id through the normal command, then
  * re-sorts and re-renders so the active search/sort/tuning filter still applies.
+ * Feature 28 then offers once to update every matching in-scope setlist copy.
  */
 async function saveEditedLibrarySong(
   edited: Song,
   state: LibraryEditorState,
   focusTarget: HTMLElement | null,
 ): Promise<void> {
+  let saved: Song;
   try {
-    const saved = await api.saveSong(edited);
-    const index = songs.findIndex((song) => song.id === saved.id);
-    if (index >= 0) {
-      songs[index] = saved;
-    } else {
-      songs.push(saved);
-    }
-    sortSongsByTitle();
-
-    const closedEditor = libraryEditor === state;
-    if (closedEditor) libraryEditor = null;
-    renderLanding();
-    renderLibrary();
-    setStatus(
-      `Updated “${saved.title}” in the library. Setlists keep their own copies.`,
-      "success",
-    );
-    if (closedEditor && focusTarget && shouldRestoreEditorFocus(focusTarget)) {
-      focusLibraryEditButton(saved.id);
-    }
+    saved = await api.saveSong(edited);
   } catch (error) {
     // Keep the editor/draft retryable (even while a filter hides the row). The
     // hint only appears when the row is currently filtered out; visibility
@@ -3838,6 +4486,158 @@ async function saveEditedLibrarySong(
     setStatus(
       `Could not save “${edited.title.trim() || libraryEditorLabel(state)}” in the library: ${describeError(error)}${hint}`,
       "error",
+    );
+    return;
+  }
+
+  const index = songs.findIndex((song) => song.id === saved.id);
+  if (index >= 0) {
+    songs[index] = saved;
+  } else {
+    songs.push(saved);
+  }
+  sortSongsByTitle();
+
+  const closedEditor = libraryEditor === state;
+  if (closedEditor) libraryEditor = null;
+  // Decide before the library re-render replaces the focused Save control.
+  const restoreEditorFocus =
+    closedEditor && focusTarget !== null && shouldRestoreEditorFocus(focusTarget);
+  const hiddenByFilter = state.hiddenByFilter;
+
+  renderLanding();
+  renderLibrary();
+  // Make the successful library save visible immediately; a pending
+  // propagation dialog must never sit behind a stale "Saving…" status.
+  setStatus(`Updated “${saved.title}” in the library.`, "success");
+
+  // Only a save that actually closed its inline editor may offer propagation;
+  // never stack the modal on another draft that somehow took over the row.
+  if (!closedEditor) {
+    return;
+  }
+
+  const plan = planLibrarySongPropagation(saved);
+  const dirtySkipNote = plan.skipped
+    ? `Skipped “${displaySetlistTitle(plan.skipped)}”: unsaved changes.`
+    : "";
+
+  if (plan.targets.length === 0) {
+    setStatus(
+      `Updated “${saved.title}” in the library.${dirtySkipNote ? ` ${dirtySkipNote}` : ""}`,
+      "success",
+    );
+    if (restoreEditorFocus) focusLibraryEditButton(saved.id);
+    return;
+  }
+
+  if (hiddenByFilter) {
+    setStatus(
+      `Saved “${saved.title}” here only — clear search to review other copies.`,
+      "info",
+    );
+    if (restoreEditorFocus) focusLibraryEditButton(saved.id);
+    return;
+  }
+
+  const blocked = propagationBlockMessage(saved.title, true);
+  if (blocked) {
+    setStatus(blocked, "info");
+    if (restoreEditorFocus) focusLibraryEditButton(saved.id);
+    return;
+  }
+
+  const scope = activeScopeArtist();
+  const count = plan.targets.length;
+  const names = plan.targets.map((setlist) => displaySetlistTitle(setlist));
+  const artistName = scope ? artistLabel(scope) : "this artist";
+  const copyWord = count === 1 ? "copy" : "copies";
+  const setlistWord = count === 1 ? "setlist" : "setlists";
+  const restoreLibraryFocus = (): void => {
+    focusLibraryEditButton(saved.id);
+  };
+
+  const confirmed = await showChoiceDialog({
+    heading: `Update ${count} setlist ${copyWord}?`,
+    body:
+      `You changed “${saved.title}”. ${count} ${setlistWord} in ${artistName} ` +
+      `still ${count === 1 ? "has" : "have"} the old gig copy: ${dialogRecordNames(names)}. ` +
+      `Setlist copies are gig snapshots — they may have a different key, capo, or shortened notes on purpose.`,
+    keepLabel: "Keep setlist copies",
+    confirmLabel: `Update ${count} ${copyWord}`,
+    restoreFocus: restoreLibraryFocus,
+  });
+
+  if (!confirmed) {
+    setStatus(
+      `Kept ${count} ${count === 1 ? "setlist copy" : "setlist copies"} unchanged. Library “${saved.title}” saved.${dirtySkipNote ? ` ${dirtySkipNote}` : ""}`,
+      "info",
+    );
+    restoreLibraryFocus();
+    return;
+  }
+
+  // A programmatic guard could appear while the modal is open; follow-up writes
+  // never run behind one, even if the user chose Update.
+  const lateBlock = propagationBlockMessage(saved.title, true);
+  if (lateBlock) {
+    setStatus(lateBlock, "info");
+    restoreLibraryFocus();
+    return;
+  }
+
+  // The dialog has closed, so the accepted write/render phase needs its own
+  // lock against live library/editor mutations.
+  let outcome: SetlistWriteOutcome = { updated: 0, failures: [], skipped: [] };
+  propagationBusy = true;
+  try {
+    syncPropagationLock(true);
+    outcome = await applyLibrarySongToSetlists(saved, plan.targets);
+    sortSetlists();
+    renderAll();
+    await refreshLogoIfChanged();
+    renderSheet();
+    // Re-assert the lock after renders: logo/row renderers may otherwise
+    // re-enable their own controls mid-phase.
+    syncPropagationLock(true);
+  } finally {
+    try {
+      syncPropagationLock(false);
+      // Do not yank focus if the user deliberately moved to search or a row
+      // while the accepted writes were running.
+      if (isPageFocusLost()) restoreLibraryFocus();
+    } finally {
+      propagationBusy = false;
+    }
+  }
+
+  const skipNotes = [
+    ...outcome.skipped.map((title) => `Skipped “${title}”: changed while updating.`),
+    ...(dirtySkipNote ? [dirtySkipNote] : []),
+  ];
+  const skipSuffix = skipNotes.length > 0 ? ` ${skipNotes.join(" ")}` : "";
+
+  if (outcome.failures.length > 0) {
+    const details = outcome.failures
+      .map(
+        (failure) =>
+          `“${failure.title}” failed: ${failure.error}. Open the library song and save it again, then choose Update.`,
+      )
+      .join(" ");
+    setStatus(
+      `Updated ${outcome.updated} of ${count} — ${details}${skipSuffix}`,
+      "error",
+    );
+  } else if (outcome.skipped.length > 0) {
+    setStatus(
+      `Updated ${outcome.updated} of ${count} —${skipSuffix}`,
+      "info",
+    );
+  } else {
+    const updatedWord = outcome.updated === 1 ? "setlist" : "setlists";
+    setStatus(
+      `Updated “${saved.title}” in ${outcome.updated} ${updatedWord}. Gig edits there were overwritten.${skipSuffix}`,
+      "success",
     );
   }
 }
@@ -4656,6 +5456,7 @@ function clearArtistDraftForDeletedArtist(artistId: string, editingThis: boolean
  * selects the first in-scope setlist (or a blank scope draft).
  */
 async function enterScope(id: string): Promise<void> {
+  if (blockDuringPropagation()) return;
   if (id !== UNFILED_SCOPE && !artists.some((artist) => artist.id === id)) return;
   if (backingUp || restoring) {
     setStatus(
@@ -4717,18 +5518,25 @@ function discardLandingTransientLogos(): void {
 }
 
 /**
- * Traps keyboard focus inside the modal landing dialog: while it is visible,
- * the header and workspace are `inert`, so Tab cannot leave the overlay. The
- * status line stays live for announcements. Removing the attribute restores
- * the background when the overlay hides.
+ * Traps keyboard focus inside the modal landing dialog (or an open choice
+ * dialog): while either owns the screen, the header and workspace are `inert`,
+ * so Tab cannot leave the overlay. The status line stays live for
+ * announcements. Removing the attribute restores the background when the
+ * overlay hides.
  */
 function syncLandingInert(): void {
+  const locked = landingVisible || choiceDialogOpen;
   for (const node of document.querySelectorAll(".app-shell > header, .app-shell > main")) {
-    if (landingVisible) {
+    if (locked) {
       node.setAttribute("inert", "");
     } else {
       node.removeAttribute("inert");
     }
+  }
+  // A modal that opens while the landing page is visible marks the overlay
+  // inert itself; keep that state if a landing re-render happens mid-dialog.
+  if (choiceDialogOpen && landingVisible) {
+    landingOverlay.setAttribute("inert", "");
   }
 }
 
@@ -4763,8 +5571,13 @@ function renderLanding(): void {
 
   landingCard.replaceChildren(buildLandingCard());
   // Move keyboard focus inside the dialog, but never steal it back while the
-  // user is already working in the form (logo imports re-render the card).
-  if (!landingCard.contains(document.activeElement)) {
+  // user is already working in the form (logo imports re-render the card), a
+  // choice dialog owns focus, or an accepted propagation phase is running.
+  if (
+    !choiceDialogOpen &&
+    !propagationBusy &&
+    !landingCard.contains(document.activeElement)
+  ) {
     landingCard.querySelector<HTMLElement>("button, input, select")?.focus();
   }
 }

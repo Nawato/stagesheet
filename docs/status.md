@@ -191,13 +191,28 @@ commit as each change.
   path. Desktop QA gates 1–6 remain pending (no desktop session in this
   environment).
 
+- Opt-in library ⇄ setlist song sync (Feature 28, Done (desktop QA pending)):
+  a successful library save offers to update differing in-scope setlist copies,
+  and an explicit setlist Save offers once per changed song (field blur, Print,
+  Duplicate, Back up, File under…, and auto-saves never offer). Keep is focused;
+  Enter/Escape keep unless focus was explicitly Tabbed to Update, where the
+  focused button activates (Escape always keeps); the background is inert, and
+  a pending dialog counts as unsaved work. Setlist→library compares only title,
+  BPM, key, tuning, duration, and comment against the pre-save item (or the
+  library song for a new setlist/item), ignores artist identity, and copies
+  only the effective fields onto a filed library song through `save_song`
+  (never `allowUnfiled`); the body uses neutral "library copy is different"
+  wording. Library→setlist writes every clean target through `save_setlist`
+  with the matching snapshots replaced, skips a dirty current setlist, and
+  re-reads each target before writing (`Skipped …: changed while updating.`).
+  Accepted batches hold a `propagationBusy` editor/cache lock and guard
+  save/delete/duplicate/New/scope/print/export/File under…/library/backup with
+  `Updating setlist copies — wait for it to finish.` Unfiled, other-artist, and
+  legacy/unfiled/dangling library copies never offer; there is no silent sync
+  or global toggle, and accept re-renders the preview. Desktop QA pending.
+
 ## Still missing (per plan)
 
-- Opt-in library ⇄ setlist song sync (plan Feature 28, Todo): after a library
-  or setlist-item song edit with matching in-scope `Song.id` copies, a custom
-  safe-default modal (Keep focused, Enter/Escape = Keep, no "don't ask again")
-  offers per-edit propagation with the plan's exact wording, guard matrix, and
-  per-target reporting; accepting re-renders the setlist preview automatically.
 - Artist-logo propagation + reset (plan Feature 30, Todo, UX-reviewed): an
   artist image change/removal offers Keep-vs-follow per edit (Keep pins the
   old file as each affected setlist's own logo; follow writes nothing and

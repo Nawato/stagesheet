@@ -148,8 +148,13 @@ tuning set. Each row adds the song to the running order, duplicates it into the
 library under a new id with a `(copy)` suffix, or removes it after a
 confirmation. **Edit** opens an inline editor in the row with the same fields
 and validation as the add form; saving keeps the song's id and re-applies the
-current search, sort, and tuning filters, while saved setlists keep
-their own copies. Sorting and filtering never mark a setlist dirty or change
+current search, sort, and tuning filters. Saved setlists keep their own copies
+by default: after a save with matching in-scope copies, one safe-default dialog
+offers to update them, so a gig-specific divergence (key, capo, shortened
+notes) is only overwritten when you explicitly choose Update. After an explicit
+setlist Save, the same safe-default request appears for each changed song,
+offering to bring the library copy up to date. Sorting and
+filtering never mark a setlist dirty or change
 the stored data, and the library badge counts the active scope — totals live
 on the landing page.
 
@@ -190,8 +195,9 @@ scope, and saving an unfiled song or setlist fails with a
 Adding a song outside the scope — possible only through a stale cache — is
 refused with
 `“<title>” is not by <A> — switch artist scope to add it.` Breaks are
-always allowed, existing items are never removed or rewritten, and the
+always allowed, scope changes never remove or rewrite existing items, and the
 running order summary keeps only a count of non-matching songs when any.
+The only rewrite path is the opt-in per-edit song offer above.
 The scope selection is session-only: never saved, never backed up.
 
 ## Backup and restore

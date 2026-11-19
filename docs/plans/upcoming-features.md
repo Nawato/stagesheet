@@ -7,7 +7,8 @@ same commit. Statuses: **Todo** / **In progress** / **Done**.
 Context: before Feature 14, `Song` was `{ title, artist, bpm, key, tuning,
 duration_secs, notes }` (`src-tauri/src/models.rs`, `src/types.ts`), with
 `artist` as free text and no artist records. Setlist items store Song *copies*
-(deliberate: editing the library never rewrites saved setlists). Feature 14 has
+(deliberate: editing the library never rewrites saved setlists by default;
+Feature 28's per-edit offer is the only rewrite path). Feature 14 has
 since added managed `Artist` records plus `Song.artist_id`/`Setlist.artist_id`
 with the legacy text as a display fallback. The sheet defaults to a
 single A4 page with auto-fit shrink (`--sheet-fit`, min 50%), implemented in
@@ -159,19 +160,18 @@ and no data-contract change was needed.
 Locked answer to the "songs must be uniform" feedback: the library is the one
 canonical edit place, and setlist items stay copies on purpose (a gig snapshot
 may legitimately differ — capo, shortened version — from the library
-original). Fixing a song happens once in the library; saved setlists are
-never silently rewritten. Feature 28 supersedes the "no propagation" half with
-an explicit per-edit opt-in offer; declining (the default) keeps every copy
-untouched.
+original). Fixing a song happens once in the library; saved setlists are only
+rewritten when the user accepts the Feature 28 per-edit offer, and declining
+(the default) keeps every copy untouched.
 
 ### Data model
 
 None. `save_song` already upserts by `id` (`storage.rs`), and `Song::validate`
 already enforces the add-form bounds (non-empty title, tuning ≤ 24, comment ≤
 140 after trim). Re-saving an edited song keeps its id; setlist items hold
-copies, so saved setlists are untouched — the same guarantee Duplicate relies
-on. No serde, storage, backup, or IPC change. (Since Feature 14 the artist
-field is the record dropdown described there.)
+copies, so saved setlists stay untouched unless the Feature 28 per-edit offer
+is accepted. No serde, storage, backup, or IPC change. (Since Feature 14 the
+artist field is the record dropdown described there.)
 
 ### UI
 
@@ -183,8 +183,9 @@ field is the record dropdown described there.)
   re-renders the library (including the Feature 14 artist counts); **Cancel**
   discards without touching the cache. Field-level error messages match the
   add form; failures report through the status line.
-- The status line confirms with `Updated “<title>” in the library. Setlists
-  keep their own copies.` so the copy semantics stay visible.
+- The status line confirms `Updated “<title>” in the library.`; when matching
+  in-scope setlist copies differ, the Feature 28 safe-default dialog asks
+  before rewriting them (declining keeps every copy untouched and is reported).
 
 ### Tests + QA
 
@@ -192,8 +193,9 @@ field is the record dropdown described there.)
   by the existing storage test).
 - Manual QA: edit every field once; validation errors (empty title, bad BPM,
   bad duration, over-long tuning/comment); id stable across save (check
-  `songs.json`); saved setlists byte-identical after a library edit; backup
-  round trip unaffected.
+  `songs.json`); declining the Feature 28 offer leaves saved setlists
+  byte-identical after a library edit, accepting updates only matching
+  in-scope copies; backup round trip unaffected.
 - Draft/state QA: type in the editor, then trigger search, sort, Has tuning,
   add, duplicate, and delete-another-song in turn; the draft must survive each
   rebuild. Hiding an idle edited row cancels it with the draft title in the
@@ -1567,28 +1569,85 @@ export/print layout change, any new token or styling.
 2. QA (six gates) + `SKILL.md` note if the resolution path changes + this file
    status + commit.
 
-## Feature 28: Opt-in library ⇄ setlist song sync (per-edit offer) — Todo
+## Feature 28: Opt-in library ⇄ setlist song sync (per-edit offer) — Done (desktop QA pending)
 
-Status: Todo, medium, builds on Features 12/14/20/25 and Feature 27's
+Status: Done (desktop QA pending), medium, builds on Features 12/14/20/25 and
+Feature 27's
 re-resolve. From user feedback: editing a song in the Song Library or in a
 setlist should offer to apply the same change to the other copy, and accepting
 should refresh the setlist preview automatically.
 
 This **reverses the Feature 12 locked "no propagation" decision into opt-in
 per-edit propagation**: the copy semantics stay (gig snapshots may diverge on
-purpose — capo, shortened version, key), but each save with a matching
+purpose — capo, shortened version, key), but each explicit save with a matching
 opposite copy asks once. There is deliberately no silent sync, no global
 toggle, and no per-song "always sync" flag. UX-reviewed (custom modal, safe
 default, guard matrix, wording) — the must-fix items below are part of the
 spec, not guidance.
+
+### Shipped notes
+
+- Trigger boundary: library→setlist starts only after `api.saveSong` succeeds
+  and the cache/sort/render update. Setlist→library is offered only from an
+  explicit setlist Save (`#save-setlist` or the setlist Ctrl/Cmd+S path) after
+  the saved-runtime status; field changes alone never open a modal, and Print,
+  Duplicate, Back up, File under…, and auto-saves never offer.
+- Field-level setlist copy: after the explicit save, each unique changed
+  `Song.id` compares the saved item against the pre-save cached item (or the
+  library song for a new setlist/item). Only `title`, `bpm`, `key`, `tuning`,
+  `duration_secs`, and `notes` count; artist text/`artist_id` are ignored, so an
+  artist-only change never offers. One modal per changed song runs sequentially;
+  accept copies only the effective changed fields onto the filed library song
+  and keeps the library's `artist` snapshot and `artist_id`. The body is neutral
+  (the library copy is different) rather than claiming the library is old.
+- Matching/scope: `Song.id` equality only, resolved through
+  `resolveArtistForSong()`/`songInScope()` for the active artist. Unfiled and
+  other artists never offer; setlist→library also requires the library song to
+  be filed (`findArtistById` on its artist id), excluding legacy-text/unfiled/
+  dangling records. Library→setlist lists up to 3 differing saved setlist
+  titles with `, +K more`; the dirty `current` setlist is excluded and reported,
+  a clean `current` is written.
+- Modal: one reusable `showChoiceDialog` in `main.ts` (`role="dialog"`,
+  `aria-modal="true"`, heading/body ids, exactly two always-enabled buttons),
+  appended to `document.body`; header/main and a visible landing overlay are
+  inert and restored through `syncLandingInert()` on close. Initial focus is
+  **Keep**; Enter/Escape keep unless the user has explicitly Tabbed to Update,
+  where the focused button activates (Escape always keeps); Tab is trapped
+  between the buttons, and a pending dialog counts as unsaved work.
+  `renderLanding()` does not steal focus while a choice dialog is open. A
+  caller-supplied focus restore lands on the saved row's **Edit** button or the
+  edited item summary; accept re-renders through `renderAll()` + logo refresh +
+  `renderSheet()`.
+- Guards/writes/reporting: the guard matrix is implemented (`exporting`,
+  backup/restore/delete, other library writes, artist/landing busy/logo busy,
+  hidden-by-filter, open library editor). Library→setlist failures use
+  `Open the library song and save it again, then choose Update.` and dirty
+  targets keep `Skipped “<Setlist>”: unsaved changes.` A target whose cache
+  object/`updated_at` changed during the accepted batch is skipped as
+  `Skipped “<Setlist>”: changed while updating.` Both accepted phases set a
+  `propagationBusy` lock: `syncCaptureLock()`, `itemList` inert, print/export
+  unavailable, and save/delete/duplicate/New/scope-switch/print/export/File
+  under…/library Add and editor/backup-restore guards refuse with
+  `Updating setlist copies — wait for it to finish.` Final focus is restored
+  only while focus is still page-lost, so a deliberate move to search or
+  another row wins. Setlist→library accept writes only the changed data fields
+  through `api.saveSong` without `allowUnfiled`.
+- QA: no Rust/model/serde/storage/IPC/schema/backup/CSP/fs change.
+  `npm run build` and `npm run test:rust` pass. The desktop manual QA list
+  (explicit-Save trigger, field-level copy, filed-only matching, keyboard/focus,
+  multi-target naming, guard matrix, backup round trip) is pending because this
+  environment has no desktop session.
+
+Reviewed 2026-11-19: UX/UI designer, frontend developer, software architect, end-user (Rust/Tauri trimmed — frontend/docs-only diff). Applied: explicit-Save trigger; field-level six-field copy; filed-library-only matching; neutral setlist→library body; safe retry text; `propagationBusy` accepted-write lock with stale-target re-checks and gated focus; dialog/inert/focus hardening; docs and QA-pending status. Waived/deferred: desktop manual QA (no desktop session), per-setlist picker/apply-to-all, and cross-artist propagation.
 
 ### Data model
 
 None. All writes go through the existing `save_song` / `save_setlist`
 validation (including the Feature 20 mandatory-`artist_id` check).
 `allowUnfiled` is **not** used for propagation writes (only the three
-`SKILL.md` paths); a target that fails artist validation aborts with the
-named-artist message. No serde, storage, IPC, envelope, or schema change.
+`SKILL.md` paths); the filed-only matching rule keeps normal targets
+artist-valid, and any validation failure aborts with its error message. No
+serde, storage, IPC, envelope, or schema change.
 
 ### Matching + scope rules (locked)
 
@@ -1602,8 +1661,10 @@ named-artist message. No serde, storage, IPC, envelope, or schema change.
 - Multiple targets: one modal lists up to 3 setlist names via the existing
   `summarizeRecords(records, 3)` pattern, then `+K more`. Accepting writes
   each target through the normal commands with per-target reporting, never
-  partial-silent: `Updated 2 of 3 — “<Setlist>” failed: <error>. Retry from
-  that setlist.`
+  partial-silent: `Updated 2 of 3 — “<Setlist>” failed: <error>. Open the
+  library song and save it again, then choose Update.` A target whose cache
+  object/`updated_at` changes during the accepted batch is skipped as
+  `Skipped “<Setlist>”: changed while updating.`
 - Dirty-target policy: a target setlist with unsaved changes is skipped and
   reported per target (`Skipped “<Setlist>”: unsaved changes.`); the primary
   save still succeeds.
@@ -1617,8 +1678,9 @@ named-artist message. No serde, storage, IPC, envelope, or schema change.
   platform-dependent and cannot carry the direction + count + names + gig
   risk content. Background `inert` while open; two buttons only, 44px
   min-height, visible `:focus-visible` outline, both always enabled once shown.
-- **Safe default**: initial focus on **Keep**; Enter and Escape = Keep/dismiss;
-  Update requires explicit Tab/click. No auto-focus on Update. No "don't ask
+- **Safe default**: initial focus on **Keep**; Enter/Escape keep unless the
+  user has explicitly Tabbed to Update, where the focused button activates
+  (Escape always keeps). No auto-focus on Update. No "don't ask
   again" checkbox — the dialog asks **every time** a matching in-scope
   opposite copy exists. A per-setlist picker or "apply to all listed" split is
   a follow-up, still per-edit, never persisted.
@@ -1637,12 +1699,14 @@ named-artist message. No serde, storage, IPC, envelope, or schema change.
   - Decline status (info): `Kept N setlist copies unchanged. Library “<title>”
     saved.`
 
-  **Setlist-item → library** (after the setlist-item edit commits to the
-  setlist draft, before the library write):
+  **Setlist-item → library** (after an explicit setlist Save, before the
+  library write):
   - Heading: `Update the library song too?`
-  - Body: `You changed “<title>” in “<Setlist title>”. The Song Library still
-    has the old version. Overwriting the library changes every future setlist
-    that adds this song.`
+  - Body: `You changed “<title>” in “<Setlist title>”. The library copy is
+    different. Updating replaces its <field list> with this setlist's copy and
+    changes every future setlist that adds this song.` The field list names
+    only the changed data fields (title, BPM, key, tuning, duration, comment);
+    artist text/`artist_id` never count.
   - Buttons: `[Keep library unchanged]` (default) / `[Update library]`
   - Accept: `Updated library “<title>”. Future setlists will use the new
     version.`
@@ -1651,8 +1715,11 @@ named-artist message. No serde, storage, IPC, envelope, or schema change.
 
 ### Guards + focus (must-fix)
 
-- The offer **never appears** and follow-up writes **never run** while any of
-  these hold; the primary save succeeds and the status explains the deferral:
+- Setlist→library offers fire only after an explicit setlist Save; the saved
+  runtime status is set first. Field-only changes, Print, Duplicate, Back up,
+  File under…, and all auto-saves never offer. The offer **never appears** and
+  follow-up writes **never run** while any of these hold; the save succeeds and
+  the status explains the deferral:
   - export capture in flight (`captureGuard()`) → `Export in progress —
     “<title>” saved here only. Re-apply the change after export if needed.`
   - `backingUp` / `restoring` / `artistDeleting`, `libraryWritesInFlight > 0`,
@@ -1660,18 +1727,32 @@ named-artist message. No serde, storage, IPC, envelope, or schema change.
     `"..." saved here only. Finish the current library/artist request, then
     re-edit to propagate.`
   - Setlist→library direction blocked while any library inline editor is open
-    (including `retryPending` / `hiddenByFilter` / invalid fields). The
+    (including `retryPending` / `hiddenByFilter` / invalid fields); its status
+    names saving/cancelling that draft, then re-editing the item. The
     scope-switch dirty guard (`confirmDiscard`) takes precedence: never stack
     the propagation modal on a discard confirm (order: save → propagation
     modal → scope switch allowed). A pending propagation modal counts as
     unsaved work for `beforeunload` (closing = Keep).
+- Accepted writes hold a `propagationBusy` lock until all cache/render/focus
+  work finishes: `syncCaptureLock()` locks the header/meta/logo/sheet options
+  and page mode, `itemList` is inert, print/export are unavailable, and
+  save/delete/duplicate/New/scope-switch/print/export/File under…/library Add
+  and editor/backup-restore refuse with
+  `Updating setlist copies — wait for it to finish.` Each library→setlist target
+  is re-read from the cache immediately before its write; a gone or changed
+  cache object is reported as `Skipped “<Setlist>”: changed while updating.`
+  and never resurrected. The cache entry is only replaced while it is still the
+  planned object; a clean `current` is only replaced when its id and planned
+  version still match. Final focus is restored only while focus is still
+  page-lost, never after a deliberate move to search/another row.
 - Trigger only from a visible, committed save (editor closed on success). If
   the edited row is `hiddenByFilter` at save time, do **not** pop the modal:
   `Saved “<title>” here only — clear search to review other copies.`
-- Focus: on open move focus to the heading (`tabindex="-1"`) or the default
-  Keep button; trap Tab; on close (either choice) return focus to the
-  originating Save/Edit control and announce via `setStatus()` (existing
-  live-region path). After accept, re-render through the same path
+- Focus: on open move focus to the default Keep button; trap Tab. Enter/Escape
+  keep unless the user has explicitly Tabbed to Update, where the focused
+  button activates (Escape always keeps). On close (either choice) return focus
+  to the originating Save/Edit control or the setlist item summary and announce
+  via `setStatus()`. After accept, re-render through the same path
   (`renderAll()` + logo refresh + `sheet.ts`) so preview/print/export agree —
   the "auto reload into the setlist preview" is that re-render, not a scope
   reload — and never leave focus inside a re-rendered-away node.
@@ -1687,13 +1768,18 @@ stands).
 - `npm run build` clean; `cargo test` green (no Rust change expected).
 - Manual QA: library→setlist accept (all in-scope copies update, preview
   refreshes, accept status); library→setlist decline (copies byte-identical,
-  decline status); setlist→library accept/decline both ways; multi-setlist
-  naming + `+K more`; per-target failure and dirty-target skip reporting;
-  each guard deferral message above; hidden-by-filter save never pops the
-  modal; focus open/trap/return + Escape/Enter = Keep; 44px targets + visible
-  focus at full and narrowed widths; keyboard-only pass; backup/restore
-  round trip with diverged copies keeps the divergence; Unfiled and
-  cross-artist cases never offer.
+  decline status); setlist→library offers only after explicit Save (not after
+  Print/Duplicate/Back up/File under…/blur), field-level copy preserves artist
+  identity, sequential multi-song offers, neutral body wording; multi-setlist
+  naming + `+K more`; per-target failure, dirty-target skip, and
+  changed-while-updating skip reporting; each guard deferral message above;
+  propagationBusy lock disables the editor and refuses save/delete/duplicate/
+  new/scope/print/export/File under…/library/backup, with focus not yanked when
+  the user moves to search; hidden-by-filter save never pops the modal; focus
+  open/trap/return + Enter/Escape safe default; 44px targets + visible focus at
+  full and narrowed widths; keyboard-only pass; backup/restore round trip with
+  diverged copies keeps the divergence; Unfiled, cross-artist, and
+  legacy/unfiled/dangling library songs never offer.
 
 ### Out of scope (stay open)
 
@@ -1703,8 +1789,9 @@ the Feature 12 default to auto-sync, export/print layout changes.
 
 ### Build order
 
-1. Match/scope lookup + custom modal + safe-default focus + strings + guard
-   matrix + per-target writes/reporting + preview re-render.
+1. Explicit-Save trigger + field-level match/copy + filed-library rule + custom
+   modal + safe-default focus + strings + guard matrix + propagationBusy lock +
+   per-target writes/reporting + preview re-render.
 2. QA + `SKILL.md` (Feature 12 copy-semantics note becomes opt-in offer) +
    this file status + commit.
 
@@ -1943,10 +2030,11 @@ One `role="dialog" aria-modal="true"` modal, background `inert`,
 landing-overlay dialog tokens only, 44px buttons, visible `:focus-visible`,
 motion limited to open/close opacity/transform with `prefers-reduced-motion`
 bypass. Two buttons only, both always enabled once shown. No "don't ask again".
-Per-edit only. Initial focus on **Keep**; Enter and Escape = Keep/dismiss;
-Use-new/Remove requires explicit Tab/click (the destructive path here is
-*following*). No backdrop close (or backdrop close = Keep). A pending modal
-counts as unsaved work for `beforeunload` (closing = Keep).
+Per-edit only. Initial focus on **Keep**; Enter/Escape keep unless the user has
+explicitly Tabbed to Use/Remove, where the focused button activates (Escape
+always keeps; the destructive path here is *following*). No backdrop close (or
+backdrop close = Keep). A pending modal counts as unsaved work for
+`beforeunload` (closing = Keep).
 
 Strings (adjust only quoted names/counts; one verb per action: Keep vs
 Use/Remove):
@@ -1978,8 +2066,9 @@ Use/Remove):
 **Addition / zero affected**: no modal — `Updated the logo for “<Artist>”. N
 setlists now show it.` / `Updated the logo for “<Artist>”.` / `Removed the
 logo for “<Artist>”.` as applicable. Per-target: `Updated 2 of 3 —
-“<Setlist>” failed: <error>. Retry from that setlist.` and `Skipped
-“<Setlist>”: unsaved changes.` (Feature 28 strings verbatim).
+“<Setlist>” failed: <error>. Re-edit the artist logo and choose Keep again.`
+and `Skipped “<Setlist>”: unsaved changes.` (per-target pattern shared with
+Feature 28).
 
 Guards (modal **never** appears, follow-up writes **never** run; artist save
 succeeds + status defers): export capture (`Export in progress — “<Artist>”
@@ -2088,7 +2177,8 @@ new dialog tokens, model/schema changes.
 - **P1 — v0.3.2 slice (In progress)**: Feature 27 (artist-creation logo
   reaches the setlist — bugfix, rebased onto 29 — Done, desktop QA pending),
   Feature 28 (opt-in
-  library ⇄ setlist song sync offer with safe-default custom modal), Feature 29
+  library ⇄ setlist song sync offer with safe-default custom modal — Done
+  (desktop QA pending)), Feature 29
   (per-setlist logo size — artist keeps the image, geometry lives on the
   setlist — Done), and Feature 30 (artist-logo propagation offer with
   Keep-vs-follow + Reset to artist logo; setlist side stays silent-local). The
